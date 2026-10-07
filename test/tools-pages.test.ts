@@ -49,8 +49,20 @@ describe('list_pages', () => {
       { id: PAGES.spec, title: 'Agent access spec', parent_id: PAGES.home },
     ]);
     expect(JSON.stringify(r.structured)).not.toContain('Start here');
+    // A child names its parent by title, not by id.
+    expect(r.structured.pages).toMatchObject([{ parent_title: null }, { parent_title: 'Home' }]);
+    expect(r.text).toContain(`${PAGES.spec} · v1 · under "Home" — Agent access spec`);
+    expect(r.text).not.toContain(`under ${PAGES.home}`);
     const byId = await c.call('list_pages', { channel: CHANNELS.demo, limit: 1 });
     expect((byId.structured.pages as unknown[]).length).toBe(1);
+    // A parent outside the listing (on the page before) falls back to its id.
+    const second = await c.call('list_pages', {
+      channel: CHANNELS.demo,
+      limit: 1,
+      cursor: byId.structured.next_cursor as string,
+    });
+    expect(second.structured.pages).toMatchObject([{ id: PAGES.spec, parent_title: null }]);
+    expect(second.text).toContain(`under page ${PAGES.home} (not in this list)`);
     expect(byId.text).toContain('call list_pages again');
   });
 
@@ -59,7 +71,8 @@ describe('list_pages', () => {
     const r = await c.call('list_pages', { channel: 'leadership' });
     expect(r.isError).toBe(true);
     expect(r.text).toContain('not_found (HTTP 404)');
-    expect(r.text).toContain('list_channels and list_pages find channels and pages');
+    expect(r.text).toContain('What to do: list_channels lists the channels in reach');
+    expect(r.text).not.toContain('search_items');
   });
 
   it('respects the token channel limits', async () => {

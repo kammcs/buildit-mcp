@@ -66,14 +66,49 @@ function sprintOut(s: Sprint): SprintOut {
   };
 }
 
-function sprintLine(s: SprintOut): string {
+/** A sprint's line; without its counts when the caller states them another way. */
+function sprintLine(s: SprintOut, counts = true): string {
   const dates = s.starts_on || s.ends_on ? ` · ${s.starts_on ?? '?'} to ${s.ends_on ?? '?'}` : '';
-  return `- #${s.number} ${s.name} · ${s.state}${dates} · ${s.done_count}/${s.item_count} done`;
+  return `- #${s.number} ${s.name} · ${s.state}${dates}${counts ? ` · done ${s.done_count} of ${s.item_count}` : ''}`;
 }
 
 /** A sprint's line, then its goal (people-written) in its own block. */
-function sprintText(s: SprintOut): string {
-  return s.goal ? `${sprintLine(s)}\n${s.goal}` : sprintLine(s);
+function sprintText(s: SprintOut, counts = true): string {
+  const line = sprintLine(s, counts);
+  return s.goal ? `${line}\n${s.goal}` : line;
+}
+
+/**
+ * What completing a sprint did, with one set of counts: the completion's
+ * (committed, completed, carried), which agree with each other. The
+ * sprint's own counts are left out, since carried items no longer count
+ * in it.
+ */
+function completionText(
+  s: SprintOut,
+  r: {
+    committed_count: number;
+    committed_points: number;
+    completed_count: number;
+    completed_points: number;
+    carried_count: number;
+  },
+  carriedTo: string | null,
+): string {
+  const lines = [
+    `Completed sprint #${s.number} ${s.name}: done ${r.completed_count} of ${r.committed_count} item(s) committed (${r.completed_points} of ${r.committed_points} points).`,
+  ];
+  if (r.carried_count > 0) {
+    lines.push(
+      `${r.carried_count} open item(s) were carried to ${carriedTo ?? 'the backlog (no sprint)'}; they count there now, no longer in this sprint.`,
+    );
+  } else {
+    lines.push('No open items were left to carry.');
+  }
+  const rest = r.committed_count - r.completed_count - r.carried_count;
+  if (rest > 0) lines.push(`${rest} canceled item(s) stay in this sprint, not done.`);
+  lines.push(sprintText(s, false));
+  return lines.join('\n');
 }
 
 export const listSprintsTool = defineTool({
@@ -118,7 +153,7 @@ export const listSprintsTool = defineTool({
     const key = args.project.toUpperCase();
     const text = [
       sprints.length === 0 ? `No sprints in ${key}.` : `${sprints.length} sprint(s) in ${key}:`,
-      ...sprints.map(sprintText),
+      ...sprints.map((s) => sprintText(s)),
       nextPageHint('list_sprints', page.next_cursor),
     ].join('\n');
     return { structured: { project: key, sprints, next_cursor: page.next_cursor }, text };
@@ -258,10 +293,7 @@ sprint names the sprint for every action but create: its number, name, or "activ
         };
         return {
           structured: { action: args.action, sprint, summary },
-          text: [
-            `Completed sprint #${sprint.number}: ${r.completed_count} of ${r.committed_count} item(s) done (${r.completed_points} of ${r.committed_points} points); ${r.carried_count} carried to ${carriedTo ?? 'the backlog'}.`,
-            sprintText(sprint),
-          ].join('\n'),
+          text: completionText(sprint, r, carriedTo),
         };
       }
       case 'add_items':

@@ -209,7 +209,9 @@ export const ItemFullSchema = ItemOutSchema.extend({
   started_at: z.string().nullable(),
   completed_at: z.string().nullable(),
   canceled_at: z.string().nullable(),
-  description: z.string().describe('Markdown, wrapped as untrusted content.'),
+  description: z
+    .string()
+    .describe('Markdown, wrapped as untrusted content; empty when the item has none.'),
   description_truncated: z
     .boolean()
     .describe('True when the description was cut; ask get_item with detail="full".'),
@@ -232,13 +234,17 @@ export function itemFull(i: ItemDetail, maxDescription: number, full = false): I
     started_at: i.started_at,
     completed_at: i.completed_at,
     canceled_at: i.canceled_at,
-    description: wrapUntrusted(i.description, {
-      source: 'description',
-      maxChars: maxDescription,
-      moreHint: full
-        ? 'The rest is too long to show here; the person can read it in buildIt.Social.'
-        : `Call get_item with item="${i.key}" and detail="full" to read more.`,
-    }),
+    // No description stays empty rather than becoming an empty block.
+    description:
+      i.description.trim() === ''
+        ? ''
+        : wrapUntrusted(i.description, {
+            source: 'description',
+            maxChars: maxDescription,
+            moreHint: full
+              ? 'The rest is too long to show here; the person can read it in buildIt.Social.'
+              : `Call get_item with item="${i.key}" and detail="full" to read more.`,
+          }),
     description_truncated: i.description_truncated || cut,
     custom: i.custom.map(customOut),
   };

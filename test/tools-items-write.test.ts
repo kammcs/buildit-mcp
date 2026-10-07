@@ -134,7 +134,8 @@ describe('create_item', () => {
     expect(r.text).toContain('scope_missing (HTTP 403)');
     expect(r.text).toContain('- needs: projects:write');
     expect(r.text).toContain("retrying with this token won't help");
-    expect(r.text).toContain('whoami lists the scopes this token has');
+    // The details list the token's scopes: no note sending the agent to whoami for them.
+    expect(r.text).not.toContain('whoami lists the scopes');
   });
 
   it('defuses a hostile title in what it echoes back', async () => {
@@ -189,7 +190,8 @@ describe('update_item', () => {
       '- description changed; current: version 8, description_version 3',
     );
     expect(stale.text).toContain('What to do: Read it again, reapply your change');
-    expect(stale.text).toContain('read it again with get_item');
+    expect(stale.text).toContain('get_item reads the current item');
+    expect(stale.text.match(/reapply your change/g)).toHaveLength(1);
   });
 
   it('reports an item version conflict', async () => {
@@ -322,7 +324,7 @@ describe('transition_item', () => {
     expect(conflict.text).toContain('conflict (HTTP 409)');
     const unknown = await c.call('transition_item', { item: 'DEMO-43', status: 'Shipped' });
     expect(unknown.text).toContain('- status: Shipped');
-    expect(unknown.text).toContain('describe_project lists statuses');
+    expect(unknown.text).toContain("What to do: describe_project lists the project's statuses");
   });
 });
 

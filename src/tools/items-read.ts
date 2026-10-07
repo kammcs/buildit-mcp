@@ -301,7 +301,7 @@ The result carries version and description_version: pass them to update_item (if
     const parts = [
       facts.join('\n'),
       wrapUntrusted(r.item.title, { source: 'title', maxChars: 300 }),
-      i.description,
+      i.description === '' ? '(no description)' : i.description,
     ];
     if (i.custom.length > 0) {
       parts.push(

@@ -50,28 +50,82 @@ const LOCAL_HINTS: Record<string, string> = {
 
 /**
  * Notes that put the API's advice in this server's terms (its tools and
- * settings), shown after the hint.
+ * settings), shown after the hint, only where they add something: none when
+ * the hint or the details already say it.
  */
-const TOOL_NOTES: Record<string, string> = {
-  token_invalid:
+const TOOL_NOTES: Record<string, (details: Record<string, unknown>) => string | undefined> = {
+  token_invalid: () =>
     'In this server the token comes from BUILDIT_TOKEN (or the Authorization header in HTTP mode).',
-  outside_limits: 'In this server, whoami lists the projects in reach and the channel limits.',
-  scope_missing: 'whoami lists the scopes this token has.',
-  not_found:
-    'search_items finds items; describe_project lists statuses, types, labels and members; list_channels and list_pages find channels and pages.',
-  validation: 'describe_project lists the allowed statuses, types, labels, fields and estimates.',
-  conflict:
-    'For an item, read it again with get_item; for a page, with get_page. Then reapply your change and retry with the current versions shown below.',
-  plan_stale: 'Call the same propose_* tool again and show the person the new preview.',
-  plan_expired:
-    'Call the same propose_* tool again; apply the new handle only after the person confirms.',
-  plan_used: 'The change is already applied; do not apply it again.',
-  bulk_too_large: 'propose_bulk_update takes at most 50 items per plan.',
+  // The details list the token's scopes; without them, whoami does.
+  scope_missing: (d) =>
+    Array.isArray(d.granted) ? undefined : 'whoami lists the scopes this token has.',
+  validation: () =>
+    'describe_project lists the allowed statuses, types, labels, fields and estimates.',
+  conflict: (d) =>
+    d.kind === 'page'
+      ? 'get_page reads the current text and version.'
+      : d.kind === 'item' || d.kind === 'description'
+        ? 'get_item reads the current item, version and description_version.'
+        : undefined,
+  plan_stale: () => 'In this server, that means calling the same propose_* tool again.',
+  plan_expired: () => 'In this server, that means calling the same propose_* tool again.',
 };
+
+/**
+ * What to do about a not_found, by the kind of thing that wasn't found, in
+ * this server's tools. The API's own hint names the item and project tools
+ * whatever the kind.
+ */
+const NOT_FOUND_HINTS: Record<string, string> = {
+  project: 'whoami lists the project keys in reach (list_projects too); check the key, then retry.',
+  item: 'Check the key with search_items (the item may have moved or been deleted), then retry.',
+  initiative: 'Check the key with search_items, then retry.',
+  status: "describe_project lists the project's statuses by workflow; use one of those names.",
+  type: "describe_project lists the project's types; use one of those names.",
+  label: "describe_project lists the project's labels; use one of those names.",
+  field: "describe_project lists the project's fields; use one of those names.",
+  option: "describe_project lists each field's options; use one of those.",
+  workflow: "describe_project lists the project's workflows; use one of those names.",
+  user: 'find_users lists the people of the project; use an email or "me".',
+  sprint: 'list_sprints lists the project\'s sprints; name one by number, name or "active".',
+  release: "list_releases lists the project's releases; use one of those names.",
+  link: "get_item lists the item's links; unlink only one that is listed.",
+  comment: "list_comments lists the item's comments and their ids.",
+  page: "list_pages lists a channel's pages and their ids.",
+  channel: 'list_channels lists the channels in reach; use one of those names.',
+  message: 'read_channel lists the messages of a channel and their ids.',
+  plan: 'Use a handle a propose_* tool returned in this conversation, or propose the change again.',
+  route:
+    'The API does not serve this call: it may be older than this buildit-mcp. Check BUILDIT_API_URL, or use another tool.',
+};
+
+/** Rate-limit buckets, in plain words. */
+const RATE_BUCKETS: Record<string, string> = {
+  token_requests_per_minute: 'calls per minute for this token',
+  token_writes_per_minute: 'writes per minute for this token',
+  token_writes_per_day: 'writes per day for this token',
+  org_requests_per_minute: 'calls per minute for the whole org (all its tokens)',
+};
+
+/** The API's own terms, as this server names them. */
+function inServerTerms(hint: string): string {
+  return hint.replace(/\bget_me\b/g, 'whoami');
+}
 
 /** The next step for an error: the API's hint, else the contract's, else this server's own. */
 export function hintFor(code: string, apiHint?: string): string | undefined {
   return apiHint ?? (ERROR_HINTS as Record<string, string | undefined>)[code] ?? LOCAL_HINTS[code];
+}
+
+/** Lower case letters and digits only, to tell whether one text already says another. */
+function squash(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/** Whether `text` adds nothing to what `shown` already says. */
+function alreadySaid(text: string, shown: readonly string[]): boolean {
+  const t = squash(text);
+  return t === '' || shown.some((s) => squash(s).includes(t));
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -178,6 +232,9 @@ function formatKnownDetails(code: string, d: Record<string, unknown>): string[] 
       return [`- ${str(d.count)} items; at most ${str(d.max)}`];
     case 'limit_reached':
       return [`- ${str(d.limit)}: at most ${str(d.max)}`];
+    case 'rate_limited':
+      // retry_after and bucket are shown above, in words.
+      return [];
     default:
       return undefined;
   }
@@ -191,6 +248,7 @@ function formatDetails(code: string, details: unknown): string | undefined {
   if (obj) {
     if (Object.keys(obj).length === 0) return undefined;
     const known = formatKnownDetails(code, obj);
+    if (known?.length === 0) return undefined;
     text = (
       known ?? Object.entries(obj).map(([key, value]) => `- ${key}: ${formatValue(value)}`)
     ).join('\n');
@@ -205,20 +263,46 @@ function formatDetails(code: string, details: unknown): string | undefined {
 
 /** The actionable text for an ApiError. */
 export function describeApiError(err: ApiError): string {
+  const details = record(err.details) ?? {};
+  const message = neutralize(err.message);
   const lines = [
     `buildIt.Social API error: ${err.code}${err.status ? ` (HTTP ${err.status})` : ''}`,
-    neutralize(err.message),
+    message,
   ];
-  const hint = hintFor(err.code, err.hint);
-  if (hint) lines.push(`What to do: ${neutralize(hint)}`);
-  const toolNote = TOOL_NOTES[err.code];
-  if (toolNote) lines.push(toolNote);
+  // Each piece of advice once: the message, then the hint, then a note in
+  // this server's terms, each left out when what came before says it.
+  const said = [message];
+  const kindHint =
+    err.code === 'not_found' && typeof details.kind === 'string'
+      ? NOT_FOUND_HINTS[details.kind]
+      : undefined;
+  const hint = kindHint ?? hintFor(err.code, err.hint);
+  if (hint) {
+    const text = neutralize(inServerTerms(hint));
+    if (!alreadySaid(text, said)) {
+      lines.push(`What to do: ${text}`);
+      said.push(text);
+    }
+  }
+  const note = err.note ? neutralize(err.note) : undefined;
+  // A tool's own note is more precise than the general one.
+  const toolNote = note === undefined ? TOOL_NOTES[err.code]?.(details) : undefined;
+  if (toolNote && !alreadySaid(toolNote, said)) {
+    lines.push(toolNote);
+    said.push(toolNote);
+  }
   if (err.retryAfterSeconds !== undefined) {
     lines.push(`Retry after: ${Math.ceil(err.retryAfterSeconds)} s`);
   }
-  const details = formatDetails(err.code, err.details);
-  if (details) lines.push('Details:', details);
-  if (err.note) lines.push(err.note);
+  if (err.code === 'rate_limited' || err.status === 429) {
+    const bucket = typeof details.bucket === 'string' ? details.bucket : undefined;
+    if (bucket !== undefined) {
+      lines.push(`Limit reached: ${RATE_BUCKETS[bucket] ?? sanitizeLabel(bucket, 60)}.`);
+    }
+  }
+  const formatted = formatDetails(err.code, err.details);
+  if (formatted) lines.push('Details:', formatted);
+  if (note && !alreadySaid(note, said)) lines.push(note);
   lines.push(`Request id: ${err.requestId}`);
   return lines.join('\n');
 }
@@ -234,7 +318,11 @@ export function toolErrorResult(err: unknown, requestId?: string): CallToolResul
       content: [
         {
           type: 'text',
-          text: `Invalid arguments: ${neutralize(err.message)}\nWhat to do: ${LOCAL_HINTS.invalid_arguments ?? ''}`,
+          text: [
+            `buildit-mcp error: ${err.code} (nothing was sent to buildIt.Social)`,
+            neutralize(err.message),
+            `What to do: ${LOCAL_HINTS.invalid_arguments ?? ''}`,
+          ].join('\n'),
         },
       ],
     };

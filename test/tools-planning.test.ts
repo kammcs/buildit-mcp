@@ -49,7 +49,7 @@ describe('list_sprints', () => {
     expect(sprints.map((s) => s.number)).toEqual([3]);
     expect(sprints[0]).toMatchObject({ state: 'active', item_count: 1, done_count: 0 });
     expect(sprints[0]?.goal).toContain('<untrusted_content source="sprint_goal">');
-    expect(r.text).toContain('#3 Sprint 3 · active · 2026-10-01 to 2026-10-14 · 0/1 done');
+    expect(r.text).toContain('#3 Sprint 3 · active · 2026-10-01 to 2026-10-14 · done 0 of 1');
     expect(r.text).toContain('This is the last page.');
   });
 
@@ -72,6 +72,47 @@ describe('list_sprints', () => {
 });
 
 describe('plan_sprint', () => {
+  it('completes a sprint with one set of counts that agree, and explains carried items', async () => {
+    const sprint3 = demo().sprints.find((s) => s.number === 3)!;
+    const status = (name: string) => demo().statuses.find((s) => s.name === name)!.id;
+    // In sprint 3: DEMO-42 (in progress) already; add one done and one canceled item.
+    Object.assign(item(100), { sprintId: sprint3.id, statusId: status('Done'), estimate: 3 });
+    Object.assign(item(101), { sprintId: sprint3.id, statusId: status('Canceled') });
+    const c = await client();
+    const r = await c.call('plan_sprint', {
+      project: 'DEMO',
+      action: 'complete',
+      sprint: 'active',
+      carry_to: 'new',
+    });
+    expect(r.isError, r.text).toBe(false);
+    expect(r.structured).toMatchObject({
+      summary: { committed_count: 3, completed_count: 1, carried_count: 1 },
+    });
+    // The sprint's own counts no longer include the carried item: they are not shown.
+    expect(r.structured.sprint).toMatchObject({ item_count: 2, done_count: 1 });
+    const lines = r.text.split('\n');
+    expect(lines[0]).toBe(
+      'Completed sprint #3 Sprint 3: done 1 of 3 item(s) committed (3 of 6 points).',
+    );
+    expect(r.text).toContain(
+      '1 open item(s) were carried to #4 Sprint 4; they count there now, no longer in this sprint.',
+    );
+    expect(r.text).toContain('1 canceled item(s) stay in this sprint, not done.');
+    expect(r.text.match(/done \d+ of \d+/g)).toEqual(['done 1 of 3']);
+    expect(r.text).toContain('- #3 Sprint 3 · completed');
+  });
+
+  it('says when nothing was left to carry', async () => {
+    const sprint3 = demo().sprints.find((s) => s.number === 3)!;
+    const done = demo().statuses.find((s) => s.name === 'Done')!.id;
+    for (const i of api.store.items.filter((x) => x.sprintId === sprint3.id)) i.statusId = done;
+    const c = await client();
+    const r = await c.call('plan_sprint', { project: 'DEMO', action: 'complete', sprint: '3' });
+    expect(r.text).toContain('done 1 of 1 item(s) committed');
+    expect(r.text).toContain('No open items were left to carry.');
+  });
+
   it('creates a sprint, fills it, starts and completes it', async () => {
     const c = await client();
     // Sprint 3 is active: complete it first, carrying its open item to a new sprint.

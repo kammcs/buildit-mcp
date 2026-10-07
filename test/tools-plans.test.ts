@@ -1,6 +1,8 @@
 /**
  * Preview, then confirm: the admin and destructive toolsets and apply_plan.
  */
+import { randomUUID } from 'node:crypto';
+
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { FakeApi, sampleIdentity, TOKENS, USERS } from './support/fake-api.js';
@@ -64,7 +66,9 @@ describe('destructive: propose, then apply', () => {
     expect(p.structured).toMatchObject({ action: 'delete_item', item_count: 2, effects_total: 2 });
     expect(p.text).toContain('Deletes DEMO-42 and its 1 child item(s)');
     expect(p.text).toContain('<untrusted_content source="plan_preview">');
-    expect(p.text).toContain(`Plan handle: ${p.handle}`);
+    expect(p.text).toContain(`Handle ${p.handle}`);
+    // The API's summary comes first, inside the block.
+    expect(p.text.split('\n')[1]).toContain('Deletes DEMO-42');
     expect(item('DEMO-42')).toBeDefined();
 
     const applied = await c.call('apply_plan', { handle: p.handle });
@@ -79,7 +83,7 @@ describe('destructive: propose, then apply', () => {
     const twice = await c.call('apply_plan', { handle: p.handle });
     expect(twice.isError).toBe(true);
     expect(twice.text).toContain('plan_used (HTTP 409)');
-    expect(twice.text).toContain('do not apply it again');
+    expect(twice.text).toContain('The change is done');
   });
 
   it('moves an item to another project', async () => {
@@ -135,7 +139,8 @@ describe('the plan rules', () => {
     expect(r.isError).toBe(true);
     expect(r.text).toContain('plan_stale (HTTP 409)');
     expect(r.text).toContain('changed since the preview: item DEMO-43');
-    expect(r.text).toContain('show the person the new preview');
+    expect(r.text).toContain('show the human the new preview');
+    expect(r.text).toContain('calling the same propose_* tool again');
     expect(item('DEMO-43')).toBeDefined();
   });
 
@@ -193,6 +198,103 @@ describe('the plan rules', () => {
   });
 });
 
+/** The lines of the preview block (inside <untrusted_content>), and what follows it. */
+function previewParts(text: string): { block: string[]; after: string[] } {
+  const lines = text.split('\n');
+  const end = lines.indexOf('</untrusted_content>');
+  return { block: lines.slice(1, end), after: lines.slice(end + 1) };
+}
+
+type WorkflowDef = {
+  workflow: { restrict_transitions?: boolean | null };
+  statuses: { id: string; name: string }[];
+  transitions: { id: string; from_status_id: string | null; to_status_id: string }[];
+};
+
+describe('plan previews in plain text', () => {
+  it('shows each item field before and after', async () => {
+    const c = await client();
+    const p = await propose(c, 'propose_bulk_update', {
+      items: ['DEMO-100', 'DEMO-101'],
+      patch: { priority: 'urgent', assignee: 'sam@example.com' },
+    });
+    const { block } = previewParts(p.text);
+    expect(block[0]).toBe('Updates 2 item(s): assignee, priority.');
+    expect(block).toContain('- DEMO-100 assignee: none → sam@example.com; priority: none → urgent');
+    expect(block).toContain('- DEMO-101 assignee: none → sam@example.com; priority: none → urgent');
+  });
+
+  it('shows a status move per item, without repeating the kind', async () => {
+    const c = await client();
+    const p = await propose(c, 'propose_archive_status', {
+      project: 'DEMO',
+      status: 'In review',
+      replacement: 'In progress',
+    });
+    const { block } = previewParts(p.text);
+    expect(block).toContain('- status In review: archived');
+    expect(block).toContain('- DEMO-44 status: In review → In progress');
+  });
+
+  it('shows a workflow change in words, and warns when transitions become restricted', async () => {
+    demo().restrictTransitions = false;
+    const c = await client();
+    const read = await c.call('get_workflow', { project: 'DEMO', workflow: 'Software' });
+    const def = structuredClone(read.structured.workflow_def) as WorkflowDef;
+    const id = (name: string) => def.statuses.find((s) => s.name === name)!.id;
+    def.workflow.restrict_transitions = true;
+    def.transitions.push({
+      id: randomUUID(),
+      from_status_id: id('To do'),
+      to_status_id: id('Done'),
+    });
+    // Drop Done → In progress.
+    def.transitions = def.transitions.filter(
+      (t) => !(t.from_status_id === id('Done') && t.to_status_id === id('In progress')),
+    );
+    const p = await propose(c, 'propose_workflow_change', { project: 'DEMO', workflow_def: def });
+    const { block, after } = previewParts(p.text);
+    // The API's summary first, then the effects with their values.
+    expect(block[0]).toContain('Changes the workflow "Software" of DEMO');
+    expect(block).toContain('- workflow Software: restrict transitions: no → yes');
+    expect(block).toContain('- transition To do → Done: added');
+    expect(block).toContain('- transition Done → In progress: removed');
+    expect(p.text).not.toMatch(/workflow workflow|transition transition/);
+    // The warning is the server's own, outside the block, before the confirm-first step.
+    expect(after[0]).toMatch(
+      /^IMPORTANT: after this change, the workflow allows only the transitions it lists/,
+    );
+    expect(after.join('\n')).toContain('Nothing has changed yet. Show this preview to the person');
+
+    const applied = await c.call('apply_plan', { handle: p.handle });
+    expect(applied.isError).toBe(false);
+    const d = await c.call('describe_project', { project: 'DEMO' });
+    expect(d.text).toContain('Moves: only the ones listed below.');
+    expect(d.text).toContain('- To do [not_started, initial] -> In progress; Canceled; Done');
+  });
+
+  it('says when a workflow stops restricting transitions', async () => {
+    const c = await client();
+    const read = await c.call('get_workflow', { project: 'DEMO', workflow: 'Software' });
+    const def = structuredClone(read.structured.workflow_def) as WorkflowDef;
+    def.workflow.restrict_transitions = false;
+    const p = await propose(c, 'propose_workflow_change', { project: 'DEMO', workflow_def: def });
+    const { block, after } = previewParts(p.text);
+    expect(block).toContain('- workflow Software: restrict transitions: yes → no');
+    expect(after[0]).toContain('allows any move between its statuses (any status → any status)');
+  });
+
+  it('adds no warning when restrict_transitions does not change', async () => {
+    const c = await client();
+    const read = await c.call('get_workflow', { project: 'DEMO', workflow: 'Software' });
+    const p = await propose(c, 'propose_workflow_change', {
+      project: 'DEMO',
+      workflow_def: read.structured.workflow_def,
+    });
+    expect(p.text).not.toContain('IMPORTANT');
+  });
+});
+
 describe('admin: reads and proposals', () => {
   it('reads a workflow with its definition', async () => {
     const c = await client();
@@ -206,7 +308,30 @@ describe('admin: reads and proposals', () => {
     const def = r.structured.workflow_def as { statuses: unknown[]; transitions: unknown[] };
     expect(def.statuses).toHaveLength(5);
     expect(def.transitions).toHaveLength(8);
-    expect(r.text).toContain('workflow_def (edit it and pass it to propose_workflow_change):');
+    expect(r.text).toContain('Moves: only the ones listed below.');
+    expect(r.text).toContain('- In review [started] (id ');
+    // The definition is in the structured result only, not repeated as JSON in the text.
+    expect(r.text).toContain('is workflow_def in the structured result');
+    expect(r.text).not.toContain('"transitions"');
+    expect(r.text).not.toContain('"to_status_id"');
+  });
+
+  it('reads a workflow without restricted transitions as any status → any status', async () => {
+    demo().restrictTransitions = false;
+    const c = await client();
+    const r = await c.call('get_workflow', { project: 'DEMO', workflow: 'Software' });
+    expect(r.isError).toBe(false);
+    expect(r.text).toContain('Moves: any status → any status.');
+    // Only the moves with rules are listed, once each.
+    expect(r.text).toContain('Moves with rules: In review → Done (needs assignee).');
+    expect(r.text).not.toContain(' -> ');
+    expect(r.structured.workflow).toMatchObject({ restrict_transitions: false });
+
+    const d = await c.call('describe_project', { project: 'DEMO' });
+    expect(d.text).toContain('Workflow Software (types: ');
+    expect(d.text).toContain('Moves: any status → any status.');
+    expect(d.text).toContain('Moves with rules: In review → Done (needs assignee).');
+    expect(d.text).not.toContain(' -> ');
   });
 
   it('proposes the workflow it read back, then applies it', async () => {
