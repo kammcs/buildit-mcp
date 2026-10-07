@@ -1,0 +1,12 @@
+# gitleaks configuration: the default rules, plus buildIt.Social personal
+# access tokens ("buildit_pat_" followed by about 49 letters and digits).
+# The pre-commit hook in .githooks/ runs gitleaks with this file.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "buildit-personal-access-token"
+description = "buildIt.Social personal access token"
+regex = '''\bbuildit_pat_[A-Za-z0-9]{40,64}\b'''
+keywords = ["buildit_pat_"]
