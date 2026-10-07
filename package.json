@@ -1,0 +1,67 @@
+{
+  "name": "@kammcs/buildit-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server for buildIt.Social: lets AI agents work with an org's projects, pages and channels through the buildIt.Social agent API, with a personal access token.",
+  "license": "MIT",
+  "author": "Kamm Creative Solutions",
+  "homepage": "https://github.com/kammcs/buildit-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kammcs/buildit-mcp.git"
+  },
+  "bugs": "https://github.com/kammcs/buildit-mcp/issues",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "buildit",
+    "agents"
+  ],
+  "mcpName": "io.github.kammcs/buildit-mcp",
+  "type": "module",
+  "bin": {
+    "buildit-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit && eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run lint && npm run format:check && npm run build && npm run test",
+    "inspect": "npm run build && tsx scripts/inspect.ts",
+    "conformance": "npm run build && tsx scripts/conformance.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.3",
+    "@modelcontextprotocol/hono": "2.0.2",
+    "@modelcontextprotocol/server": "2.3.1",
+    "hono": "4.13.13",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/conformance": "0.2.0-alpha.12",
+    "@modelcontextprotocol/inspector": "2.9.0",
+    "@types/node": "22.20.5",
+    "eslint": "10.12.0",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.13.0",
+    "prettier": "3.9.9",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
+  }
+}
