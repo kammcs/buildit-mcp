@@ -122,6 +122,8 @@ export interface ApiClientOptions {
   logger?: Logger;
   /** Injected in tests. */
   sleep?: (ms: number) => Promise<void>;
+  /** Told about every API error before it is thrown (to drop a cached identity after an auth error). */
+  onError?: (err: ApiError) => void;
 }
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -196,6 +198,7 @@ export class ApiClient {
   private readonly maxRetryAfterMs: number;
   private readonly logger: Logger;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly onError: ((err: ApiError) => void) | undefined;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -205,6 +208,7 @@ export class ApiClient {
     this.maxRetryAfterMs = options.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS;
     this.logger = options.logger ?? silentLogger;
     this.sleep = options.sleep ?? defaultSleep;
+    this.onError = options.onError;
   }
 
   /** GET /v1/meta */
@@ -257,6 +261,25 @@ export class ApiClient {
   }
 
   private async send(
+    method: string,
+    path: string,
+    options: ApiRequestOptions,
+  ): Promise<{ body: unknown; requestId: string }> {
+    try {
+      return await this.sendOnce(method, path, options);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        try {
+          this.onError?.(err);
+        } catch {
+          // A listener's failure must not hide the API's error.
+        }
+      }
+      throw err;
+    }
+  }
+
+  private async sendOnce(
     method: string,
     path: string,
     options: ApiRequestOptions,

@@ -180,6 +180,8 @@ export interface FakeProject {
   estimateValues: number[];
   channelId: string;
   workflowId: string;
+  /** false: any move between statuses, with the rules of `allowed`. Default true. */
+  restrictTransitions?: boolean;
 }
 
 export interface FakeSprint {
@@ -852,6 +854,40 @@ export class FakeApi {
     this.queues.set(path, queue);
   }
 
+  /**
+   * Answer the next request to `path` with the API error `code`, its status
+   * from the contract, and `details`. The body is checked against the
+   * contract's error schema like the fake's own errors.
+   */
+  enqueueError(
+    path: string,
+    code: ErrorCode,
+    details: Record<string, unknown> = {},
+    options: { message?: string; headers?: Record<string, string> } = {},
+  ): void {
+    const body = errorBody(
+      code,
+      options.message ?? `The fake API refused the call (${code}).`,
+      details,
+    );
+    const checked = ErrorSchema.safeParse(body);
+    if (!checked.success) {
+      this.violations.push(
+        `scripted error ${code}: ${JSON.stringify(checked.error.issues.slice(0, 3))}`,
+      );
+    }
+    this.enqueue(path, {
+      status: ERROR_STATUS[code],
+      body,
+      ...(options.headers ? { headers: options.headers } : {}),
+    });
+  }
+
+  /** How many requests reached `path` (for example /v1/me). */
+  count(path: string): number {
+    return this.requests.filter((r) => r.path === path).length;
+  }
+
   /** Answer every call of `id` with the contract's own example response. */
   serveExample(id: OperationId): void {
     this.examples.add(id);
@@ -1488,6 +1524,21 @@ export class FakeApi {
     return { status: 200, body: { items: page, next_cursor: next } };
   }
 
+  /**
+   * The moves allowed from a status: its listed ones, or, when the workflow
+   * doesn't restrict transitions, every other status (with the listed rules).
+   */
+  private movesFrom(p: FakeProject, s: FakeStatus): FakeStatus['allowed'] {
+    if (p.restrictTransitions !== false) return s.allowed;
+    return p.statuses
+      .filter((other) => other.id !== s.id)
+      .map((other) => ({
+        to: other.name,
+        required_fields:
+          s.allowed.find((a) => lower(a.to) === lower(other.name))?.required_fields ?? [],
+      }));
+  }
+
   private describeProject({ identity, params }: Call): Handled {
     const p = this.project(params.key ?? '', identity);
     const workflowId = p.workflowId;
@@ -1500,7 +1551,7 @@ export class FakeApi {
       position,
       is_initial: s.initial === true,
       board_column: s.name,
-      allowed: s.allowed.map((a) => ({ ...a, admins_only: false })),
+      allowed: this.movesFrom(p, s).map((a) => ({ ...a, admins_only: false })),
     }));
     const body: DescribeProjectResponse = {
       project: {
@@ -1523,7 +1574,7 @@ export class FakeApi {
           id: workflowId,
           name: 'Software',
           system_key: null,
-          restrict_transitions: true,
+          restrict_transitions: p.restrictTransitions !== false,
           types: p.types.map((t) => t.name),
           statuses,
         },
@@ -1936,19 +1987,20 @@ export class FakeApi {
     const from = this.statusOf(item);
     const to = this.status(p, b.status);
     if (to.id !== from.id) {
-      const move = from.allowed.find((a) => lower(a.to) === lower(to.name));
+      const moves = this.movesFrom(p, from);
+      const move = moves.find((a) => lower(a.to) === lower(to.name));
       if (!move) {
         throw new FakeError(
           'transition_not_allowed',
           {
             from: from.name,
             to: to.name,
-            allowed: from.allowed.map((a) => a.to),
+            allowed: moves.map((a) => a.to),
             required_fields: [],
             admins_only: false,
             ...(this.compat.moves
               ? {
-                  moves: from.allowed.map((a) => ({
+                  moves: moves.map((a) => ({
                     to: a.to,
                     to_id: this.status(p, a.to).id,
                     required_fields: a.required_fields,
@@ -2790,7 +2842,11 @@ export class FakeApi {
         fields: p.fields.map((f) => ({ id: f.id, name: f.name })),
         types: p.types.map((t) => ({ id: t.id, name: t.name })),
         workflow_def: {
-          workflow: { id: p.workflowId, name: 'Software', restrict_transitions: true },
+          workflow: {
+            id: p.workflowId,
+            name: 'Software',
+            restrict_transitions: p.restrictTransitions !== false,
+          },
           statuses: p.statuses.map((s, position) => ({
             id: s.id,
             name: s.name,
@@ -2932,9 +2988,33 @@ export class FakeApi {
         }
         items.forEach(track);
         const fields = Object.keys(patch).join(', ');
+        // Each item's values before, for the fields the patch sets.
+        const current = (i: FakeItem, field: string): unknown => {
+          switch (field) {
+            case 'status':
+              return this.statusOf(i).name;
+            case 'priority':
+              return i.priority;
+            case 'assignee':
+              return i.assigneeId === null ? null : (this.user(i.assigneeId).email ?? null);
+            case 'estimate':
+              return i.estimate;
+            default:
+              return null;
+          }
+        };
         preview = {
           summary: `Updates ${items.length} item(s): ${fields}.`,
-          effects: items.map((i) => this.effect('update', 'item', key(i), i.id, null, patch)),
+          effects: items.map((i) =>
+            this.effect(
+              'update',
+              'item',
+              key(i),
+              i.id,
+              Object.fromEntries(Object.keys(patch).map((f) => [f, current(i, f)])),
+              patch,
+            ),
+          ),
           item_count: items.length,
           warnings: [],
         };
@@ -2973,18 +3053,66 @@ export class FakeApi {
         const p = this.project(args.project as string, identity);
         this.requireAdmin(p, identity);
         const def = args.workflow_def as {
-          workflow: { id: string; name: string };
+          workflow: { id: string; name: string; restrict_transitions?: boolean | null };
           statuses?: unknown[];
-          transitions?: unknown[];
+          transitions?: { id: string; from_status_id?: string | null; to_status_id: string }[];
         };
         if (def.workflow.id !== p.workflowId) {
           throw new FakeError('not_found', { kind: 'workflow', ref: def.workflow.id });
         }
+        // Effects as the API reports them: the workflow's settings, then transitions added or removed.
+        const restrict = p.restrictTransitions !== false;
+        const nameOf = (id: string | null | undefined): string =>
+          id === null || id === undefined
+            ? 'any status'
+            : (p.statuses.find((s) => s.id === id)?.name ?? id);
+        const existing = new Map(
+          p.statuses.flatMap((s) =>
+            s.allowed.map((a, n) => [this.transitionId(s, n), `${s.name} → ${a.to}`] as const),
+          ),
+        );
+        const sent = def.transitions ?? [];
+        const effects: PlanEffect[] = [];
+        const newRestrict = def.workflow.restrict_transitions;
+        if (typeof newRestrict === 'boolean' && newRestrict !== restrict) {
+          effects.push(
+            this.effect(
+              'update',
+              'workflow',
+              `workflow ${def.workflow.name}`,
+              def.workflow.id,
+              { restrict_transitions: restrict },
+              { restrict_transitions: newRestrict },
+            ),
+          );
+        }
+        for (const t of sent) {
+          if (!existing.has(t.id)) {
+            effects.push(
+              this.effect(
+                'create',
+                'transition',
+                `${nameOf(t.from_status_id)} → ${nameOf(t.to_status_id)}`,
+                t.id,
+                null,
+                null,
+              ),
+            );
+          }
+        }
+        for (const [id, label] of existing) {
+          if (!sent.some((t) => t.id === id)) {
+            effects.push(this.effect('delete', 'transition', label, id, null, null));
+          }
+        }
+        if (effects.length === 0) {
+          effects.push(
+            this.effect('update', 'workflow', def.workflow.name, def.workflow.id, null, null),
+          );
+        }
         preview = {
           summary: `Changes the workflow "${def.workflow.name}" of ${p.key}: ${def.statuses?.length ?? 0} statuses, ${def.transitions?.length ?? 0} transitions.`,
-          effects: [
-            this.effect('update', 'workflow', def.workflow.name, def.workflow.id, null, null),
-          ],
+          effects,
           item_count: 0,
           warnings: [],
         };
@@ -3186,12 +3314,30 @@ export class FakeApi {
         result = { action: 'archive_status', moved_items: moved.length };
         break;
       }
-      case 'workflow_change':
-        result = {
-          action: 'workflow_change',
-          workflow_id: (args.workflow_def as { workflow: { id: string } }).workflow.id,
+      case 'workflow_change': {
+        const p = this.project(args.project as string, identity);
+        const def = args.workflow_def as {
+          workflow: { id: string; restrict_transitions?: boolean | null };
+          transitions?: { id: string; from_status_id?: string | null; to_status_id: string }[];
         };
+        if (typeof def.workflow.restrict_transitions === 'boolean') {
+          p.restrictTransitions = def.workflow.restrict_transitions;
+        }
+        // New transitions between two statuses are added (the fake keeps no others).
+        const known = new Set(
+          p.statuses.flatMap((s) => s.allowed.map((_a, n) => this.transitionId(s, n))),
+        );
+        for (const t of def.transitions ?? []) {
+          const from = p.statuses.find((s) => s.id === t.from_status_id);
+          const to = p.statuses.find((s) => s.id === t.to_status_id);
+          if (known.has(t.id) || !from || !to) continue;
+          if (!from.allowed.some((a) => lower(a.to) === lower(to.name))) {
+            from.allowed.push({ to: to.name, required_fields: [] });
+          }
+        }
+        result = { action: 'workflow_change', workflow_id: def.workflow.id };
         break;
+      }
       case 'work_type_change': {
         const demo = this.store.projects[0]!;
         let id: string;

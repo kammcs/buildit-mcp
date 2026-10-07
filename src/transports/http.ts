@@ -32,10 +32,17 @@ import { Hono, type Context } from 'hono';
 
 import { ApiClient } from '../api/client.js';
 import { ConfigError, isLoopbackHost, parseToolsets, type Config } from '../config.js';
+import { IdentityCache, invalidatesIdentity, type IdentityCacheOptions } from '../identity.js';
 import type { Logger } from '../log.js';
-import { createMcpServer, resolveListedTools, selectExtras } from '../server.js';
+import {
+  createMcpServer,
+  DEGRADED_LIST_TTL_MS,
+  listedByPolicy,
+  resolveListedTools,
+  scopesFromApi,
+} from '../server.js';
 import { CATALOG } from '../toolsets/catalog.js';
-import { selectTools, type ToolDefinition, type ToolPolicy } from '../toolsets/registry.js';
+import type { ToolDefinition, ToolPolicy } from '../toolsets/registry.js';
 import type { ToolsetName } from '../toolsets/toolsets.js';
 
 export const MCP_PATH = '/mcp';
@@ -45,6 +52,8 @@ const MAX_BODY_BYTES = 1024 * 1024;
 export interface HttpOptions {
   catalog?: readonly ToolDefinition[];
   fetch?: typeof fetch;
+  /** The per-token identity cache's settings (tests shorten or clock it). */
+  identityCache?: IdentityCacheOptions;
 }
 
 /** Per-request data handed to the server factory through the SDK's authInfo pass-through. */
@@ -100,30 +109,47 @@ export function createHttpApp(
     excludeTools: config.excludeTools,
   };
 
+  // The token's scopes, briefly, so listing doesn't read /v1/me on every request.
+  const identities = new IdentityCache(options.identityCache);
+
   const handler = createMcpHandler(
     async (ctx) => {
       const auth = ctx.authInfo;
       // Unreachable: the route below only calls the handler with authInfo.
       if (!auth) throw new Error('missing caller');
       const extra = auth.extra as RequestExtra;
+      const token = auth.token;
       const reqLogger = logger.child({ http_request_id: extra.requestId });
       const api = new ApiClient({
         baseUrl: config.apiUrl,
-        token: auth.token,
+        token,
         logger: reqLogger,
         ...(options.fetch ? { fetch: options.fetch } : {}),
+        onError: (err) => {
+          if (invalidatesIdentity(err)) identities.evict(token);
+        },
       });
       const policy: ToolPolicy = { ...basePolicy, toolsets: extra.toolsets };
-      // Listing reads the token's scopes; a call is checked by the API itself.
-      const listed = extra.lists
-        ? await resolveListedTools(api, catalog, policy, reqLogger)
-        : { tools: selectTools(catalog, policy, null), ...selectExtras(policy, null) };
+      // Listing reads the token's scopes (cached briefly); a call is checked by the API itself.
+      if (!extra.lists) {
+        return createMcpServer({ ...listedByPolicy(catalog, policy), api, logger: reqLogger });
+      }
+      const readScopes = scopesFromApi(api);
+      const listed = await resolveListedTools(
+        async () =>
+          (await identities.get(token, async () => ({ scopes: await readScopes() }))).scopes,
+        catalog,
+        policy,
+        reqLogger,
+      );
       return createMcpServer({
         tools: listed.tools,
         resources: listed.resources,
         prompts: listed.prompts,
         api,
         logger: reqLogger,
+        // A list made without the token's scopes is cached briefly, so it is soon read again.
+        ...(listed.identity === 'known' ? {} : { toolsListTtlMs: DEGRADED_LIST_TTL_MS }),
       });
     },
     {

@@ -7,7 +7,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 
 import { ApiClient } from '../../src/api/client.js';
 import { createLogger } from '../../src/log.js';
-import { createMcpServer, resolveListedTools } from '../../src/server.js';
+import { createMcpServer, resolveListedTools, scopesFromApi } from '../../src/server.js';
 import { CATALOG } from '../../src/toolsets/catalog.js';
 import type { ToolPolicy } from '../../src/toolsets/registry.js';
 import { TOOLSET_NAMES } from '../../src/toolsets/toolsets.js';
@@ -38,7 +38,7 @@ export async function connect(
     ...policy,
   };
   const { tools, resources, prompts } = await resolveListedTools(
-    apiClient,
+    scopesFromApi(apiClient),
     CATALOG,
     fullPolicy,
     logger,
