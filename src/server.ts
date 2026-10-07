@@ -17,6 +17,7 @@ import {
 
 import { ApiError, type ApiClient } from './api/client.js';
 import { describeApiError, ToolInputError, toolErrorResult } from './errors.js';
+import { isTokenRefused, isTransientFailure } from './identity.js';
 import type { Logger } from './log.js';
 import { PROMPT_CATALOG, RESOURCE_CATALOG } from './toolsets/catalog.js';
 import {
@@ -59,8 +60,33 @@ export interface CreateServerOptions {
 }
 
 export const DEFAULT_TOOLS_LIST_TTL_MS = 5 * 60_000;
+/** The cache hint for a list made without the token's scopes, so clients read it again soon. */
+export const DEGRADED_LIST_TTL_MS = 30_000;
 
 export function createMcpServer(options: CreateServerOptions): McpServer {
+  return createSwitchableMcpServer(options).server;
+}
+
+/** Something registered on an McpServer that can be hidden from lists and calls. */
+interface Switch {
+  enabled: boolean;
+}
+
+export interface SwitchableServer {
+  server: McpServer;
+  /**
+   * Shows only these of the registered tools, resources and prompts (the
+   * rest answer as disabled), without a list-changed notification: the
+   * next list reflects it.
+   */
+  show(listed: Pick<ListedTools, 'tools' | 'resources' | 'prompts'>): void;
+}
+
+/**
+ * An McpServer with everything in `options` registered, whose visible part
+ * can change later (stdio mode, when the token's identity is read again).
+ */
+export function createSwitchableMcpServer(options: CreateServerOptions): SwitchableServer {
   const resources = options.resources ?? [];
   const prompts = options.prompts ?? [];
   // Lists depend on the caller's token, so only that caller may cache them.
@@ -91,18 +117,35 @@ export function createMcpServer(options: CreateServerOptions): McpServer {
       },
     },
   );
-  for (const tool of options.tools) registerTool(server, tool, options);
-  for (const resource of resources) registerResource(server, resource, options);
-  for (const prompt of prompts) registerPrompt(server, prompt);
-  return server;
+  const tools = new Map<string, Switch>();
+  const templates = new Map<string, Switch>();
+  const promptSwitches = new Map<string, Switch>();
+  for (const tool of options.tools) tools.set(tool.name, registerTool(server, tool, options));
+  for (const resource of resources) {
+    templates.set(resource.name, registerResource(server, resource, options));
+  }
+  for (const prompt of prompts) promptSwitches.set(prompt.name, registerPrompt(server, prompt));
+  const apply = (switches: Map<string, Switch>, shown: readonly { name: string }[]): void => {
+    const names = new Set(shown.map((d) => d.name));
+    // Set directly: enable()/disable() would send list_changed, which this server doesn't offer.
+    for (const [name, sw] of switches) sw.enabled = names.has(name);
+  };
+  return {
+    server,
+    show(listed) {
+      apply(tools, listed.tools);
+      apply(templates, listed.resources);
+      apply(promptSwitches, listed.prompts);
+    },
+  };
 }
 
 function registerResource(
   server: McpServer,
   resource: ResourceDefinition,
   options: CreateServerOptions,
-): void {
-  server.registerResource(
+): Switch {
+  return server.registerResource(
     resource.name,
     new ResourceTemplate(resource.uriTemplate, { list: undefined }),
     { title: resource.title, description: resource.description, mimeType: resource.mimeType },
@@ -142,8 +185,8 @@ function registerResource(
   );
 }
 
-function registerPrompt(server: McpServer, prompt: PromptDefinition): void {
-  server.registerPrompt(
+function registerPrompt(server: McpServer, prompt: PromptDefinition): Switch {
+  return server.registerPrompt(
     prompt.name,
     { title: prompt.title, description: prompt.description, argsSchema: prompt.argsSchema },
     (args) => ({
@@ -178,8 +221,12 @@ function clientInfo(server: McpServer, envelope: unknown): ClientInfo | undefine
   return { name, version: typeof version === 'string' ? version : undefined };
 }
 
-function registerTool(server: McpServer, tool: ToolDefinition, options: CreateServerOptions): void {
-  server.registerTool(
+function registerTool(
+  server: McpServer,
+  tool: ToolDefinition,
+  options: CreateServerOptions,
+): Switch {
+  return server.registerTool(
     tool.name,
     {
       title: tool.title,
@@ -220,46 +267,85 @@ function registerTool(server: McpServer, tool: ToolDefinition, options: CreateSe
   );
 }
 
+/**
+ * How the tool list was chosen:
+ * - `known`: by the token's scopes (GET /v1/me answered);
+ * - `unverified`: /v1/me failed for a reason that may pass (rate limited,
+ *   the network, the API's 5xx), so every tool the configuration allows is
+ *   listed and the API checks scopes on each call;
+ * - `refused`: the token was refused (or /v1/me failed otherwise), so only
+ *   tools that need no scope are listed: whoami says why.
+ */
+export type IdentityState = 'known' | 'unverified' | 'refused';
+
 export interface ListedTools {
   tools: ToolDefinition[];
   resources: ResourceDefinition[];
   prompts: PromptDefinition[];
-  /** False when /v1/me failed, so only tools that need no scope are listed. */
-  identified: boolean;
+  identity: IdentityState;
   /** The token's scopes, when known (for logs and tests). */
   scopes?: string[];
+  /** When /v1/me failed: its code, and how long the API asked to wait, if it said. */
+  error?: { code: string; retryAfterMs?: number };
+}
+
+/** Reads the token's scopes from GET /v1/me. */
+export function scopesFromApi(api: ApiClient): () => Promise<readonly string[]> {
+  return async () => (await api.getMe()).token.scopes;
+}
+
+/** Everything the configuration allows, without the scope rule (the API checks scopes). */
+export function listedByPolicy(
+  catalog: readonly ToolDefinition[],
+  policy: ToolPolicy,
+): Omit<ListedTools, 'identity'> {
+  return { tools: selectTools(catalog, policy, null), ...selectExtras(policy, null) };
 }
 
 /**
- * The tools to list for the caller behind `api`: reads GET /v1/me and applies
- * every rule. If /v1/me fails (bad token, API down), only tools that need no
- * scope are listed, so the agent can still call whoami and see why.
+ * The tools to list for a caller: reads the token's scopes (`loadScopes`,
+ * GET /v1/me or a cache of it) and applies every rule. When that fails, see
+ * IdentityState: a passing failure lists what the configuration allows; a
+ * refused token lists only tools that need no scope.
  */
 export async function resolveListedTools(
-  api: ApiClient,
+  loadScopes: () => Promise<readonly string[]>,
   catalog: readonly ToolDefinition[],
   policy: ToolPolicy,
   logger: Logger,
 ): Promise<ListedTools> {
   try {
-    const me = await api.getMe();
-    const scopes = me.token.scopes;
+    const scopes = [...(await loadScopes())];
     return {
       tools: selectTools(catalog, policy, scopes),
       ...selectExtras(policy, scopes),
-      identified: true,
+      identity: 'known',
       scopes,
     };
   } catch (err) {
     const code =
       err !== null && typeof err === 'object' && 'code' in err ? String(err.code) : 'internal';
+    const retryAfterMs =
+      err instanceof ApiError && err.retryAfterSeconds !== undefined
+        ? Math.ceil(err.retryAfterSeconds * 1000)
+        : undefined;
+    const error = { code, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
+    if (isTransientFailure(err)) {
+      logger.warn(
+        'could not read the token identity for now; listing the configured tools, the API checks scopes',
+        { code },
+      );
+      return { ...listedByPolicy(catalog, policy), identity: 'unverified', error };
+    }
     logger.warn('could not read the token identity; listing only tools that need no scope', {
       code,
+      refused: isTokenRefused(err),
     });
     return {
       tools: selectTools(catalog, policy, []),
       ...selectExtras(policy, []),
-      identified: false,
+      identity: 'refused',
+      error,
     };
   }
 }

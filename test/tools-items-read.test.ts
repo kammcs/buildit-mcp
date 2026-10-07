@@ -131,7 +131,8 @@ describe('search_items', () => {
     const before = api.requests.length;
     const r = await c.call('search_items', { query: 'notice', sort: ['-updated_at'] });
     expect(r.isError).toBe(true);
-    expect(r.text).toContain('Invalid arguments: query cannot be combined with sort or cursor');
+    expect(r.text).toContain('buildit-mcp error: invalid_arguments');
+    expect(r.text).toContain('query cannot be combined with sort or cursor');
     expect(api.requests.length).toBe(before);
   });
 
@@ -264,13 +265,28 @@ describe('get_item', () => {
     );
   });
 
+  it('says "(no description)" instead of an empty block', async () => {
+    const c = await client();
+    const target = api.store.items.find((i) => i.project === 'DEMO' && i.number === 100)!;
+    expect(target.description).toBe('');
+    const r = await c.call('get_item', { item: 'DEMO-100' });
+    expect(r.isError).toBe(false);
+    expect(r.text).toContain('(no description)');
+    expect(r.text).not.toContain('source="description"');
+    expect((r.structured.item as { description: string }).description).toBe('');
+
+    target.description = '   ';
+    const blank = await c.call('get_item', { item: 'DEMO-100' });
+    expect(blank.text).toContain('(no description)');
+  });
+
   it('says what to do for an unknown item', async () => {
     const c = await client();
     const r = await c.call('get_item', { item: 'DEMO-999' });
     expect(r.isError).toBe(true);
     expect(r.text).toContain('not_found (HTTP 404)');
     expect(r.text).toContain('- item: DEMO-999');
-    expect(r.text).toContain('search_items finds items');
+    expect(r.text).toContain('What to do: Check the key with search_items');
   });
 
   it('rejects a malformed key before calling the API', async () => {

@@ -6,7 +6,7 @@ Guidance for agents (and people) who build this repository.
 
 `buildit-mcp` is an [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://buildit.social). It lets AI agents (Claude Code, Claude Desktop, Cursor, VS Code and others) work with one org's projects, items, comments, pages and channels through buildIt.Social's **agent API**, with a person's **personal access token**.
 
-It is a thin adapter: each MCP tool call becomes one or a few calls to the agent API, which authenticates the token, acts as its owner, and enforces every permission. The server holds no secrets of its own and keeps no state between requests.
+It is a thin adapter: each MCP tool call becomes one or a few calls to the agent API, which authenticates the token, acts as its owner, and enforces every permission. The server holds no secrets of its own and keeps no state between requests, beyond a 30-second cache of each token's scopes.
 
 The design is in [docs/design.md](docs/design.md). Read it before changing behaviour.
 
@@ -48,6 +48,7 @@ src/
   version.ts            name, version, version comparison
   server.ts             McpServer for one caller: instructions, tools, resources, prompts, error mapping
   errors.ts             ApiError and ToolInputError -> tool result with isError and actionable text
+  identity.ts           /v1/me failures (refused vs passing) and the per-token scope cache
   untrusted.ts          <untrusted_content> wrapping of people-written text
   resources.ts          buildit://items/{key} and buildit://pages/{id}
   prompts.ts            plan_epic, triage, standup
@@ -69,7 +70,7 @@ src/
   tools/pages.ts        list_pages, get_page, create_page, update_page
   tools/chat.ts         list_channels, read_channel, read_thread
   tools/plans.ts        get_workflow, list_work_types, the propose_* tools, apply_plan
-  transports/stdio.ts   stdio: token from BUILDIT_TOKEN, identity read at startup
+  transports/stdio.ts   stdio: token from BUILDIT_TOKEN, identity read at startup and refreshed
   transports/http.ts    Streamable HTTP: stateless, Bearer per request, Host/Origin checks
 test/
   support/fake-api.ts   in-process fake of the agent API on the generated contract (made-up data)
@@ -88,7 +89,7 @@ Key rules the code relies on:
 
 - **stdout is the protocol in stdio mode.** Never write to it; log through `Logger` (stderr). ESLint forbids `console` in `src/`.
 - **Never log tokens or content.** Log codes, ids, statuses and durations; never titles, descriptions, comments, query strings or bodies. The logger scrubs tokens as a backstop, not as permission.
-- **Stateless.** Nothing about a caller survives the request (HTTP) or the connection (stdio). No caches keyed by token.
+- **Stateless.** Nothing about a caller survives the request (HTTP) or the connection (stdio), with one exception: `IdentityCache` (`src/identity.ts`) keeps each token's scopes for 30 seconds in HTTP mode, so listing tools doesn't read `/v1/me` every time. It is keyed by an HMAC of the token (never the token), holds only scopes, is bounded, and is evicted on any auth error. Add no other cache keyed by token.
 - **Tool descriptions are static text.** Never build them from server data.
 - **People-written text is wrapped.** Every tool, resource and plan preview that returns titles, descriptions, comments, pages, messages, goals or descriptions passes them through `wrapUntrusted()`; short labels (names, keys) go through `sanitizeLabel()`.
 - **API refusals are tool results**, not exceptions: throw `ApiError` (the client does) and `server.ts` turns it into `isError: true` with the code, message, hint and details.

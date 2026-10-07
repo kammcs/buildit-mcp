@@ -122,12 +122,19 @@ export interface ApiClientOptions {
   logger?: Logger;
   /** Injected in tests. */
   sleep?: (ms: number) => Promise<void>;
+  /** Told about every API error before it is thrown (to drop a cached identity after an auth error). */
+  onError?: (err: ApiError) => void;
 }
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_RETRY_AFTER_MS = 10_000;
-/** Wait used when a 429 carries no retry_after. */
+/** Wait used before the one retry when a 429 carries no retry_after. */
 const DEFAULT_RETRY_AFTER_SECONDS = 1;
+/**
+ * The wait reported to the agent when a 429 without the error envelope (a
+ * limit in front of the API) gives no Retry-After, after the retry failed too.
+ */
+export const DEFAULT_RATE_LIMIT_WAIT_SECONDS = 30;
 
 const USER_AGENT = `${SERVER_NAME}/${SERVER_VERSION}`;
 const MAX_CLIENT_HEADER = 200;
@@ -196,6 +203,7 @@ export class ApiClient {
   private readonly maxRetryAfterMs: number;
   private readonly logger: Logger;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly onError: ((err: ApiError) => void) | undefined;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -205,6 +213,7 @@ export class ApiClient {
     this.maxRetryAfterMs = options.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS;
     this.logger = options.logger ?? silentLogger;
     this.sleep = options.sleep ?? defaultSleep;
+    this.onError = options.onError;
   }
 
   /** GET /v1/meta */
@@ -257,6 +266,25 @@ export class ApiClient {
   }
 
   private async send(
+    method: string,
+    path: string,
+    options: ApiRequestOptions,
+  ): Promise<{ body: unknown; requestId: string }> {
+    try {
+      return await this.sendOnce(method, path, options);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        try {
+          this.onError?.(err);
+        } catch {
+          // A listener's failure must not hide the API's error.
+        }
+      }
+      throw err;
+    }
+  }
+
+  private async sendOnce(
     method: string,
     path: string,
     options: ApiRequestOptions,
@@ -375,6 +403,22 @@ export class ApiClient {
         details,
         hint,
         retryAfterSeconds,
+      });
+    }
+    if (response.status === 429) {
+      // A limit in front of the API (per IP, for example) answers without the
+      // error envelope: it is still a rate limit, with the header's wait.
+      const root = asRecord(body);
+      const said = typeof root?.message === 'string' ? root.message.trim().slice(0, 300) : '';
+      return new ApiError({
+        code: 'rate_limited',
+        message: said
+          ? `Too many requests: ${said}`
+          : 'Too many requests to the buildIt.Social API.',
+        status: 429,
+        requestId,
+        details: {},
+        retryAfterSeconds: retryAfterSeconds ?? DEFAULT_RATE_LIMIT_WAIT_SECONDS,
       });
     }
     return new ApiError({

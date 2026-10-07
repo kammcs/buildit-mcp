@@ -139,7 +139,14 @@ export const listPagesTool = defineTool({
     limit: limitInput(100, 25),
   }),
   outputSchema: z.object({
-    pages: z.array(PageSummaryOut),
+    pages: z.array(
+      PageSummaryOut.extend({
+        parent_title: z
+          .string()
+          .nullable()
+          .describe("The parent page's title, when the parent is in the same listing."),
+      }),
+    ),
     next_cursor: z.string().nullable(),
   }),
   async run(args, ctx) {
@@ -150,10 +157,20 @@ export const listPagesTool = defineTool({
         ...(args.limit ? { limit: args.limit } : {}),
       },
     });
-    const pages = page.items.map(pageSummaryOut);
+    const titles = new Map(page.items.map((p) => [p.id, sanitizeLabel(p.title, 200)]));
+    const pages = page.items.map((p) => ({
+      ...pageSummaryOut(p),
+      parent_title: p.parent_id === null ? null : (titles.get(p.parent_id) ?? null),
+    }));
+    // A parent is named by its title; one outside this page of results, by its id.
+    const parentText = (p: (typeof pages)[number]): string =>
+      p.parent_id === null
+        ? ''
+        : p.parent_title !== null
+          ? ` · under "${p.parent_title}"`
+          : ` · under page ${p.parent_id} (not in this list)`;
     const lines = pages.map(
-      (p) =>
-        `${p.id} · v${p.version}${p.is_home ? ' · home' : ''}${p.parent_id ? ` · under ${p.parent_id}` : ''} — ${p.title}`,
+      (p) => `${p.id} · v${p.version}${p.is_home ? ' · home' : ''}${parentText(p)} — ${p.title}`,
     );
     const text = [
       pages.length === 0 ? 'No pages in this channel.' : `${pages.length} page(s):`,

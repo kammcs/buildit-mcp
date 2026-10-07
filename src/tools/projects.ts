@@ -237,6 +237,44 @@ export function transitionText(a: z.infer<typeof TransitionOut>): string {
   return notes.length > 0 ? `${a.to} (${notes.join('; ')})` : a.to;
 }
 
+/** A status as workflowLines shows it. */
+export interface StatusForText {
+  name: string;
+  category: string;
+  is_initial: boolean;
+  id?: string;
+  allowed: readonly z.infer<typeof TransitionOut>[];
+}
+
+/**
+ * A workflow's statuses and moves, as lines. A workflow that restricts
+ * transitions lists the moves from each status. One that doesn't allows any
+ * move ("any status → any status"), so only the moves with rules (required
+ * fields, project admins only) are listed.
+ */
+export function workflowLines(restrict: boolean, statuses: readonly StatusForText[]): string[] {
+  const head = (s: StatusForText): string =>
+    `${s.name} [${s.category}${s.is_initial ? ', initial' : ''}]${s.id ? ` (id ${s.id})` : ''}`;
+  if (restrict) {
+    return [
+      'Moves: only the ones listed below.',
+      ...statuses.map(
+        (s) => `- ${head(s)} -> ${s.allowed.map(transitionText).join('; ') || 'none'}`,
+      ),
+    ];
+  }
+  const rules = statuses.flatMap((s) =>
+    s.allowed
+      .filter((a) => a.admins_only || a.required_fields.length > 0)
+      .map((a) => `${s.name} → ${transitionText(a)}`),
+  );
+  return [
+    'Moves: any status → any status.',
+    ...statuses.map((s) => `- ${head(s)}`),
+    `Moves with rules: ${rules.join('; ') || 'none'}.`,
+  ];
+}
+
 function describeText(d: DescribeOut): string {
   const p = d.project;
   const estimates =
@@ -249,13 +287,8 @@ function describeText(d: DescribeOut): string {
     `Types: ${d.types.map((t) => `${t.name} (${t.level}, workflow ${t.workflow})`).join('; ') || 'none'}.`,
   ];
   for (const w of d.workflows) {
-    lines.push(
-      `Workflow ${w.name} (types: ${w.types.join(', ') || 'none'}; ${w.restrict_transitions ? 'only the listed moves' : 'any move'}):`,
-    );
-    for (const s of w.statuses) {
-      const moves = s.allowed.map(transitionText).join('; ') || 'none';
-      lines.push(`- ${s.name} [${s.category}${s.is_initial ? ', initial' : ''}] -> ${moves}`);
-    }
+    lines.push(`Workflow ${w.name} (types: ${w.types.join(', ') || 'none'}):`);
+    lines.push(...workflowLines(w.restrict_transitions, w.statuses));
   }
   lines.push(`Labels: ${d.labels.join(', ') || 'none'}.`);
   lines.push(

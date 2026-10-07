@@ -299,7 +299,8 @@ describe('errors every tool shares', () => {
     const r = await c.call('get_item', { item: 'DEMO-42' });
     expect(r.isError).toBe(true);
     expect(r.text).toContain('outside_limits (HTTP 403)');
-    expect(r.text).toContain('whoami lists the projects in reach');
+    expect(r.text).toContain('What to do: Call whoami to see the projects and channels');
+    expect(r.text).not.toContain('get_me');
     const ok = await c.call('get_item', { item: 'OPS-1' });
     expect(ok.isError).toBe(false);
   });

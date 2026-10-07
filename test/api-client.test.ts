@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { ApiClient, ApiError } from '../src/api/client.js';
-import { describeApiError, toolErrorResult } from '../src/errors.js';
+import { ApiClient, ApiError, DEFAULT_RATE_LIMIT_WAIT_SECONDS } from '../src/api/client.js';
+import { describeApiError, ToolInputError, toolErrorResult } from '../src/errors.js';
 import { createLogger } from '../src/log.js';
 import { FakeApi, TOKENS, uid, USERS } from './support/fake-api.js';
 
@@ -126,6 +126,63 @@ describe('ApiClient', () => {
     expect(waits).toEqual([3000]);
   });
 
+  it('maps a 429 without the error envelope (a limit in front of the API) to rate_limited', async () => {
+    const waits: number[] = [];
+    const gateway = {
+      status: 429,
+      body: { message: 'Rate limit exceeded for this address.', request_id: 'gw-1' },
+      headers: { 'Retry-After': '4' },
+    };
+    api.enqueue('/v1/me', gateway, gateway);
+    const err = await caught(
+      client(TOKENS.full, {
+        sleep: (ms) => {
+          waits.push(ms);
+          return Promise.resolve();
+        },
+      }).getMe(),
+    );
+    // The same single retry, after the header's wait.
+    expect(waits).toEqual([4000]);
+    expect(api.requests).toHaveLength(2);
+    expect(err).toMatchObject({ code: 'rate_limited', status: 429, retryAfterSeconds: 4 });
+    const text = describeApiError(err);
+    expect(text).toContain('buildIt.Social API error: rate_limited (HTTP 429)');
+    expect(text).toContain('Too many requests: Rate limit exceeded for this address.');
+    expect(text).toContain('Retry after: 4 s');
+  });
+
+  it('gives a gateway 429 without Retry-After a default wait, after one short retry', async () => {
+    const waits: number[] = [];
+    const gateway = { status: 429, body: { message: 'Slow down.', request_id: 'gw-2' } };
+    api.enqueue('/v1/me', gateway, gateway);
+    const err = await caught(
+      client(TOKENS.full, {
+        sleep: (ms) => {
+          waits.push(ms);
+          return Promise.resolve();
+        },
+      }).getMe(),
+    );
+    expect(waits).toEqual([1000]);
+    expect(api.requests).toHaveLength(2);
+    expect(err).toMatchObject({
+      code: 'rate_limited',
+      retryAfterSeconds: DEFAULT_RATE_LIMIT_WAIT_SECONDS,
+    });
+
+    // A long Retry-After is not waited out: it goes back to the agent at once.
+    api.requests.length = 0;
+    api.enqueue('/v1/me', {
+      status: 429,
+      body: 'Too Many Requests',
+      headers: { 'Retry-After': '120' },
+    });
+    const long = await caught(client(TOKENS.full, { maxRetryAfterMs: 5000 }).getMe());
+    expect(long).toMatchObject({ code: 'rate_limited', retryAfterSeconds: 120 });
+    expect(api.requests).toHaveLength(1);
+  });
+
   it('retries only once', async () => {
     const limited = {
       status: 429,
@@ -198,12 +255,179 @@ describe('error results', () => {
     const text = describeApiError(err);
     expect(text).toContain('buildIt.Social API error: scope_missing (HTTP 403)');
     expect(text).toContain('This needs the projects:write scope.');
-    // No hint from the API: the contract's own wording, and this server's note.
+    // No hint from the API: the contract's own wording.
     expect(text).toContain('What to do: Ask the user for a token with details.scope');
-    expect(text).toContain('whoami lists the scopes this token has.');
+    // The details list the token's scopes, so the whoami note would add nothing.
+    expect(text).not.toContain('whoami lists the scopes');
     expect(text).toContain('- needs: projects:write');
     expect(text).toContain('- the token has: projects:read');
     expect(text).toContain('Request id: req-1');
+
+    // Without the granted scopes in the details, the note says where to find them.
+    const bare = describeApiError(
+      new ApiError({
+        code: 'scope_missing',
+        message: 'Missing scope.',
+        status: 403,
+        requestId: 'r',
+        details: { scope: 'projects:write' },
+      }),
+    );
+    expect(bare).toContain('whoami lists the scopes this token has.');
+  });
+
+  it('say each thing once: the message, the hint, then a note only when it adds something', () => {
+    const text = describeApiError(
+      new ApiError({
+        code: 'conflict',
+        message:
+          'The item changed. Read it again, reapply your change to what you read, and send the new version.',
+        status: 409,
+        requestId: 'r',
+        hint: 'Read it again, reapply your change to what you read, and send the new version.',
+        details: { kind: 'item', current: { version: 4 } },
+      }),
+    );
+    // The message already says the hint: it is not repeated.
+    expect(text.match(/reapply your change/g)).toHaveLength(1);
+    expect(text).not.toContain('What to do:');
+    // The general note names the tool to read with.
+    expect(text).toContain('get_item reads the current item');
+
+    // A tool's own note replaces the general one.
+    const page = describeApiError(
+      new ApiError({
+        code: 'conflict',
+        message: 'The page changed.',
+        status: 409,
+        requestId: 'r',
+        hint: 'Read it again, reapply your change to what you read, and send the new version.',
+        details: { kind: 'page', current: { version: 3 } },
+      }).withNote('Call get_page with page="p" to read the current text and version.'),
+    );
+    expect(page.match(/get_page/g)).toHaveLength(1);
+    expect(page.match(/Read it again/g)).toHaveLength(1);
+
+    // A note that only repeats the hint is gone.
+    const used = describeApiError(
+      new ApiError({
+        code: 'plan_used',
+        message: 'This plan was already applied.',
+        status: 409,
+        requestId: 'r',
+        details: { handle: 'h', used_at: '2026-10-07T15:00:00Z' },
+      }),
+    );
+    expect(used).toContain('What to do: The change is done');
+    expect(used).not.toContain('do not apply it again');
+  });
+
+  it('choose the not_found hint by the kind of thing not found', () => {
+    const notFound = (kind: string): string =>
+      describeApiError(
+        new ApiError({
+          code: 'not_found',
+          message: 'Not found.',
+          status: 404,
+          requestId: 'r',
+          hint: 'Look the reference up (search_items, list_projects, describe_project), then retry.',
+          details: { kind, ref: 'x' },
+        }),
+      );
+    expect(notFound('item')).toContain('What to do: Check the key with search_items');
+    expect(notFound('page')).toContain("What to do: list_pages lists a channel's pages");
+    expect(notFound('channel')).toContain('What to do: list_channels lists the channels');
+    expect(notFound('user')).toContain('What to do: find_users lists the people');
+    expect(notFound('sprint')).toContain('What to do: list_sprints');
+    expect(notFound('status')).toContain(
+      "What to do: describe_project lists the project's statuses",
+    );
+    expect(notFound('plan')).toContain('What to do: Use a handle a propose_* tool returned');
+    for (const kind of ['page', 'channel', 'user', 'plan']) {
+      expect(notFound(kind), kind).not.toContain('search_items');
+    }
+    // An unknown kind keeps the API's hint.
+    expect(notFound('gadget')).toContain('What to do: Look the reference up');
+  });
+
+  it("put the API's tool names in this server's terms", () => {
+    const text = describeApiError(
+      new ApiError({
+        code: 'outside_limits',
+        message: 'This token is limited to other projects.',
+        status: 403,
+        requestId: 'r',
+        hint: 'Call get_me to see the projects and channels this token may reach.',
+        details: { kind: 'project', ref: 'OPS' },
+      }),
+    );
+    expect(text).toContain('What to do: Call whoami to see the projects and channels');
+    expect(text).not.toContain('get_me');
+  });
+
+  it('name the rate limit that was reached, in plain words', () => {
+    const text = describeApiError(
+      new ApiError({
+        code: 'rate_limited',
+        message: 'Too many writes.',
+        status: 429,
+        requestId: 'r',
+        retryAfterSeconds: 42,
+        details: { retry_after: 42, bucket: 'token_writes_per_minute' },
+      }),
+    );
+    expect(text).toContain('Retry after: 42 s');
+    expect(text).toContain('Limit reached: writes per minute for this token.');
+    // Not repeated as raw details.
+    expect(text).not.toContain('token_writes_per_minute');
+    expect(text).not.toContain('Details:');
+    const org = describeApiError(
+      new ApiError({
+        code: 'rate_limited',
+        message: 'Too many calls.',
+        status: 429,
+        requestId: 'r',
+        retryAfterSeconds: 5,
+        details: { retry_after: 5, bucket: 'org_requests_per_minute' },
+      }),
+    );
+    expect(org).toContain(
+      'Limit reached: requests per minute for the whole org, across all its tokens.',
+    );
+    // A bucket newer than this copy of the contract still reads in words.
+    const user = describeApiError(
+      new ApiError({
+        code: 'rate_limited',
+        message: 'Too many calls.',
+        status: 429,
+        requestId: 'r',
+        retryAfterSeconds: 7,
+        details: { retry_after: 7, bucket: 'user_requests_per_minute' },
+      }),
+    );
+    expect(user).toContain(
+      'Limit reached: requests per minute for your account, across all your tokens.',
+    );
+    // An unknown bucket is shown as it came, defused.
+    const odd = describeApiError(
+      new ApiError({
+        code: 'rate_limited',
+        message: 'Too many.',
+        status: 429,
+        requestId: 'r',
+        details: { bucket: 'galaxy_requests_per_year' },
+      }),
+    );
+    expect(odd).toContain('Limit reached: galaxy_requests_per_year.');
+  });
+
+  it('give the invalid_arguments code for arguments that cannot make a call', () => {
+    const result = toolErrorResult(new ToolInputError('query cannot be combined with sort.'));
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('buildit-mcp error: invalid_arguments');
+    expect(text).toContain('query cannot be combined with sort.');
+    expect(text).toContain('What to do: Fix the arguments');
   });
 
   it("prefer the API's hint, and defuse it", () => {
@@ -253,7 +477,7 @@ describe('error results', () => {
       }),
     );
     expect(stale).toContain('changed since the preview: item DEMO-42');
-    expect(stale).toContain('Call the same propose_* tool again');
+    expect(stale).toContain('calling the same propose_* tool again');
   });
 
   it('list allowed transitions and candidates', () => {

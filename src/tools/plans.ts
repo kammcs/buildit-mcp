@@ -24,6 +24,7 @@ import { ApiError } from '../api/client.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolContext, type ToolOutput } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
+import { workflowLines } from './projects.js';
 import {
   itemRef,
   ItemRefInput,
@@ -78,9 +79,95 @@ function jsonValue(v: unknown): string | null {
   });
 }
 
-function effectLine(e: PlanEffect): string {
-  return `- ${e.op} ${e.kind} ${sanitizeLabel(e.target, 200)}`;
+function asRecord(v: unknown): Record<string, unknown> | undefined {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : undefined;
 }
+
+/** A value as people read it: yes/no, none, lists joined. */
+function plainValue(v: unknown): string {
+  if (v === undefined || v === null || v === '') return 'none';
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  if (typeof v === 'string') return sanitizeLabel(v, 120);
+  if (typeof v === 'number') return String(v);
+  if (Array.isArray(v)) return v.length === 0 ? 'none' : v.map(plainValue).join(', ');
+  return sanitizeLabel(JSON.stringify(v), 120);
+}
+
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/** What an effect without values does, in a word. */
+const OP_DONE: Record<string, string> = {
+  create: 'added',
+  update: 'changed',
+  archive: 'archived',
+  restore: 'restored',
+  move: 'moved',
+  transition: 'moved',
+  relabel: 'relabeled',
+};
+
+/** "priority: none → urgent" for each field that changes. */
+function fieldChanges(e: PlanEffect): string[] {
+  const before = asRecord(e.before);
+  const after = asRecord(e.after);
+  if (!before && !after) return [];
+  const keys = [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])];
+  return keys
+    .filter((k) => !(before && after && same(before[k], after[k])))
+    .map((k) => {
+      const name = sanitizeLabel(k.replace(/_/g, ' '), 60);
+      if (!before) return `${name}: set to ${plainValue(after?.[k])}`;
+      if (!after)
+        return `${name}: ${plainValue(before[k])} (${e.op === 'delete' ? 'deleted' : 'removed'})`;
+      return `${name}: ${plainValue(before[k])} → ${plainValue(after[k])}`;
+    });
+}
+
+/**
+ * One line per effect, with the values before and after when the API gives
+ * them: "DEMO-9 priority: none → urgent", "workflow Bugs: restrict
+ * transitions: no → yes", "transition Triage → To do: added".
+ */
+function effectLine(e: PlanEffect): string {
+  const target = sanitizeLabel(e.target, 200);
+  // An item's target starts with its key; other targets may already name their kind ("status In review").
+  const subject =
+    e.kind === 'item' || target.toLowerCase().startsWith(`${e.kind.toLowerCase()} `)
+      ? target
+      : `${e.kind} ${target}`;
+  const changes = fieldChanges(e);
+  if (changes.length > 0) {
+    // A bare item key reads as a sentence: "DEMO-9 priority: none → urgent".
+    const sep = /^[A-Z][A-Z0-9]*-\d+$/.test(subject) ? ' ' : ': ';
+    return `- ${subject}${sep}${changes.join('; ')}`;
+  }
+  const scalar =
+    e.before !== null && e.before !== undefined && !asRecord(e.before)
+      ? `${plainValue(e.before)} → ${plainValue(e.after)}`
+      : e.after !== null && e.after !== undefined && !asRecord(e.after)
+        ? `set to ${plainValue(e.after)}`
+        : undefined;
+  const done =
+    OP_DONE[e.op] ?? (e.op === 'delete' ? (e.kind === 'item' ? 'deleted' : 'removed') : e.op);
+  return `- ${subject}: ${scalar ?? done}`;
+}
+
+/** The new value of restrict_transitions, when an effect changes it. */
+function restrictChange(effects: readonly PlanEffect[]): boolean | undefined {
+  for (const e of effects) {
+    const after = asRecord(e.after)?.restrict_transitions;
+    const before = asRecord(e.before)?.restrict_transitions;
+    if (typeof after === 'boolean' && after !== (before === true)) return after;
+  }
+  return undefined;
+}
+
+const RESTRICT_ON =
+  'IMPORTANT: after this change, the workflow allows only the transitions it lists. Any move between statuses that is not listed will be refused. Make sure the person understands this before they confirm.';
+const RESTRICT_OFF =
+  'IMPORTANT: after this change, the workflow allows any move between its statuses (any status → any status); listed transitions keep only their rules.';
 
 /** The text an agent shows the person, and what to do next. */
 const CONFIRM_STEP =
@@ -108,7 +195,7 @@ function planOutput(r: CreatePlanResponse): ToolOutput<PlanOut> {
     next_step: CONFIRM_STEP,
   };
   // The preview is the API's text about people-written things (titles,
-  // names), so it is shown as one block of data.
+  // names), so it is shown as one block of data, its summary first.
   const previewLines = [
     p.summary,
     ...(effects.length > 0 ? ['', 'Effects:', ...effects.map(effectLine)] : []),
@@ -117,10 +204,11 @@ function planOutput(r: CreatePlanResponse): ToolOutput<PlanOut> {
       : []),
     ...(p.warnings.length > 0 ? ['', 'Warnings:', ...p.warnings.map((w) => `- ${w}`)] : []),
   ];
+  const restrict = restrictChange(p.effects);
   const text = [
-    `Preview of ${r.action} (${p.item_count} item(s) affected):`,
     wrapUntrusted(previewLines.join('\n'), { source: 'plan_preview', maxChars: 20_000 }),
-    `Plan handle: ${r.handle} (valid until ${r.expires_at}).`,
+    ...(restrict === undefined ? [] : [restrict ? RESTRICT_ON : RESTRICT_OFF]),
+    `Plan: ${r.action}, ${p.item_count} item(s) affected. Handle ${r.handle} (valid until ${r.expires_at}).`,
     CONFIRM_STEP,
   ].join('\n');
   return { structured, text };
@@ -324,14 +412,23 @@ export const getWorkflowTool = defineTool({
       workflow_def: workflowDef,
     };
     const lines = [
-      `Workflow ${structured.workflow.name} of ${r.project.key} (id ${w.id}; ${w.restrict_transitions ? 'only the listed moves' : 'any move'}; types: ${structured.workflow.types.join(', ') || 'none'}):`,
-      ...statuses.map(
-        (s) =>
-          `- ${s.name} [${s.category}${s.is_initial ? ', initial' : ''}] (id ${s.id}) -> ${s.allowed.join('; ') || 'none'}`,
+      `Workflow ${structured.workflow.name} of ${r.project.key} (id ${w.id}; types: ${structured.workflow.types.join(', ') || 'none'}):`,
+      ...workflowLines(
+        w.restrict_transitions,
+        w.statuses.map((s) => ({
+          id: s.id,
+          name: name(s.name),
+          category: s.category,
+          is_initial: s.is_initial,
+          allowed: s.allowed.map((a) => ({
+            to: name(a.to),
+            required_fields: a.required_fields.map(name),
+            admins_only: a.admins_only,
+          })),
+        })),
       ),
       `Fields: ${structured.fields.map((f) => `${f.name} (cf:${f.id})`).join(', ') || 'none'}.`,
-      'workflow_def (edit it and pass it to propose_workflow_change):',
-      JSON.stringify(workflowDef),
+      `The whole definition, with the ids of its ${def.statuses?.length ?? 0} statuses and ${def.transitions?.length ?? 0} transitions, is workflow_def in the structured result: edit it and pass it to propose_workflow_change.`,
     ];
     return { structured, text: lines.join('\n') };
   },
@@ -818,7 +915,7 @@ export const applyPlanTool = defineTool({
         err instanceof ApiError ? (err.details as { kind?: unknown } | undefined)?.kind : undefined;
       if (err instanceof ApiError && err.code === 'not_found' && kind === 'plan') {
         throw err.withNote(
-          'This token has no plan with that handle: it was never made, or another token made it. Use the handle a propose_* tool returned in this conversation, or propose the change again.',
+          'This token has no plan with that handle: it was never made, or another token made it.',
         );
       }
       throw err;
