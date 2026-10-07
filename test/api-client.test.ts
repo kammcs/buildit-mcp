@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { ApiClient, ApiError } from '../src/api/client.js';
+import { ApiClient, ApiError, DEFAULT_RATE_LIMIT_WAIT_SECONDS } from '../src/api/client.js';
 import { describeApiError, ToolInputError, toolErrorResult } from '../src/errors.js';
 import { createLogger } from '../src/log.js';
 import { FakeApi, TOKENS, uid, USERS } from './support/fake-api.js';
@@ -124,6 +124,63 @@ describe('ApiClient', () => {
       },
     }).getMe();
     expect(waits).toEqual([3000]);
+  });
+
+  it('maps a 429 without the error envelope (a limit in front of the API) to rate_limited', async () => {
+    const waits: number[] = [];
+    const gateway = {
+      status: 429,
+      body: { message: 'Rate limit exceeded for this address.', request_id: 'gw-1' },
+      headers: { 'Retry-After': '4' },
+    };
+    api.enqueue('/v1/me', gateway, gateway);
+    const err = await caught(
+      client(TOKENS.full, {
+        sleep: (ms) => {
+          waits.push(ms);
+          return Promise.resolve();
+        },
+      }).getMe(),
+    );
+    // The same single retry, after the header's wait.
+    expect(waits).toEqual([4000]);
+    expect(api.requests).toHaveLength(2);
+    expect(err).toMatchObject({ code: 'rate_limited', status: 429, retryAfterSeconds: 4 });
+    const text = describeApiError(err);
+    expect(text).toContain('buildIt.Social API error: rate_limited (HTTP 429)');
+    expect(text).toContain('Too many requests: Rate limit exceeded for this address.');
+    expect(text).toContain('Retry after: 4 s');
+  });
+
+  it('gives a gateway 429 without Retry-After a default wait, after one short retry', async () => {
+    const waits: number[] = [];
+    const gateway = { status: 429, body: { message: 'Slow down.', request_id: 'gw-2' } };
+    api.enqueue('/v1/me', gateway, gateway);
+    const err = await caught(
+      client(TOKENS.full, {
+        sleep: (ms) => {
+          waits.push(ms);
+          return Promise.resolve();
+        },
+      }).getMe(),
+    );
+    expect(waits).toEqual([1000]);
+    expect(api.requests).toHaveLength(2);
+    expect(err).toMatchObject({
+      code: 'rate_limited',
+      retryAfterSeconds: DEFAULT_RATE_LIMIT_WAIT_SECONDS,
+    });
+
+    // A long Retry-After is not waited out: it goes back to the agent at once.
+    api.requests.length = 0;
+    api.enqueue('/v1/me', {
+      status: 429,
+      body: 'Too Many Requests',
+      headers: { 'Retry-After': '120' },
+    });
+    const long = await caught(client(TOKENS.full, { maxRetryAfterMs: 5000 }).getMe());
+    expect(long).toMatchObject({ code: 'rate_limited', retryAfterSeconds: 120 });
+    expect(api.requests).toHaveLength(1);
   });
 
   it('retries only once', async () => {
@@ -334,7 +391,34 @@ describe('error results', () => {
         details: { retry_after: 5, bucket: 'org_requests_per_minute' },
       }),
     );
-    expect(org).toContain('Limit reached: calls per minute for the whole org');
+    expect(org).toContain(
+      'Limit reached: requests per minute for the whole org, across all its tokens.',
+    );
+    // A bucket newer than this copy of the contract still reads in words.
+    const user = describeApiError(
+      new ApiError({
+        code: 'rate_limited',
+        message: 'Too many calls.',
+        status: 429,
+        requestId: 'r',
+        retryAfterSeconds: 7,
+        details: { retry_after: 7, bucket: 'user_requests_per_minute' },
+      }),
+    );
+    expect(user).toContain(
+      'Limit reached: requests per minute for your account, across all your tokens.',
+    );
+    // An unknown bucket is shown as it came, defused.
+    const odd = describeApiError(
+      new ApiError({
+        code: 'rate_limited',
+        message: 'Too many.',
+        status: 429,
+        requestId: 'r',
+        details: { bucket: 'galaxy_requests_per_year' },
+      }),
+    );
+    expect(odd).toContain('Limit reached: galaxy_requests_per_year.');
   });
 
   it('give the invalid_arguments code for arguments that cannot make a call', () => {

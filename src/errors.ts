@@ -101,10 +101,11 @@ const NOT_FOUND_HINTS: Record<string, string> = {
 
 /** Rate-limit buckets, in plain words. */
 const RATE_BUCKETS: Record<string, string> = {
-  token_requests_per_minute: 'calls per minute for this token',
+  token_requests_per_minute: 'requests per minute for this token',
   token_writes_per_minute: 'writes per minute for this token',
   token_writes_per_day: 'writes per day for this token',
-  org_requests_per_minute: 'calls per minute for the whole org (all its tokens)',
+  org_requests_per_minute: 'requests per minute for the whole org, across all its tokens',
+  user_requests_per_minute: 'requests per minute for your account, across all your tokens',
 };
 
 /** The API's own terms, as this server names them. */
