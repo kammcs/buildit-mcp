@@ -63,7 +63,13 @@ describe('whoami', () => {
         { key: 'OPS', name: 'Operations', id: uid(11) },
       ],
       features: { projects: true },
-      rate_limits: { requests_per_minute: 120, writes_per_minute: 30, writes_per_day: 1000 },
+      rate_limits: {
+        requests_per_minute: 120,
+        user_requests_per_minute: 300,
+        writes_per_minute: 60,
+        writes_per_day: 2000,
+        org_requests_per_minute: 600,
+      },
       server: {
         name: 'buildit-mcp',
         version: SERVER_VERSION,
@@ -75,6 +81,9 @@ describe('whoami', () => {
     expect(text).toContain('Signed in as Test User (test.user@example.com) in the org Example Org');
     expect(text).toContain('Scopes: projects:read.');
     expect(text).toContain('Projects in reach (2): DEMO (Demo project), OPS (Operations).');
+    expect(text).toContain(
+      'Rate limits for this token: 120 calls and 60 writes a minute, 2000 writes a day. For your account, across all your tokens: 300 calls a minute. For the whole org: 600 calls a minute.',
+    );
     // The call is attributed to the tool in the API's audit trail.
     expect(
       api.requests.some((r) => r.path === '/v1/me' && r.headers['x-buildit-tool'] === 'whoami'),

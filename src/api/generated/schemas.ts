@@ -184,6 +184,7 @@ export type ProjectRef = z.infer<typeof ProjectRefSchema>;
 
 export const RateLimitsSchema = z.looseObject({
   requests_per_minute: z.number(),
+  user_requests_per_minute: z.number(),
   writes_per_minute: z.number(),
   writes_per_day: z.number(),
   org_requests_per_minute: z.number(),
@@ -533,6 +534,7 @@ export const ErrorSchema = z.looseObject({
           'token_writes_per_minute',
           'token_writes_per_day',
           'org_requests_per_minute',
+          'user_requests_per_minute',
         ]),
       }),
     }),

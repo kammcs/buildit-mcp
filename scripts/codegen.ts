@@ -20,8 +20,9 @@
  *                  bounds), plus each operation's query and body schema, for
  *                  the test fake: it checks what this server sends and what
  *                  the fake answers against the contract;
- *   operations.ts  every operation's method, path, parameters, scope, hints
- *                  and errors, the scope implications, and the error codes.
+ *   operations.ts  every operation's method, path, parameters, scope, hints,
+ *                  errors and discovery flag (no RateLimit-* headers), the
+ *                  scope implications, and the error codes.
  *
  * Descriptions are not copied: the tools carry their own text for agents.
  */
@@ -42,7 +43,10 @@ interface Operation {
   operationId: string;
   parameters?: Parameter[];
   requestBody?: { required?: boolean; content?: Record<string, { schema?: Schema }> };
-  responses: Record<string, { content?: Record<string, { schema?: Schema }> }>;
+  responses: Record<
+    string,
+    { content?: Record<string, { schema?: Schema }>; headers?: Record<string, Json> }
+  >;
   'x-buildit-scope'?: string | null;
   'x-buildit-hints'?: Record<string, boolean>;
   'x-buildit-errors'?: string[];
@@ -55,7 +59,11 @@ export interface OpenApiDocument {
   openapi: string;
   info: { version: string };
   paths: Record<string, Record<string, Operation | Json>>;
-  components: { schemas: Record<string, Schema>; parameters?: Record<string, Parameter> };
+  components: {
+    schemas: Record<string, Schema>;
+    parameters?: Record<string, Parameter>;
+    headers?: Record<string, Json>;
+  };
   'x-buildit-scopes'?: Record<string, { implies?: string[] }>;
   'x-buildit-errors'?: Record<string, { status: number; hint?: string }>;
 }
@@ -308,6 +316,11 @@ interface OperationInfo {
   requestRequired: boolean;
   response: string;
   statuses: number[];
+  /**
+   * Discovery (get_meta, get_me): takes no rate-limit unit, so its success
+   * responses carry no RateLimit-* headers while the contract's others do.
+   */
+  discovery: boolean;
 }
 
 function resolveParameter(doc: OpenApiDocument, p: Parameter, where: string): Parameter {
@@ -331,6 +344,7 @@ function jsonSchemaOf(
 
 export function readOperations(doc: OpenApiDocument): OperationInfo[] {
   const ops: OperationInfo[] = [];
+  const rateLimited = Object.keys(doc.components.headers ?? {}).some((h) => /^RateLimit-/i.test(h));
   for (const path of Object.keys(doc.paths).sort()) {
     const item = doc.paths[path]!;
     for (const method of HTTP_METHODS) {
@@ -374,6 +388,13 @@ export function readOperations(doc: OpenApiDocument): OperationInfo[] {
         response = name;
       }
       if (response === undefined) fail(where, 'no JSON success response');
+      // A contract that declares no RateLimit-* headers can't tell discovery apart.
+      const discovery =
+        rateLimited &&
+        success.every(
+          (status) =>
+            !Object.keys(op.responses[status]?.headers ?? {}).some((h) => /^RateLimit-/i.test(h)),
+        );
       ops.push({
         id: op.operationId,
         method: method.toUpperCase(),
@@ -398,6 +419,7 @@ export function readOperations(doc: OpenApiDocument): OperationInfo[] {
         requestRequired: op.requestBody?.required === true,
         response,
         statuses: success.map(Number),
+        discovery,
       });
     }
   }
@@ -594,6 +616,7 @@ function operationsFile(doc: OpenApiDocument): string {
     lines.push(`errors: ${lit(op.errors)},`);
     lines.push(`hasBody: ${lit(op.request !== null)},`);
     lines.push(`statuses: ${lit(op.statuses)},`);
+    lines.push(`discovery: ${lit(op.discovery)},`);
     lines.push(`response: S.${schemaIdent(op.response)},`);
     lines.push('},');
   }
