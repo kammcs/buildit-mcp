@@ -11019,7 +11019,7 @@
       "MarkdownDescription": {
         "type": "string",
         "maxLength": 262144,
-        "description": "GitHub-flavored Markdown, at most 256 KB. No inline images by URL (http, https, data, ftp). Mentions: @email or @[Display Name], saved and read back as [@Name](mention:<uuid>)."
+        "description": "GitHub-flavored Markdown, at most 256 KB. No images by URL (http, https, data, ftp), inline or by reference. Mentions: @email or @[Display Name], saved and read back as [@Name](mention:<uuid>)."
       },
       "MeResponse": {
         "type": "object",
@@ -11454,7 +11454,7 @@
       "PageBody": {
         "type": "string",
         "maxLength": 1048576,
-        "description": "GitHub-flavored Markdown, at most 1 MiB. No inline images by URL. Mentions as in descriptions."
+        "description": "GitHub-flavored Markdown, at most 1 MiB. No images by URL, inline or by reference. Mentions as in descriptions."
       },
       "PageResponse": {
         "type": "object",
