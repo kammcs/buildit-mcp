@@ -15,6 +15,34 @@ import { FakeApi, TOKENS } from './support/fake-api.js';
 
 const BIN = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
+/** The default toolsets' tools, in the order they are listed. */
+const ALL_TOOLS = [
+  'assign_item',
+  'create_item',
+  'describe_project',
+  'find_users',
+  'get_item',
+  'link_items',
+  'list_projects',
+  'rank_item',
+  'search_items',
+  'transition_item',
+  'unlink_items',
+  'update_item',
+  'whoami',
+  'add_comment',
+  'list_comments',
+];
+const READ_TOOLS = [
+  'describe_project',
+  'find_users',
+  'get_item',
+  'list_projects',
+  'search_items',
+  'whoami',
+  'list_comments',
+];
+
 let api: FakeApi;
 const clients: Client[] = [];
 
@@ -67,9 +95,15 @@ describe('stdio (built binary)', () => {
     expect(client.getNegotiatedProtocolVersion()).toBe('2025-11-25');
     expect(client.getServerVersion()?.name).toBe('buildit-mcp');
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toEqual(['whoami']);
+    expect(tools.map((t) => t.name)).toEqual(READ_TOOLS);
     const result = await client.callTool({ name: 'whoami', arguments: {} });
     expect(result.structuredContent).toMatchObject({ org: { name: 'Example Org' } });
+    const search = await client.callTool({
+      name: 'search_items',
+      arguments: { projects: ['DEMO'], assignees: ['me'], categories: ['started'] },
+    });
+    expect(search.isError).toBeFalsy();
+    expect(JSON.stringify(search.content)).toContain('DEMO-42');
 
     // Logs are JSON lines on stderr, and never contain the token.
     await new Promise((r) => setTimeout(r, 100));
@@ -83,12 +117,62 @@ describe('stdio (built binary)', () => {
   it('negotiates 2026-07-28 with a modern client', async () => {
     const { client } = await connect(TOKENS.full, { auto: true });
     expect(client.getNegotiatedProtocolVersion()).toBe('2026-07-28');
-    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['whoami']);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(ALL_TOOLS);
+    const created = await client.callTool({
+      name: 'add_comment',
+      arguments: { item: 'DEMO-42', body: 'From the stdio smoke test.' },
+    });
+    expect(created.isError).toBeFalsy();
   });
 
   it('hides tools excluded by configuration', async () => {
-    const { client } = await connect(TOKENS.full, { env: { BUILDIT_EXCLUDE_TOOLS: 'whoami' } });
-    expect((await client.listTools()).tools).toEqual([]);
+    const { client } = await connect(TOKENS.full, {
+      env: { BUILDIT_EXCLUDE_TOOLS: 'whoami,create_item', BUILDIT_TOOLSETS: 'items' },
+    });
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(
+      ALL_TOOLS.filter(
+        (n) => !['whoami', 'create_item', 'add_comment', 'list_comments'].includes(n),
+      ),
+    );
+  });
+
+  it('lists every toolset when BUILDIT_TOOLSETS enables them, with resources and prompts', async () => {
+    const { client } = await connect(TOKENS.full, { auto: true, env: { BUILDIT_TOOLSETS: 'all' } });
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).toHaveLength(38);
+    expect(names.slice(0, ALL_TOOLS.length)).toEqual(ALL_TOOLS);
+    for (const name of ['plan_sprint', 'get_page', 'read_thread', 'get_workflow', 'apply_plan']) {
+      expect(names).toContain(name);
+    }
+    const templates = (await client.listResourceTemplates()).resourceTemplates;
+    expect(templates.map((t) => t.uriTemplate)).toEqual([
+      'buildit://items/{key}',
+      'buildit://pages/{id}',
+    ]);
+    expect((await client.listPrompts()).prompts.map((p) => p.name)).toEqual([
+      'plan_epic',
+      'triage',
+      'standup',
+    ]);
+    const proposed = await client.callTool({
+      name: 'propose_label_change',
+      arguments: { op: 'create', project: 'DEMO', name: 'infra' },
+    });
+    expect(proposed.isError).toBeFalsy();
+    const handle = (proposed.structuredContent as { handle: string }).handle;
+    const applied = await client.callTool({ name: 'apply_plan', arguments: { handle } });
+    expect(applied.isError).toBeFalsy();
+  });
+
+  it('keeps admin and destructive off by default, even for a token with their scopes', async () => {
+    const { client } = await connect(TOKENS.full);
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).toEqual(ALL_TOOLS);
+  });
+
+  it('lists only the read tools in read-only mode', async () => {
+    const { client } = await connect(TOKENS.full, { env: { BUILDIT_READ_ONLY: 'true' } });
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(READ_TOOLS);
   });
 
   it('exits with a clear message when the token is missing', () => {

@@ -33,7 +33,7 @@ import { Hono, type Context } from 'hono';
 import { ApiClient } from '../api/client.js';
 import { ConfigError, isLoopbackHost, parseToolsets, type Config } from '../config.js';
 import type { Logger } from '../log.js';
-import { createMcpServer, resolveListedTools } from '../server.js';
+import { createMcpServer, resolveListedTools, selectExtras } from '../server.js';
 import { CATALOG } from '../toolsets/catalog.js';
 import { selectTools, type ToolDefinition, type ToolPolicy } from '../toolsets/registry.js';
 import type { ToolsetName } from '../toolsets/toolsets.js';
@@ -51,7 +51,7 @@ export interface HttpOptions {
 interface RequestExtra {
   [key: string]: unknown;
   toolsets: ToolsetName[];
-  /** True when the request lists tools, so the token's scopes must be read. */
+  /** True when the request lists tools, resources or prompts, so the token's scopes must be read. */
   lists: boolean;
   requestId: string;
 }
@@ -67,13 +67,22 @@ export function bearerToken(header: string | undefined): string | undefined {
   return match?.[1];
 }
 
-/** Whether a JSON-RPC body (single or batch) contains a tools/list request. */
+/** The list methods whose answer depends on the token's scopes. */
+const LIST_METHODS = new Set([
+  'tools/list',
+  'resources/list',
+  'resources/templates/list',
+  'prompts/list',
+]);
+
+/** Whether a JSON-RPC body (single or batch) lists tools, resources or prompts. */
 function listsTools(body: unknown): boolean {
   const messages = Array.isArray(body) ? (body as unknown[]) : [body];
-  return messages.some(
-    (m) =>
-      m !== null && typeof m === 'object' && (m as { method?: unknown }).method === 'tools/list',
-  );
+  return messages.some((m) => {
+    const method =
+      m !== null && typeof m === 'object' ? (m as { method?: unknown }).method : undefined;
+    return typeof method === 'string' && LIST_METHODS.has(method);
+  });
 }
 
 export function createHttpApp(
@@ -106,10 +115,16 @@ export function createHttpApp(
       });
       const policy: ToolPolicy = { ...basePolicy, toolsets: extra.toolsets };
       // Listing reads the token's scopes; a call is checked by the API itself.
-      const tools = extra.lists
-        ? (await resolveListedTools(api, catalog, policy, reqLogger)).tools
-        : selectTools(catalog, policy, null);
-      return createMcpServer({ tools, api, logger: reqLogger });
+      const listed = extra.lists
+        ? await resolveListedTools(api, catalog, policy, reqLogger)
+        : { tools: selectTools(catalog, policy, null), ...selectExtras(policy, null) };
+      return createMcpServer({
+        tools: listed.tools,
+        resources: listed.resources,
+        prompts: listed.prompts,
+        api,
+        logger: reqLogger,
+      });
     },
     {
       onerror: (error) => {

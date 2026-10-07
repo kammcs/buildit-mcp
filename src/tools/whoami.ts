@@ -3,7 +3,7 @@
  */
 import { z } from 'zod';
 
-import type { Meta } from '../api/types.js';
+import type { MetaResponse } from '../api/generated/schemas.js';
 import { defineTool } from '../toolsets/registry.js';
 import { sanitizeLabel } from '../untrusted.js';
 import { compareVersions, SERVER_NAME, SERVER_VERSION } from '../version.js';
@@ -24,16 +24,16 @@ const OutputSchema = z.object({
     name: z.string().nullable(),
     expires_at: z.string().nullable(),
   }),
-  scopes: z.array(z.string()),
+  scopes: z.array(z.string()).describe('As granted; a write scope also allows reading.'),
   limits: z.object({
     projects: z
       .array(z.string())
       .nullable()
-      .describe('Project ids the token is limited to; null means every project the user can see.'),
+      .describe('Keys of the projects the token is limited to; null means every project.'),
     channels: z
       .array(z.string())
       .nullable()
-      .describe('Channel ids the token is limited to; null means every channel the user can see.'),
+      .describe('Names of the channels the token is limited to; null means every channel.'),
   }),
   projects: z.array(
     z.object({
@@ -42,6 +42,14 @@ const OutputSchema = z.object({
       id: z.string().nullable(),
     }),
   ),
+  features: z.object({
+    projects: z.boolean().describe('Whether Projects is enabled for the org.'),
+  }),
+  rate_limits: z.object({
+    requests_per_minute: z.number(),
+    writes_per_minute: z.number(),
+    writes_per_day: z.number(),
+  }),
   server: z.object({
     name: z.string(),
     version: z.string(),
@@ -50,8 +58,8 @@ const OutputSchema = z.object({
   }),
 });
 
-const nullableLabel = (v: string | undefined): string | null =>
-  v === undefined || v === '' ? null : sanitizeLabel(v);
+const nullableLabel = (v: string | null | undefined): string | null =>
+  v === undefined || v === null || v === '' ? null : sanitizeLabel(v);
 
 export const whoamiTool = defineTool({
   name: 'whoami',
@@ -69,10 +77,10 @@ export const whoamiTool = defineTool({
   inputSchema: z.object({}),
   outputSchema: OutputSchema,
   async run(_args, ctx) {
-    const options = { tool: 'whoami', ...(ctx.signal ? { signal: ctx.signal } : {}) };
+    const options = ctx.apiOptions;
     const [me, meta] = await Promise.all([
       ctx.api.getMe(options),
-      ctx.api.getMeta(options).catch((err: unknown): Meta | undefined => {
+      ctx.api.getMeta(options).catch((err: unknown): MetaResponse | undefined => {
         ctx.logger.debug('meta unavailable', { error: err });
         return undefined;
       }),
@@ -85,24 +93,30 @@ export const whoamiTool = defineTool({
     const structured: z.infer<typeof OutputSchema> = {
       user: {
         id: me.user.id,
-        name: nullableLabel(me.user.display_name ?? me.user.name),
+        name: nullableLabel(me.user.display_name),
         email: nullableLabel(me.user.email),
       },
       org: { id: me.org.id, name: nullableLabel(me.org.name) },
       token: {
-        name: nullableLabel(me.token?.name),
-        expires_at: me.token?.expires_at ?? null,
+        name: nullableLabel(me.token.name),
+        expires_at: me.token.expires_at,
       },
-      scopes: [...me.scopes].sort(),
+      scopes: [...me.token.scopes].sort(),
       limits: {
-        projects: me.limits?.projects ?? null,
-        channels: me.limits?.channels ?? null,
+        projects: me.token.limits.projects?.map((p) => sanitizeLabel(p.key, 40)) ?? null,
+        channels: me.token.limits.channels?.map((c) => sanitizeLabel(c.name, 100)) ?? null,
       },
-      projects: (me.projects ?? []).map((p) => ({
+      projects: me.projects.map((p) => ({
         key: sanitizeLabel(p.key, 40),
         name: nullableLabel(p.name),
-        id: p.id ?? null,
+        id: p.id,
       })),
+      features: { projects: me.features.projects },
+      rate_limits: {
+        requests_per_minute: me.rate_limits.requests_per_minute,
+        writes_per_minute: me.rate_limits.writes_per_minute,
+        writes_per_day: me.rate_limits.writes_per_day,
+      },
       server: {
         name: SERVER_NAME,
         version: SERVER_VERSION,
@@ -122,9 +136,16 @@ export const whoamiTool = defineTool({
       `Limits: ${
         s.limits.projects === null
           ? 'all projects'
-          : `${s.limits.projects.length} chosen project(s)`
-      }; ${s.limits.channels === null ? 'all channels' : `${s.limits.channels.length} chosen channel(s)`} the user can see.`,
+          : `only the projects ${s.limits.projects.join(', ') || '(none)'}`
+      }; ${
+        s.limits.channels === null
+          ? 'all channels'
+          : `only the channels ${s.limits.channels.join(', ') || '(none)'}`
+      } the user can see.`,
     ];
+    if (!s.features.projects) {
+      lines.push('Projects is not enabled for this org: project and item tools will not work.');
+    }
     if (s.projects.length === 0) {
       lines.push('Projects in reach: none.');
     } else {
@@ -137,6 +158,9 @@ export const whoamiTool = defineTool({
           : '';
       lines.push(`Projects in reach (${s.projects.length}): ${shown.join(', ')}${more}.`);
     }
+    lines.push(
+      `Rate limits: ${s.rate_limits.requests_per_minute} calls and ${s.rate_limits.writes_per_minute} writes a minute, ${s.rate_limits.writes_per_day} writes a day.`,
+    );
     if (updateRequired) {
       lines.push(
         `This buildit-mcp (${SERVER_VERSION}) is older than the API supports (${minVersion} or newer). Ask the person to update it.`,

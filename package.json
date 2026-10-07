@@ -40,7 +40,9 @@
     "format:check": "prettier --check .",
     "check": "npm run lint && npm run format:check && npm run build && npm run test",
     "inspect": "npm run build && tsx scripts/inspect.ts",
-    "conformance": "npm run build && tsx scripts/conformance.ts"
+    "conformance": "npm run build && tsx scripts/conformance.ts",
+    "generate": "tsx scripts/generate.ts",
+    "privacy": "tsx scripts/privacy.ts"
   },
   "dependencies": {
     "@hono/node-server": "2.1.3",

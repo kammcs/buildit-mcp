@@ -75,7 +75,16 @@ export function startStdio(
     .catch(() => undefined);
 
   return serveStdio(
-    async () => createMcpServer({ tools: (await listTools()).tools, api, logger }),
+    async () => {
+      const listed = await listTools();
+      return createMcpServer({
+        tools: listed.tools,
+        resources: listed.resources,
+        prompts: listed.prompts,
+        api,
+        logger,
+      });
+    },
     {
       onerror: (error) => {
         logger.error('stdio transport error', { error });

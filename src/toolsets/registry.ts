@@ -10,13 +10,27 @@
  * Rules 1 to 3 are the operator's policy and also apply to calls. Rule 4 only
  * shapes the list, so an agent never sees tools its token can't use; the API
  * still checks scopes on every call.
+ *
+ * One exception: a tool marked `withPlans` (apply_plan) is listed whenever
+ * any propose_* tool is, whatever its own toolset, since its scope is the
+ * proposed change's. Read-only mode and the exclude list still apply to it.
+ *
+ * Resources and prompts follow rules 1 and 4 (they change nothing).
  */
 import type { ToolAnnotations } from '@modelcontextprotocol/server';
 import type { z } from 'zod';
 
-import type { ApiClient } from '../api/client.js';
+import type { ApiClient, ApiRequestOptions } from '../api/client.js';
+import type { OperationId } from '../api/generated/operations.js';
+import { callOperation, type OperationArgs, type OperationResponse } from '../api/operations.js';
 import type { Logger } from '../log.js';
 import { expandScopes, TOOLSETS, type Scope, type ToolsetName } from './toolsets.js';
+
+/** The MCP client's name and version, as it reported them. */
+export interface ClientInfo {
+  name: string;
+  version?: string | undefined;
+}
 
 /** What a tool handler gets besides its arguments. */
 export interface ToolContext {
@@ -24,6 +38,32 @@ export interface ToolContext {
   api: ApiClient;
   logger: Logger;
   signal?: AbortSignal;
+  /** Options for direct ApiClient calls: the tool's name, the client, the signal. */
+  apiOptions: ApiRequestOptions;
+  /** Calls one API operation on behalf of this tool. */
+  call<Id extends OperationId>(id: Id, args?: OperationArgs<Id>): Promise<OperationResponse<Id>>;
+}
+
+/** The context for one call of `tool`. */
+export function createToolContext(init: {
+  api: ApiClient;
+  logger: Logger;
+  tool: string;
+  signal?: AbortSignal | undefined;
+  client?: ClientInfo | undefined;
+}): ToolContext {
+  const apiOptions: ApiRequestOptions = {
+    tool: init.tool,
+    ...(init.client ? { client: init.client } : {}),
+    ...(init.signal ? { signal: init.signal } : {}),
+  };
+  return {
+    api: init.api,
+    logger: init.logger,
+    ...(init.signal ? { signal: init.signal } : {}),
+    apiOptions,
+    call: (id, args = {}) => callOperation(init.api, id, args, apiOptions),
+  };
 }
 
 /** A tool's successful outcome: structured data matching its outputSchema, and a short text summary. */
@@ -49,6 +89,8 @@ export interface ToolDefinition<
   description: string;
   /** Every scope the tool needs. Empty for tools any valid token may use. */
   scopes: readonly Scope[];
+  /** Listed whenever a propose_* tool is listed, instead of by its toolset and scopes. */
+  withPlans?: boolean;
   annotations: ToolHints;
   inputSchema: I;
   outputSchema: O;
@@ -91,12 +133,68 @@ export function selectTools(
   const toolsets = new Set(policy.toolsets);
   const excluded = new Set(policy.excludeTools);
   const scopes = grantedScopes === null ? null : expandScopes(grantedScopes);
-  return catalog
+  const allowed = (tool: ToolDefinition): boolean =>
+    (!policy.readOnly || tool.annotations.readOnlyHint) && !excluded.has(tool.name);
+  const listed = catalog
+    .filter((tool) => tool.withPlans !== true)
     .filter((tool) => toolsets.has(tool.toolset))
-    .filter((tool) => !policy.readOnly || tool.annotations.readOnlyHint)
-    .filter((tool) => !excluded.has(tool.name))
-    .filter((tool) => scopes === null || tool.scopes.every((s) => scopes.has(s)))
-    .sort(compareTools);
+    .filter(allowed)
+    .filter((tool) => scopes === null || tool.scopes.every((s) => scopes.has(s)));
+  const proposes = listed.some((tool) => tool.name.startsWith(PROPOSE_PREFIX));
+  const companions = proposes
+    ? catalog.filter((tool) => tool.withPlans === true).filter(allowed)
+    : [];
+  return [...listed, ...companions].sort(compareTools);
+}
+
+/** Tools that propose a plan start with this; apply_plan comes with them. */
+export const PROPOSE_PREFIX = 'propose_';
+
+/** What a resource or prompt needs to be offered: its toolset and its scopes. */
+export interface Gated {
+  name: string;
+  toolset: ToolsetName;
+  scopes: readonly Scope[];
+}
+
+/** The resources or prompts a caller may see: by toolset and, when known, scopes. */
+export function selectGated<T extends Gated>(
+  defs: readonly T[],
+  toolsets: readonly ToolsetName[],
+  grantedScopes: Iterable<string> | null,
+): T[] {
+  const enabled = new Set(toolsets);
+  const scopes = grantedScopes === null ? null : expandScopes(grantedScopes);
+  return defs
+    .filter((d) => enabled.has(d.toolset))
+    .filter((d) => scopes === null || d.scopes.every((s) => scopes.has(s)));
+}
+
+/** A resource template whose reads go through the API, as the person. */
+export interface ResourceDefinition extends Gated {
+  title: string;
+  /** Static text only. */
+  description: string;
+  /** An RFC 6570 template, such as buildit://items/{key}. */
+  uriTemplate: string;
+  mimeType: string;
+  /** The resource's text for the template's variables. Throw ApiError to fail. */
+  read(vars: Record<string, string>, ctx: ToolContext): Promise<string>;
+}
+
+/** A prompt: static text with the person's arguments filled in. */
+export interface PromptDefinition<A extends z.ZodObject = z.ZodObject> extends Gated {
+  title: string;
+  /** Static text only. */
+  description: string;
+  argsSchema: A;
+  build(args: z.infer<A>): string;
+}
+
+export function definePrompt<A extends z.ZodObject>(
+  definition: PromptDefinition<A>,
+): PromptDefinition<A> {
+  return definition;
 }
 
 /** Names in `names` that no tool in the catalog has (for a startup warning). */
@@ -124,6 +222,9 @@ export function assertValidCatalog(catalog: readonly ToolDefinition[]): void {
     }
     if (tool.annotations.readOnlyHint && tool.annotations.destructiveHint) {
       throw new Error(`${tool.name}: a read-only tool can't be destructive`);
+    }
+    if (tool.withPlans === true && tool.scopes.length > 0) {
+      throw new Error(`${tool.name}: a tool listed with plans takes the plan's scope, not its own`);
     }
   }
 }

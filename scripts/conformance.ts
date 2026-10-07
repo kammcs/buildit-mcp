@@ -40,10 +40,6 @@ const NOT_APPLICABLE: Record<string, string> = {
   'sep-2575-http-server-no-independent-requests-on-stream':
     "needs the suite's diagnostic tool test_streaming_elicitation",
   'sep-2575-server-no-log-without-loglevel': "needs the suite's diagnostic tool test_logging_tool",
-  'sep-2549-prompts-list-caching-hints': 'this server offers no prompts (not declared)',
-  'sep-2549-resources-list-caching-hints': 'this server offers no resources (not declared)',
-  'sep-2549-resources-templates-list-caching-hints':
-    'this server offers no resources (not declared)',
 };
 
 interface Check {

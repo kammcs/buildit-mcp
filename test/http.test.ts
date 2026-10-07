@@ -235,7 +235,7 @@ describe('HTTP mode: tools per request', () => {
     expect(await toolNames(client)).toEqual(['whoami']);
     const result = await client.callTool({ name: 'whoami', arguments: {} });
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toContain('unauthorized');
+    expect(JSON.stringify(result.content)).toContain('token_invalid');
   });
 
   it('applies read-only mode and the exclude list from the server config', async () => {
@@ -256,6 +256,145 @@ describe('HTTP mode: tools per request', () => {
       await client.close();
     } finally {
       await strict.close();
+    }
+  });
+});
+
+describe('HTTP mode: the real tools', () => {
+  it('lists the item and comment tools per token, and serves them', async () => {
+    const real = await startHttp(httpConfig(), createLogger({ sink: () => undefined }));
+    const open = async (token: string, modern: boolean): Promise<Client> => {
+      const transport = new StreamableHTTPClientTransport(new URL(real.url), {
+        requestInit: { headers: { Authorization: `Bearer ${token}` } },
+      });
+      const client = new Client(
+        { name: 'http-test', version: '1.0.0' },
+        modern ? { versionNegotiation: { mode: 'auto' } } : {},
+      );
+      await client.connect(transport);
+      return client;
+    };
+    try {
+      const reader = await open(TOKENS.read, false);
+      expect(await toolNames(reader)).toEqual([
+        'describe_project',
+        'find_users',
+        'get_item',
+        'list_projects',
+        'search_items',
+        'whoami',
+        'list_comments',
+      ]);
+      const item = await reader.callTool({ name: 'get_item', arguments: { item: 'DEMO-42' } });
+      expect(item.structuredContent).toMatchObject({ item: { key: 'DEMO-42' } });
+      await reader.close();
+
+      const writer = await open(TOKENS.full, true);
+      const names = await toolNames(writer);
+      expect(names).toHaveLength(15);
+      expect(names).toContain('transition_item');
+      expect(names).toContain('unlink_items');
+      expect(names.some((n) => n.startsWith('propose_'))).toBe(false);
+      const moved = await writer.callTool({
+        name: 'transition_item',
+        arguments: { item: 'DEMO-43', status: 'In progress' },
+      });
+      expect(moved.structuredContent).toMatchObject({ item: { status: 'In progress' } });
+      await writer.close();
+      expect(api.violations).toEqual([]);
+    } finally {
+      await real.close();
+    }
+  });
+});
+
+describe('HTTP mode: every toolset', () => {
+  it('lists the right tools per toolset header, and applies a plan across requests', async () => {
+    const real = await startHttp(httpConfig(), createLogger({ sink: () => undefined }));
+    const open = async (token: string, toolsets: string, modern: boolean): Promise<Client> => {
+      const transport = new StreamableHTTPClientTransport(new URL(real.url), {
+        requestInit: {
+          headers: { Authorization: `Bearer ${token}`, 'X-Buildit-Toolsets': toolsets },
+        },
+      });
+      const client = new Client(
+        { name: 'http-test', version: '1.0.0' },
+        modern ? { versionNegotiation: { mode: 'auto' } } : {},
+      );
+      await client.connect(transport);
+      clients.push(client);
+      return client;
+    };
+    try {
+      const all = await open(TOKENS.full, 'all', true);
+      expect(await toolNames(all)).toHaveLength(38);
+      expect(all.getInstructions()).toContain('apply_plan');
+      const templates = (await all.listResourceTemplates()).resourceTemplates;
+      expect(templates.map((t) => t.uriTemplate)).toEqual([
+        'buildit://items/{key}',
+        'buildit://pages/{id}',
+      ]);
+      expect((await all.listPrompts()).prompts.map((p) => p.name)).toEqual([
+        'plan_epic',
+        'triage',
+        'standup',
+      ]);
+
+      const perToolset: Record<string, string[]> = {
+        planning: [
+          'list_releases',
+          'list_sprints',
+          'plan_release',
+          'plan_sprint',
+          'write_release_notes',
+        ],
+        pages: ['create_page', 'get_page', 'list_pages', 'update_page'],
+        chat: ['list_channels', 'read_channel', 'read_thread'],
+        destructive: [
+          'apply_plan',
+          'propose_archive_status',
+          'propose_bulk_update',
+          'propose_delete_item',
+          'propose_move_item',
+        ],
+      };
+      for (const [toolset, expected] of Object.entries(perToolset)) {
+        const c = await open(TOKENS.full, toolset, false);
+        expect(await toolNames(c), toolset).toEqual(expected);
+      }
+      // A reader sees no planning writes and nothing of the other toolsets.
+      const reader = await open(TOKENS.read, 'all', false);
+      expect(await toolNames(reader)).toEqual([
+        'describe_project',
+        'find_users',
+        'get_item',
+        'list_projects',
+        'search_items',
+        'whoami',
+        'list_comments',
+        'list_releases',
+        'list_sprints',
+      ]);
+      expect((await reader.listPrompts()).prompts.map((p) => p.name)).toEqual(['standup']);
+
+      // Stateless: the plan is proposed in one request and applied in another.
+      const deleter = await open(TOKENS.full, 'destructive', true);
+      const proposed = await deleter.callTool({
+        name: 'propose_delete_item',
+        arguments: { item: 'DEMO-43' },
+      });
+      const handle = (proposed.structuredContent as { handle: string }).handle;
+      expect(api.store.items.some((i) => i.number === 43)).toBe(true);
+      const applied = await deleter.callTool({ name: 'apply_plan', arguments: { handle } });
+      expect(applied.isError).toBeFalsy();
+      expect(api.store.items.some((i) => i.project === 'DEMO' && i.number === 43)).toBe(false);
+      const item = await all.readResource({ uri: 'buildit://items/DEMO-42' });
+      expect(JSON.stringify(item.contents)).toContain('DEMO-42');
+      expect(api.violations).toEqual([]);
+    } finally {
+      await Promise.all(clients.splice(0).map((c) => c.close()));
+      await real.close();
+      api.reset();
     }
   });
 });

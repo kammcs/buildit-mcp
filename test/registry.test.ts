@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { applyPlanTool } from '../src/tools/plans.js';
+import { scopesOf } from '../src/tools/shared.js';
 import { CATALOG } from '../src/toolsets/catalog.js';
 import {
   assertValidCatalog,
@@ -73,11 +75,17 @@ describe('selectTools', () => {
   });
 
   it('needs every scope a tool declares', () => {
-    // propose_delete_item needs projects:read and projects:delete.
-    expect(names(selectTools(TEST_CATALOG, policy(), ['projects:delete']))).toEqual(['whoami']);
-    expect(
-      names(selectTools(TEST_CATALOG, policy(), ['projects:delete', 'projects:read'])),
-    ).toContain('propose_delete_item');
+    // propose_delete_item needs projects:read and projects:delete; chat:read implies neither.
+    expect(names(selectTools(TEST_CATALOG, policy(), ['projects:read']))).not.toContain(
+      'propose_delete_item',
+    );
+    expect(names(selectTools(TEST_CATALOG, policy(), ['chat:read']))).not.toContain(
+      'propose_delete_item',
+    );
+    // projects:delete implies projects:write, which implies projects:read (the contract).
+    expect(names(selectTools(TEST_CATALOG, policy(), ['projects:delete']))).toContain(
+      'propose_delete_item',
+    );
   });
 
   it('lists only scope-free tools when the scopes are unknown', () => {
@@ -115,6 +123,26 @@ describe('selectTools', () => {
     ]);
   });
 
+  it('lists a withPlans tool whenever a propose_* tool is listed, and only then', () => {
+    const applyPlan = { ...applyPlanTool };
+    const catalog = [...TEST_CATALOG, applyPlan];
+    expect(names(selectTools(catalog, policy(), ALL_SCOPES))).toContain('apply_plan');
+    // Its own toolset doesn't matter: chat and destructive here, but only the proposal counts.
+    expect(names(selectTools(catalog, policy({ toolsets: ['chat'] }), ALL_SCOPES))).toEqual([
+      'read_channel',
+    ]);
+    expect(names(selectTools(catalog, policy(), ['projects:write']))).not.toContain('apply_plan');
+    expect(
+      names(selectTools(catalog, policy({ excludeTools: ['propose_delete_item'] }), ALL_SCOPES)),
+    ).not.toContain('apply_plan');
+    expect(names(selectTools(catalog, policy({ readOnly: true }), ALL_SCOPES))).not.toContain(
+      'apply_plan',
+    );
+    expect(
+      names(selectTools(catalog, policy({ excludeTools: ['apply_plan'] }), ALL_SCOPES)),
+    ).not.toContain('apply_plan');
+  });
+
   it('reports unknown names in the exclude list', () => {
     expect(unknownToolNames(CATALOG, ['whoami', 'not_a_tool'])).toEqual(['not_a_tool']);
   });
@@ -138,6 +166,24 @@ describe('the catalog', () => {
     expect(() => {
       assertValidCatalog([{ ...whoami, scopes: ['chat:read'] }]);
     }).toThrow(/not declared by toolset/);
+    expect(() => {
+      assertValidCatalog([{ ...applyPlanTool, scopes: ['projects:delete'] }]);
+    }).toThrow(/takes the plan's scope/);
+  });
+
+  it('declares scopes from the contract, plan actions included', () => {
+    const scopes = Object.fromEntries(CATALOG.map((t) => [t.name, t.scopes]));
+    expect(scopes.propose_delete_item).toEqual(['projects:delete']);
+    expect(scopes.propose_label_change).toEqual(['projects:admin']);
+    expect(scopes.get_workflow).toEqual(['projects:admin']);
+    expect(scopes.read_channel).toEqual(['chat:read']);
+    expect(scopes.update_page).toEqual(['pages:write']);
+    expect(scopes.plan_sprint).toEqual(['projects:write']);
+    expect(scopes.write_release_notes).toEqual(['projects:write', 'pages:write']);
+    expect(scopes.propose_archive_status).toEqual(['projects:delete', 'projects:admin']);
+    expect(scopes.find_users).toEqual(['projects:read']);
+    expect(scopes.apply_plan).toEqual([]);
+    expect(() => scopesOf('create_plan')).toThrow(/planScopesOf/);
   });
 
   it('has a read-only whoami in the items toolset that needs no scope', () => {
@@ -148,13 +194,21 @@ describe('the catalog', () => {
 });
 
 describe('expandScopes', () => {
-  it('adds implied read scopes', () => {
+  it('adds implied scopes transitively, as the contract defines them', () => {
     expect([...expandScopes(['projects:write', 'pages:write'])].sort()).toEqual([
       'pages:read',
       'pages:write',
       'projects:read',
       'projects:write',
     ]);
-    expect([...expandScopes(['projects:admin'])]).toEqual(['projects:admin']);
+    expect([...expandScopes(['projects:admin'])].sort()).toEqual([
+      'projects:admin',
+      'projects:read',
+      'projects:write',
+    ]);
+    expect([...expandScopes(['chat:read', 'unknown:scope'])].sort()).toEqual([
+      'chat:read',
+      'unknown:scope',
+    ]);
   });
 });

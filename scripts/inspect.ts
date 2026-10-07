@@ -97,6 +97,52 @@ function check(label: string, ok: boolean, detail: unknown): void {
   }
 }
 
+/** The default toolsets' tools, which a full-access token sees. */
+const EXPECTED_TOOLS = [
+  'whoami',
+  'list_projects',
+  'describe_project',
+  'find_users',
+  'search_items',
+  'get_item',
+  'create_item',
+  'update_item',
+  'assign_item',
+  'transition_item',
+  'link_items',
+  'unlink_items',
+  'rank_item',
+  'list_comments',
+  'add_comment',
+];
+
+/** With BUILDIT_TOOLSETS=all, these join them. */
+const MORE_TOOLS = [
+  'list_sprints',
+  'plan_sprint',
+  'list_releases',
+  'plan_release',
+  'write_release_notes',
+  'list_pages',
+  'get_page',
+  'create_page',
+  'update_page',
+  'list_channels',
+  'read_channel',
+  'read_thread',
+  'get_workflow',
+  'list_work_types',
+  'propose_workflow_change',
+  'propose_work_type_change',
+  'propose_field_change',
+  'propose_label_change',
+  'propose_delete_item',
+  'propose_move_item',
+  'propose_bulk_update',
+  'propose_archive_status',
+  'apply_plan',
+];
+
 const toolNames = (out: unknown): string[] =>
   ((out as { tools?: { name: string }[] } | undefined)?.tools ?? []).map((t) => t.name);
 
@@ -113,7 +159,50 @@ try {
     '--method',
     'tools/list',
   ]);
-  check('stdio lists whoami', toolNames(listed).includes('whoami'), listed);
+  check(
+    'stdio lists the item and comment tools, and no more by default',
+    EXPECTED_TOOLS.every((name) => toolNames(listed).includes(name)) &&
+      toolNames(listed).length === EXPECTED_TOOLS.length,
+    listed,
+  );
+  const allEnv = [...stdioEnv, '-e', 'BUILDIT_TOOLSETS=all'];
+  const everything = await inspect('stdio tools/list (all toolsets)', stdioTarget, [
+    ...allEnv,
+    '--method',
+    'tools/list',
+  ]);
+  check(
+    'stdio lists every toolset with BUILDIT_TOOLSETS=all',
+    [...EXPECTED_TOOLS, ...MORE_TOOLS].every((name) => toolNames(everything).includes(name)) &&
+      toolNames(everything).length === EXPECTED_TOOLS.length + MORE_TOOLS.length,
+    toolNames(everything),
+  );
+  const templates = await inspect('stdio resources/templates/list', stdioTarget, [
+    ...allEnv,
+    '--method',
+    'resources/templates/list',
+  ]);
+  check(
+    'stdio lists the item and page resource templates',
+    JSON.stringify(
+      (
+        templates as { resourceTemplates?: { uriTemplate: string }[] } | undefined
+      )?.resourceTemplates?.map((t) => t.uriTemplate),
+    ) === JSON.stringify(['buildit://items/{key}', 'buildit://pages/{id}']),
+    templates,
+  );
+  const prompts = await inspect('stdio prompts/list', stdioTarget, [
+    ...allEnv,
+    '--method',
+    'prompts/list',
+  ]);
+  check(
+    'stdio lists the prompts',
+    JSON.stringify(
+      (prompts as { prompts?: { name: string }[] } | undefined)?.prompts?.map((p) => p.name),
+    ) === JSON.stringify(['plan_epic', 'triage', 'standup']),
+    prompts,
+  );
   const called = await inspect('stdio tools/call whoami', stdioTarget, [
     ...stdioEnv,
     '--method',
@@ -125,6 +214,20 @@ try {
     'stdio whoami returns the org',
     (structured(called)?.org as { name?: string } | undefined)?.name === 'Example Org',
     called,
+  );
+  const item = await inspect('stdio tools/call get_item', stdioTarget, [
+    ...stdioEnv,
+    '--method',
+    'tools/call',
+    '--tool-name',
+    'get_item',
+    '--tool-arg',
+    'item=DEMO-42',
+  ]);
+  check(
+    'stdio get_item returns the item',
+    (structured(item)?.item as { key?: string } | undefined)?.key === 'DEMO-42',
+    item,
   );
 
   // HTTP, both protocol eras.
@@ -149,7 +252,11 @@ try {
         [],
         [...httpArgs, '--method', 'tools/list'],
       );
-      check(`http (${era}) lists whoami`, toolNames(list).includes('whoami'), list);
+      check(
+        `http (${era}) lists the read tools only`,
+        toolNames(list).includes('search_items') && !toolNames(list).includes('create_item'),
+        list,
+      );
       const call = await inspect(
         `http (${era}) tools/call whoami`,
         [],

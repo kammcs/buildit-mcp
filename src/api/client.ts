@@ -2,10 +2,11 @@
  * A small fetch wrapper for the buildIt.Social agent API.
  *
  * - Every call sends `Authorization: Bearer <token>`, a fresh `X-Request-Id`
- *   (also logged, so a call can be traced across the two systems) and, when
- *   made on behalf of a tool, `X-Buildit-Tool`.
- * - The API's error envelope `{error: {code, message, details}}` becomes an
- *   ApiError.
+ *   (also logged, so a call can be traced across the two systems),
+ *   `X-Buildit-Client` (the MCP client's name and version when known, and
+ *   this server's) and, when made on behalf of a tool, `X-Buildit-Tool`.
+ * - The API's error envelope `{error: {code, message, hint, details}}`
+ *   becomes an ApiError.
  * - A 429 is retried once after `retry_after`, when that wait is within the
  *   cap; a longer wait comes back to the agent as an error to act on.
  * - Each attempt has a timeout.
@@ -16,11 +17,30 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import { silentLogger, type Logger } from '../log.js';
 import { SERVER_NAME, SERVER_VERSION } from '../version.js';
-import { ErrorEnvelopeSchema, MeSchema, MetaSchema, type Me, type Meta } from './types.js';
+import {
+  MeResponseSchema,
+  MetaResponseSchema,
+  type MeResponse,
+  type MetaResponse,
+} from './generated/schemas.js';
+
+/**
+ * The API's error envelope, read tolerantly. The contract lists each code
+ * with its own details, but v1 may add codes, so any code is accepted here
+ * and the details are kept as they come.
+ */
+const ErrorEnvelopeSchema = z.object({
+  error: z.looseObject({
+    code: z.string(),
+    message: z.string().optional(),
+    hint: z.string().optional(),
+    details: z.unknown().optional(),
+  }),
+});
 
 /** Codes produced by this client rather than by the API. */
 export const LOCAL_ERROR_CODES = {
@@ -36,9 +56,13 @@ export class ApiError extends Error {
   /** The HTTP status, or 0 when no response arrived. */
   readonly status: number;
   readonly details: unknown;
+  /** The API's one-line next step for this code, when it sent one. */
+  readonly hint: string | undefined;
   readonly requestId: string;
   /** Seconds to wait before retrying, when the API said so. */
   readonly retryAfterSeconds: number | undefined;
+  /** Extra guidance a tool adds for its own arguments (shown after the details). */
+  readonly note: string | undefined;
 
   constructor(init: {
     code: string;
@@ -46,14 +70,32 @@ export class ApiError extends Error {
     status: number;
     requestId: string;
     details?: unknown;
+    hint?: string | undefined;
     retryAfterSeconds?: number | undefined;
+    note?: string | undefined;
   }) {
     super(init.message);
     this.code = init.code;
     this.status = init.status;
     this.details = init.details;
+    this.hint = init.hint;
     this.requestId = init.requestId;
     this.retryAfterSeconds = init.retryAfterSeconds;
+    this.note = init.note;
+  }
+
+  /** The same error with a tool's note added. */
+  withNote(note: string): ApiError {
+    return new ApiError({
+      code: this.code,
+      message: this.message,
+      status: this.status,
+      requestId: this.requestId,
+      details: this.details,
+      hint: this.hint,
+      retryAfterSeconds: this.retryAfterSeconds,
+      note: this.note ? [this.note, note].join('\n') : note,
+    });
   }
 }
 
@@ -64,6 +106,8 @@ export interface ApiRequestOptions {
   body?: unknown;
   /** The MCP tool this call is made for; sent as X-Buildit-Tool. */
   tool?: string;
+  /** The MCP client's name and version, when known; sent in X-Buildit-Client. */
+  client?: { name: string; version?: string | undefined } | undefined;
   signal?: AbortSignal;
 }
 
@@ -86,6 +130,29 @@ export const DEFAULT_MAX_RETRY_AFTER_MS = 10_000;
 const DEFAULT_RETRY_AFTER_SECONDS = 1;
 
 const USER_AGENT = `${SERVER_NAME}/${SERVER_VERSION}`;
+const MAX_CLIENT_HEADER = 200;
+
+/** One `name/version` product token, reduced to visible ASCII without spaces or slashes. */
+function productToken(name: string, version: string | undefined): string {
+  // "!" to "~" is the visible ASCII range; anything else (spaces too) becomes "_".
+  const clean = (s: string, max: number): string =>
+    s
+      .replace(/[^!-~]+/g, '_')
+      .replace(/\//g, '_')
+      .slice(0, max);
+  const n = clean(name, 60) || 'unknown';
+  return version ? `${n}/${clean(version, 30)}` : n;
+}
+
+/**
+ * The X-Buildit-Client value: "client/version buildit-mcp/version", or just
+ * this server's token when the client didn't say who it is.
+ */
+export function clientHeader(client: ApiRequestOptions['client']): string {
+  const server = productToken(SERVER_NAME, SERVER_VERSION);
+  if (!client || client.name.trim() === '') return server;
+  return `${productToken(client.name, client.version)} ${server}`.slice(0, MAX_CLIENT_HEADER);
+}
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -141,13 +208,13 @@ export class ApiClient {
   }
 
   /** GET /v1/meta */
-  async getMeta(options: ApiRequestOptions = {}): Promise<Meta> {
-    return this.requestParsed('GET', '/v1/meta', MetaSchema, options);
+  async getMeta(options: ApiRequestOptions = {}): Promise<MetaResponse> {
+    return this.requestParsed('GET', '/v1/meta', MetaResponseSchema, options);
   }
 
   /** GET /v1/me */
-  async getMe(options: ApiRequestOptions = {}): Promise<Me> {
-    return this.requestParsed('GET', '/v1/me', MeSchema, options);
+  async getMe(options: ApiRequestOptions = {}): Promise<MeResponse> {
+    return this.requestParsed('GET', '/v1/me', MeResponseSchema, options);
   }
 
   /** A request whose JSON response is validated with `schema`. */
@@ -210,6 +277,7 @@ export class ApiClient {
         Accept: 'application/json',
         'User-Agent': USER_AGENT,
         'X-Request-Id': requestId,
+        'X-Buildit-Client': clientHeader(options.client),
       };
       if (options.tool) headers['X-Buildit-Tool'] = options.tool;
       let payload: string | undefined;
@@ -298,13 +366,14 @@ export class ApiClient {
       response.status === 429 ? readRetryAfter(body, response.headers) : undefined;
     const envelope = ErrorEnvelopeSchema.safeParse(body);
     if (envelope.success) {
-      const { code, message, details } = envelope.data.error;
+      const { code, message, hint, details } = envelope.data.error;
       return new ApiError({
         code,
         message: message ?? `The API refused the request (${code}).`,
         status: response.status,
         requestId,
         details,
+        hint,
         retryAfterSeconds,
       });
     }
