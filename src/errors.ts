@@ -17,6 +17,7 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 
 import { ApiError, LOCAL_ERROR_CODES } from './api/client.js';
 import { ERROR_HINTS } from './api/generated/operations.js';
+import type { Error as ApiErrorBody } from './api/generated/strict.js';
 import { neutralize, sanitizeLabel } from './untrusted.js';
 
 const MAX_DETAILS_CHARS = 4000;
@@ -99,8 +100,17 @@ const NOT_FOUND_HINTS: Record<string, string> = {
     'The API does not serve this call: it may be older than this buildit-mcp. Check BUILDIT_API_URL, or use another tool.',
 };
 
-/** Rate-limit buckets, in plain words. */
-const RATE_BUCKETS: Record<string, string> = {
+/** The rate-limit buckets the contract names in a rate_limited error's details.bucket. */
+type RateLimitBucket = Extract<
+  ApiErrorBody['error'],
+  { code: 'rate_limited' }
+>['details']['bucket'];
+
+/**
+ * Each of the contract's rate-limit buckets, in plain words. A bucket the
+ * contract adds later is shown by retry_after alone, as the contract asks.
+ */
+const RATE_BUCKETS: Record<RateLimitBucket, string> = {
   token_requests_per_minute: 'requests per minute for this token',
   token_writes_per_minute: 'writes per minute for this token',
   token_writes_per_day: 'writes per day for this token',
@@ -121,6 +131,23 @@ export function hintFor(code: string, apiHint?: string): string | undefined {
 /** Lower case letters and digits only, to tell whether one text already says another. */
 function squash(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/** Whether a sentence points at the wait (details.retry_after, the Retry-After header). */
+const RETRY_ADVICE = /retry[_-]after/i;
+
+/**
+ * A rate-limit message without its pointer to the wait, which the
+ * "Retry after" line gives in seconds: "Too many requests. Retry after the
+ * number of seconds in details.retry_after ..." becomes "Too many requests.".
+ */
+function withoutRetryAdvice(message: string): string {
+  const kept = message
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !RETRY_ADVICE.test(sentence))
+    .join(' ')
+    .trim();
+  return kept === '' ? 'Too many requests.' : kept;
 }
 
 /** Whether `text` adds nothing to what `shown` already says. */
@@ -265,7 +292,11 @@ function formatDetails(code: string, details: unknown): string | undefined {
 /** The actionable text for an ApiError. */
 export function describeApiError(err: ApiError): string {
   const details = record(err.details) ?? {};
-  const message = neutralize(err.message);
+  const rateLimited = err.code === 'rate_limited' || err.status === 429;
+  // With the wait in seconds on its own line, the message's and the hint's
+  // pointers to details.retry_after (which isn't shown) would repeat it.
+  const waitShown = rateLimited && err.retryAfterSeconds !== undefined;
+  const message = neutralize(waitShown ? withoutRetryAdvice(err.message) : err.message);
   const lines = [
     `buildIt.Social API error: ${err.code}${err.status ? ` (HTTP ${err.status})` : ''}`,
     message,
@@ -278,7 +309,7 @@ export function describeApiError(err: ApiError): string {
       ? NOT_FOUND_HINTS[details.kind]
       : undefined;
   const hint = kindHint ?? hintFor(err.code, err.hint);
-  if (hint) {
+  if (hint && !(waitShown && RETRY_ADVICE.test(hint))) {
     const text = neutralize(inServerTerms(hint));
     if (!alreadySaid(text, said)) {
       lines.push(`What to do: ${text}`);
@@ -295,11 +326,9 @@ export function describeApiError(err: ApiError): string {
   if (err.retryAfterSeconds !== undefined) {
     lines.push(`Retry after: ${Math.ceil(err.retryAfterSeconds)} s`);
   }
-  if (err.code === 'rate_limited' || err.status === 429) {
-    const bucket = typeof details.bucket === 'string' ? details.bucket : undefined;
-    if (bucket !== undefined) {
-      lines.push(`Limit reached: ${RATE_BUCKETS[bucket] ?? sanitizeLabel(bucket, 60)}.`);
-    }
+  if (rateLimited && typeof details.bucket === 'string') {
+    const bucket = (RATE_BUCKETS as Record<string, string | undefined>)[details.bucket];
+    if (bucket !== undefined) lines.push(`Limit reached: ${bucket}.`);
   }
   const formatted = formatDetails(err.code, err.details);
   if (formatted) lines.push('Details:', formatted);

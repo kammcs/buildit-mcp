@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ApiClient, ApiError, DEFAULT_RATE_LIMIT_WAIT_SECONDS } from '../src/api/client.js';
+import { ERROR_HINTS } from '../src/api/generated/operations.js';
 import { describeApiError, ToolInputError, toolErrorResult } from '../src/errors.js';
 import { createLogger } from '../src/log.js';
 import { FakeApi, TOKENS, uid, USERS } from './support/fake-api.js';
@@ -152,10 +153,11 @@ describe('ApiClient', () => {
     expect(text).toContain('Retry after: 4 s');
   });
 
-  it('gives a gateway 429 without Retry-After a default wait, after one short retry', async () => {
+  it('gives a gateway 429 without Retry-After a minute, and no quick retry', async () => {
     const waits: number[] = [];
+    // The gateway's own body, without Retry-After (it hides the headers).
     const gateway = { status: 429, body: { message: 'Slow down.', request_id: 'gw-2' } };
-    api.enqueue('/v1/me', gateway, gateway);
+    api.enqueue('/v1/me', gateway);
     const err = await caught(
       client(TOKENS.full, {
         sleep: (ms) => {
@@ -164,12 +166,31 @@ describe('ApiClient', () => {
         },
       }).getMe(),
     );
-    expect(waits).toEqual([1000]);
+    // The contract says to retry after a minute: above the cap, so no retry.
+    expect(DEFAULT_RATE_LIMIT_WAIT_SECONDS).toBe(60);
+    expect(waits).toEqual([]);
+    expect(api.requests).toHaveLength(1);
+    expect(err).toMatchObject({ code: 'rate_limited', status: 429, retryAfterSeconds: 60 });
+    const text = describeApiError(err);
+    expect(text).toContain('Too many requests: Slow down.');
+    expect(text).toContain('Retry after: 60 s');
+    // The contract's hint points at details the gateway didn't send.
+    expect(text).not.toContain('retry_after');
+    expect(text).not.toContain('What to do');
+
+    // With a cap above a minute, the one retry waits the minute.
+    api.requests.length = 0;
+    waits.length = 0;
+    api.enqueue('/v1/me', gateway);
+    await client(TOKENS.full, {
+      maxRetryAfterMs: 120_000,
+      sleep: (ms) => {
+        waits.push(ms);
+        return Promise.resolve();
+      },
+    }).getMe();
+    expect(waits).toEqual([60_000]);
     expect(api.requests).toHaveLength(2);
-    expect(err).toMatchObject({
-      code: 'rate_limited',
-      retryAfterSeconds: DEFAULT_RATE_LIMIT_WAIT_SECONDS,
-    });
 
     // A long Retry-After is not waited out: it goes back to the agent at once.
     api.requests.length = 0;
@@ -394,7 +415,7 @@ describe('error results', () => {
     expect(org).toContain(
       'Limit reached: requests per minute for the whole org, across all its tokens.',
     );
-    // A bucket newer than this copy of the contract still reads in words.
+    // The user's bucket, across all their tokens.
     const user = describeApiError(
       new ApiError({
         code: 'rate_limited',
@@ -408,17 +429,56 @@ describe('error results', () => {
     expect(user).toContain(
       'Limit reached: requests per minute for your account, across all your tokens.',
     );
-    // An unknown bucket is shown as it came, defused.
+    // A bucket the contract adds later is handled by retry_after alone.
     const odd = describeApiError(
       new ApiError({
         code: 'rate_limited',
         message: 'Too many.',
         status: 429,
         requestId: 'r',
-        details: { bucket: 'galaxy_requests_per_year' },
+        retryAfterSeconds: 9,
+        details: { retry_after: 9, bucket: 'galaxy_requests_per_year' },
       }),
     );
-    expect(odd).toContain('Limit reached: galaxy_requests_per_year.');
+    expect(odd).toContain('Retry after: 9 s');
+    expect(odd).not.toContain('Limit reached');
+    expect(odd).not.toContain('galaxy');
+  });
+
+  it('say the wait once for the contract wording of rate_limited', () => {
+    const contractMessage =
+      'Too many requests. Retry after the number of seconds in details.retry_after (also in the Retry-After header).';
+    const text = describeApiError(
+      new ApiError({
+        code: 'rate_limited',
+        message: contractMessage,
+        status: 429,
+        requestId: 'r',
+        hint: ERROR_HINTS.rate_limited,
+        retryAfterSeconds: 42,
+        details: { retry_after: 42, bucket: 'user_requests_per_minute' },
+      }),
+    );
+    expect(text.split('\n')).toEqual([
+      'buildIt.Social API error: rate_limited (HTTP 429)',
+      'Too many requests.',
+      'Retry after: 42 s',
+      'Limit reached: requests per minute for your account, across all your tokens.',
+      'Request id: r',
+    ]);
+    // Without a wait to show, the message keeps its own advice, said once.
+    const bare = describeApiError(
+      new ApiError({
+        code: 'rate_limited',
+        message: contractMessage,
+        status: 429,
+        requestId: 'r',
+        hint: ERROR_HINTS.rate_limited,
+      }),
+    );
+    expect(bare).toContain(contractMessage);
+    expect(bare).not.toContain('What to do');
+    expect(bare.match(/details\.retry_after/g)).toHaveLength(1);
   });
 
   it('give the invalid_arguments code for arguments that cannot make a call', () => {

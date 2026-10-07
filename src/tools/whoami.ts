@@ -46,9 +46,15 @@ const OutputSchema = z.object({
     projects: z.boolean().describe('Whether Projects is enabled for the org.'),
   }),
   rate_limits: z.object({
-    requests_per_minute: z.number(),
-    writes_per_minute: z.number(),
-    writes_per_day: z.number(),
+    requests_per_minute: z.number().describe("The token's requests a minute."),
+    user_requests_per_minute: z
+      .number()
+      .describe("The user's requests a minute, across all their tokens."),
+    writes_per_minute: z.number().describe("The token's writes a minute."),
+    writes_per_day: z.number().describe("The token's writes a day (UTC)."),
+    org_requests_per_minute: z
+      .number()
+      .describe("The org's requests a minute, across all its tokens."),
   }),
   server: z.object({
     name: z.string(),
@@ -114,8 +120,10 @@ export const whoamiTool = defineTool({
       features: { projects: me.features.projects },
       rate_limits: {
         requests_per_minute: me.rate_limits.requests_per_minute,
+        user_requests_per_minute: me.rate_limits.user_requests_per_minute,
         writes_per_minute: me.rate_limits.writes_per_minute,
         writes_per_day: me.rate_limits.writes_per_day,
+        org_requests_per_minute: me.rate_limits.org_requests_per_minute,
       },
       server: {
         name: SERVER_NAME,
@@ -158,8 +166,9 @@ export const whoamiTool = defineTool({
           : '';
       lines.push(`Projects in reach (${s.projects.length}): ${shown.join(', ')}${more}.`);
     }
+    const r = s.rate_limits;
     lines.push(
-      `Rate limits: ${s.rate_limits.requests_per_minute} calls and ${s.rate_limits.writes_per_minute} writes a minute, ${s.rate_limits.writes_per_day} writes a day.`,
+      `Rate limits for this token: ${r.requests_per_minute} calls and ${r.writes_per_minute} writes a minute, ${r.writes_per_day} writes a day. For your account, across all your tokens: ${r.user_requests_per_minute} calls a minute. For the whole org: ${r.org_requests_per_minute} calls a minute.`,
     );
     if (updateRequired) {
       lines.push(

@@ -66,7 +66,7 @@
           "meta"
         ],
         "summary": "The API's version",
-        "description": "The API version and the oldest buildit-mcp release it supports, so the MCP server can warn its user to upgrade. Needs a valid token, but no scope.",
+        "description": "The API version and the oldest buildit-mcp release it supports, so the MCP server can warn its user to upgrade. Needs a valid token, but no scope. It doesn't count against the rate limits, and its response carries no RateLimit-* headers.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -84,15 +84,6 @@
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/X-Request-Id"
-              },
-              "RateLimit-Limit": {
-                "$ref": "#/components/headers/RateLimit-Limit"
-              },
-              "RateLimit-Remaining": {
-                "$ref": "#/components/headers/RateLimit-Remaining"
-              },
-              "RateLimit-Reset": {
-                "$ref": "#/components/headers/RateLimit-Reset"
               }
             },
             "content": {
@@ -155,7 +146,7 @@
           "meta"
         ],
         "summary": "Who the token acts as",
-        "description": "The user, the org, the token's scopes and limits, the projects in reach and the rate limits. The MCP server lists only the tools these scopes allow.",
+        "description": "The user, the org, the token's scopes and limits, the projects in reach and the rate limits. The MCP server lists only the tools these scopes allow. `projects` is empty unless the token has projects:read. It doesn't count against the rate limits, and its response carries no RateLimit-* headers.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -173,15 +164,6 @@
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/X-Request-Id"
-              },
-              "RateLimit-Limit": {
-                "$ref": "#/components/headers/RateLimit-Limit"
-              },
-              "RateLimit-Remaining": {
-                "$ref": "#/components/headers/RateLimit-Remaining"
-              },
-              "RateLimit-Reset": {
-                "$ref": "#/components/headers/RateLimit-Reset"
               }
             },
             "content": {
@@ -237,8 +219,9 @@
                   ],
                   "rate_limits": {
                     "requests_per_minute": 120,
-                    "writes_per_minute": 30,
-                    "writes_per_day": 1000,
+                    "user_requests_per_minute": 300,
+                    "writes_per_minute": 60,
+                    "writes_per_day": 2000,
                     "org_requests_per_minute": 600
                   }
                 }
@@ -6986,7 +6969,7 @@
         }
       },
       "Error429": {
-        "description": "An error: rate_limited. The operation's x-buildit-errors lists the codes it can answer.",
+        "description": "An error: rate_limited. The operation's x-buildit-errors lists the codes it can answer. A per-address limit in front of the API can also answer 429 with a body of only {\"message\", \"request_id\"} instead of the error envelope: treat it as rate_limited, and retry after the Retry-After header when it is sent, else after a minute.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"
@@ -7042,25 +7025,25 @@
         }
       },
       "RateLimit-Limit": {
-        "description": "Requests allowed per minute for this token.",
+        "description": "The limit of the tightest window the request counted against (on a 429, the one used up): see GET /v1/me's rate_limits. Not sent by get_meta and get_me, which don't count.",
         "schema": {
           "type": "integer"
         }
       },
       "RateLimit-Remaining": {
-        "description": "Requests left in the current minute (the tightest bucket).",
+        "description": "Requests left in that window.",
         "schema": {
           "type": "integer"
         }
       },
       "RateLimit-Reset": {
-        "description": "Seconds until the current window resets.",
+        "description": "Seconds until that window resets.",
         "schema": {
           "type": "integer"
         }
       },
       "Retry-After": {
-        "description": "Seconds to wait before retrying (429 only).",
+        "description": "The number of seconds to wait before retrying (429 only).",
         "schema": {
           "type": "integer"
         }
@@ -7930,7 +7913,7 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 2048,
-        "description": "An opaque cursor from a previous page's next_cursor. Valid only with the same query."
+        "description": "An opaque cursor from a previous page's next_cursor. Valid only with the same query. A cursor in the wrong format is a 422 validation error on `cursor`."
       },
       "CustomFieldValue": {
         "type": "object",
@@ -9269,7 +9252,7 @@
                       "retry_after": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Seconds to wait (also the Retry-After header)."
+                        "description": "The number of seconds to wait before retrying (also in the Retry-After header)."
                       },
                       "bucket": {
                         "type": "string",
@@ -9277,8 +9260,10 @@
                           "token_requests_per_minute",
                           "token_writes_per_minute",
                           "token_writes_per_day",
-                          "org_requests_per_minute"
-                        ]
+                          "org_requests_per_minute",
+                          "user_requests_per_minute"
+                        ],
+                        "description": "The limit that is used up. v1 may add buckets: handle an unknown one by retry_after alone."
                       }
                     },
                     "required": [
@@ -10209,7 +10194,7 @@
       "ItemRef": {
         "type": "string",
         "pattern": "^(#?[A-Za-z][A-Za-z0-9]{1,5}-[1-9][0-9]{0,8}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})$",
-        "description": "An item: its key in any case (a leading # is allowed; old keys of moved items and renamed projects still resolve), or its uuid.",
+        "description": "An item: its key in any case (a leading # is allowed; old keys of moved items and renamed projects still resolve), or its uuid. An item outside the token's project limits is 403 outside_limits when named by key, and 404 not_found when named by uuid (the token can't see it).",
         "examples": [
           "DEMO-42"
         ]
@@ -11143,7 +11128,7 @@
             "items": {
               "$ref": "#/components/schemas/ProjectBrief"
             },
-            "description": "The projects in reach (the token's limits and the user's access)."
+            "description": "The projects in reach (the token's limits and the user's access). Empty unless the token has projects:read (or a scope that implies it) and the org's Projects feature is on."
           },
           "rate_limits": {
             "$ref": "#/components/schemas/RateLimits"
@@ -11596,7 +11581,7 @@
           },
           "target": {
             "type": "string",
-            "description": "Readable: \"DEMO-42 Export reports as CSV\", \"status In review\"."
+            "description": "Readable: what the effect is about (\"DEMO-42 Export reports as CSV\", \"status In review\") and, after a dash, what changes, each value before → after (a create lists its values): \"DEMO-42 Export reports as CSV — priority: none → urgent; status: To do → Done\". The changes are cut at 300 characters; before and after hold them in full."
           },
           "id": {
             "anyOf": [
@@ -11898,7 +11883,7 @@
       "ProjectRef": {
         "type": "string",
         "pattern": "^[A-Za-z][A-Za-z0-9]{1,5}$",
-        "description": "A project key, in any case. A retired key of a renamed project still resolves.",
+        "description": "A project key, in any case. A retired key of a renamed project still resolves. A project outside the token's project limits is 403 outside_limits.",
         "examples": [
           "DEMO"
         ]
@@ -12041,24 +12026,34 @@
         "type": "object",
         "properties": {
           "requests_per_minute": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The token's requests a minute."
+          },
+          "user_requests_per_minute": {
+            "type": "integer",
+            "description": "The user's requests a minute, across all their tokens."
           },
           "writes_per_minute": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The token's writes a minute."
           },
           "writes_per_day": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The token's writes a day (UTC)."
           },
           "org_requests_per_minute": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The org's requests a minute, across all its tokens."
           }
         },
         "required": [
           "requests_per_minute",
+          "user_requests_per_minute",
           "writes_per_minute",
           "writes_per_day",
           "org_requests_per_minute"
-        ]
+        ],
+        "description": "The rate limits in force. A 429 rate_limited names the one used up in details.bucket."
       },
       "Release": {
         "type": "object",
@@ -13627,7 +13622,7 @@
     },
     "outside_limits": {
       "status": 403,
-      "when": "The token is limited to some projects or channels, and the call reaches outside them.",
+      "when": "The token is limited to some projects or channels, and the call reaches outside them: a project or an item named by key, or a channel. An item named by uuid outside the limits is 404 not_found instead, because the token can't see it.",
       "message": "This token is limited to certain projects and channels. GET /v1/me lists them.",
       "hint": "Call get_me to see the projects and channels this token may reach."
     },
@@ -13645,7 +13640,7 @@
     },
     "not_found": {
       "status": 404,
-      "when": "No such thing, or nothing the user can see (the two are never told apart).",
+      "when": "No such thing, or nothing the user can see (the two are never told apart). An item named by uuid outside the token's project limits is not_found too (named by key, it is outside_limits).",
       "message": "Nothing matches that reference. Check the key or name, or search first.",
       "hint": "Look the reference up (search_items, list_projects, describe_project), then retry."
     },
@@ -13729,9 +13724,9 @@
     },
     "rate_limited": {
       "status": 429,
-      "when": "A rate limit is used up: the token's requests or writes a minute, its writes a day, or the org's requests a minute.",
-      "message": "Too many requests. Wait details.retry_after seconds, then try again.",
-      "hint": "Wait details.retry_after seconds (also the Retry-After header), then retry."
+      "when": "A rate limit is used up: the token's requests or writes a minute, its writes a day, the user's requests a minute (across all their tokens), or the org's requests a minute. A per-address limit in front of the API can also answer 429, with a body of only {\"message\", \"request_id\"} instead of this envelope: treat it as rate_limited, and retry after the Retry-After header when it is sent, else after a minute.",
+      "message": "Too many requests. Retry after the number of seconds in details.retry_after (also in the Retry-After header).",
+      "hint": "Retry after the number of seconds in details.retry_after (also in the Retry-After header)."
     },
     "internal": {
       "status": 500,

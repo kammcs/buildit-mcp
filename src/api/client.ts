@@ -8,7 +8,11 @@
  * - The API's error envelope `{error: {code, message, hint, details}}`
  *   becomes an ApiError.
  * - A 429 is retried once after `retry_after`, when that wait is within the
- *   cap; a longer wait comes back to the agent as an error to act on.
+ *   cap; a longer wait comes back to the agent as an error to act on. A 429
+ *   that gives no wait (a limit in front of the API hides Retry-After) means
+ *   a minute, as the contract says.
+ * - get_meta and get_me (the contract's discovery operations) carry no
+ *   RateLimit-* headers; nothing here reads those headers.
  * - Each attempt has a timeout.
  *
  * The client holds the token of one caller and is created per caller (once
@@ -128,13 +132,13 @@ export interface ApiClientOptions {
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_RETRY_AFTER_MS = 10_000;
-/** Wait used before the one retry when a 429 carries no retry_after. */
-const DEFAULT_RETRY_AFTER_SECONDS = 1;
 /**
- * The wait reported to the agent when a 429 without the error envelope (a
- * limit in front of the API) gives no Retry-After, after the retry failed too.
+ * The wait for a 429 that gives none: a limit in front of the API answers
+ * without the error envelope and, behind the gateway, without Retry-After.
+ * The contract says to retry after a minute then. Above the default cap, so
+ * it goes back to the agent instead of being waited out.
  */
-export const DEFAULT_RATE_LIMIT_WAIT_SECONDS = 30;
+export const DEFAULT_RATE_LIMIT_WAIT_SECONDS = 60;
 
 const USER_AGENT = `${SERVER_NAME}/${SERVER_VERSION}`;
 const MAX_CLIENT_HEADER = 200;
@@ -363,7 +367,8 @@ export class ApiClient {
       });
 
       if (response.status === 429 && !retried) {
-        const retryAfter = readRetryAfter(body, response.headers) ?? DEFAULT_RETRY_AFTER_SECONDS;
+        const retryAfter =
+          readRetryAfter(body, response.headers) ?? DEFAULT_RATE_LIMIT_WAIT_SECONDS;
         const waitMs = Math.ceil(retryAfter * 1000);
         if (waitMs <= this.maxRetryAfterMs) {
           retried = true;
@@ -391,7 +396,9 @@ export class ApiClient {
 
   private toApiError(response: Response, body: unknown, requestId: string): ApiError {
     const retryAfterSeconds =
-      response.status === 429 ? readRetryAfter(body, response.headers) : undefined;
+      response.status === 429
+        ? (readRetryAfter(body, response.headers) ?? DEFAULT_RATE_LIMIT_WAIT_SECONDS)
+        : undefined;
     const envelope = ErrorEnvelopeSchema.safeParse(body);
     if (envelope.success) {
       const { code, message, hint, details } = envelope.data.error;
@@ -406,8 +413,8 @@ export class ApiClient {
       });
     }
     if (response.status === 429) {
-      // A limit in front of the API (per IP, for example) answers without the
-      // error envelope: it is still a rate limit, with the header's wait.
+      // A limit in front of the API (per address) answers without the error
+      // envelope: it is still a rate limit, with the header's wait, else a minute.
       const root = asRecord(body);
       const said = typeof root?.message === 'string' ? root.message.trim().slice(0, 300) : '';
       return new ApiError({
@@ -418,7 +425,7 @@ export class ApiClient {
         status: 429,
         requestId,
         details: {},
-        retryAfterSeconds: retryAfterSeconds ?? DEFAULT_RATE_LIMIT_WAIT_SECONDS,
+        retryAfterSeconds,
       });
     }
     return new ApiError({

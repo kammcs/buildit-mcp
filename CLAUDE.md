@@ -35,7 +35,7 @@ The agent API is built and maintained by the buildIt.Social product team, in a p
 
 - `schemas.ts`: tolerant Zod schemas and types for every component (`ItemDetailSchema`, `ItemDetail`, ...), used to parse responses.
 - `strict.ts`: exact schemas, each operation's `QUERY_SCHEMAS`, `REQUEST_SCHEMAS` and `RESPONSE_SCHEMAS`, and request types (`OperationIO`). The fake API uses them; `src/` imports only their types.
-- `operations.ts`: `OPERATIONS` (method, path, parameters, `x-buildit-scope`, `requiredScopes` (all the scopes it needs; `x-buildit-required-scopes`, else the single scope), hints, errors, response schema), `SCOPES` and `SCOPE_IMPLIES`, `ERROR_STATUS`, `ERROR_HINTS` (each code's next step, used when an older API sends no hint) and `PLAN_SCOPES` (all the scopes each plan action needs).
+- `operations.ts`: `OPERATIONS` (method, path, parameters, `x-buildit-scope`, `requiredScopes` (all the scopes it needs; `x-buildit-required-scopes`, else the single scope), hints, errors, `discovery` (get_meta and get_me: no rate-limit unit, no `RateLimit-*` headers), response schema), `SCOPES` and `SCOPE_IMPLIES`, `ERROR_STATUS`, `ERROR_HINTS` (each code's next step, used when an older API sends no hint) and `PLAN_SCOPES` (all the scopes each plan action needs).
 
 ## Architecture
 

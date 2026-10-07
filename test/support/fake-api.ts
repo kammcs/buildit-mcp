@@ -126,8 +126,9 @@ export function sampleIdentity(
     ],
     rate_limits: {
       requests_per_minute: 120,
-      writes_per_minute: 30,
-      writes_per_day: 1000,
+      user_requests_per_minute: 300,
+      writes_per_minute: 60,
+      writes_per_day: 2000,
       org_requests_per_minute: 600,
     },
     ...overrides,

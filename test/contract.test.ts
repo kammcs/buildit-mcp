@@ -55,6 +55,13 @@ describe('the generated code', () => {
       scope: 'projects:read',
     });
     expect(OPERATIONS.remove_link.hints.destructive).toBe(true);
+    // Discovery takes no rate-limit unit and carries no RateLimit-* headers.
+    expect(
+      Object.entries(OPERATIONS)
+        .filter(([, op]) => op.discovery)
+        .map(([id]) => id)
+        .sort(),
+    ).toEqual(['get_me', 'get_meta']);
     expect(operationPath('remove_link', { key: 'DEMO-1', id: 'a/b' })).toBe(
       '/v1/items/DEMO-1/links/a%2Fb',
     );

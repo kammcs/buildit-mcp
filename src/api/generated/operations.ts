@@ -99,7 +99,8 @@ export const ERROR_HINTS: Readonly<Partial<Record<ErrorCode, string>>> = {
   field_required: 'Set the fields in details.fields in the same call, then retry.',
   bulk_too_large: 'Split the change into plans of at most 50 items.',
   limit_reached: 'Archive or remove something of that kind first.',
-  rate_limited: 'Wait details.retry_after seconds (also the Retry-After header), then retry.',
+  rate_limited:
+    'Retry after the number of seconds in details.retry_after (also in the Retry-After header).',
   internal: 'Retry once; if it fails again, report the X-Request-Id.',
   unavailable: 'Retry in a minute.',
 };
@@ -151,6 +152,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200, 201],
+    discovery: false,
     response: S.AddCommentResponseSchema,
   },
   add_link: {
@@ -184,6 +186,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200, 201],
+    discovery: false,
     response: S.AddLinkResponseSchema,
   },
   add_release_items: {
@@ -217,6 +220,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.ReleaseItemsResponseSchema,
   },
   add_sprint_items: {
@@ -250,6 +254,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.SprintItemsResponseSchema,
   },
   apply_plan: {
@@ -288,6 +293,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.ApplyPlanResponseSchema,
   },
   complete_sprint: {
@@ -321,6 +327,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.CompleteSprintResponseSchema,
   },
   create_item: {
@@ -357,6 +364,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200, 201],
+    discovery: false,
     response: S.CreateItemResponseSchema,
   },
   create_page: {
@@ -389,6 +397,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200, 201],
+    discovery: false,
     response: S.CreatePageResponseSchema,
   },
   create_plan: {
@@ -424,6 +433,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [201],
+    discovery: false,
     response: S.CreatePlanResponseSchema,
   },
   create_release: {
@@ -457,6 +467,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [201],
+    discovery: false,
     response: S.ReleaseResponseSchema,
   },
   create_sprint: {
@@ -490,6 +501,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [201],
+    discovery: false,
     response: S.SprintResponseSchema,
   },
   describe_project: {
@@ -518,6 +530,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.DescribeProjectResponseSchema,
   },
   generate_release_notes: {
@@ -551,6 +564,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.ReleaseNotesResponseSchema,
   },
   get_item: {
@@ -579,6 +593,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.GetItemResponseSchema,
   },
   get_item_history: {
@@ -607,6 +622,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ItemHistoryResponseSchema,
   },
   get_me: {
@@ -630,6 +646,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: true,
     response: S.MeResponseSchema,
   },
   get_meta: {
@@ -653,6 +670,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: true,
     response: S.MetaResponseSchema,
   },
   get_page: {
@@ -680,6 +698,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.PageResponseSchema,
   },
   get_thread: {
@@ -707,6 +726,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ThreadResponseSchema,
   },
   get_workflow: {
@@ -736,6 +756,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.GetWorkflowResponseSchema,
   },
   list_channel_messages: {
@@ -764,6 +785,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ListChannelMessagesResponseSchema,
   },
   list_channels: {
@@ -789,6 +811,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ListChannelsResponseSchema,
   },
   list_comments: {
@@ -817,6 +840,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ListCommentsResponseSchema,
   },
   list_pages: {
@@ -845,6 +869,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ListPagesResponseSchema,
   },
   list_project_members: {
@@ -873,6 +898,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ListProjectMembersResponseSchema,
   },
   list_projects: {
@@ -899,6 +925,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ListProjectsResponseSchema,
   },
   list_releases: {
@@ -927,6 +954,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ListReleasesResponseSchema,
   },
   list_sprints: {
@@ -955,6 +983,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ListSprintsResponseSchema,
   },
   list_work_types: {
@@ -981,6 +1010,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.ListWorkTypesResponseSchema,
   },
   rank_item: {
@@ -1014,6 +1044,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.RankItemResponseSchema,
   },
   release_version: {
@@ -1047,6 +1078,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.ReleaseResponseSchema,
   },
   remove_link: {
@@ -1079,6 +1111,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.RemoveLinkResponseSchema,
   },
   remove_release_items: {
@@ -1112,6 +1145,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.ReleaseItemsResponseSchema,
   },
   remove_sprint_items: {
@@ -1145,6 +1179,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.SprintItemsResponseSchema,
   },
   search_items: {
@@ -1183,6 +1218,7 @@ export const OPERATIONS = {
     ],
     hasBody: false,
     statuses: [200],
+    discovery: false,
     response: S.SearchItemsResponseSchema,
   },
   start_sprint: {
@@ -1216,6 +1252,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.SprintResponseSchema,
   },
   transition_item: {
@@ -1252,6 +1289,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.TransitionItemResponseSchema,
   },
   update_item: {
@@ -1288,6 +1326,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.ItemWriteResponseSchema,
   },
   update_page: {
@@ -1319,6 +1358,7 @@ export const OPERATIONS = {
     ],
     hasBody: true,
     statuses: [200],
+    discovery: false,
     response: S.PageResponseSchema,
   },
 } as const;
