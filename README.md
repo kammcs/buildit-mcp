@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://bu
 
 It runs on your own machine (stdio) or as a stateless HTTP server for a team. It holds no secrets of its own: each person's token stays in their own client.
 
-**Status:** all toolsets implemented; not yet published. Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (38 tools in all). Run it from a clone (below).
+**Status:** all toolsets implemented; not yet published. Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (40 tools in all). Run it from a clone (below).
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
@@ -46,13 +46,13 @@ Every setting is an environment variable, and also a flag (the flag wins). The t
 | `BUILDIT_ALLOWED_HOSTS`   | `--allowed-hosts`   | localhost names on a loopback bind                  | Hostnames accepted in the `Host` header (DNS-rebinding protection).                                                                                                 |
 | `BUILDIT_ALLOWED_ORIGINS` | `--allowed-origins` | localhost names on a loopback bind                  | Hostnames accepted in the `Origin` header. Off loopback, requests with any other `Origin` are refused. `moz-extension://*`-style entries admit a browser extension. |
 
-The tools you see depend on the enabled toolsets, read-only mode, the exclude list, and your token's scopes: a token with only `projects:read` never sees write tools. If buildIt.Social refuses the token, only `whoami` is listed, so the agent can tell you why. If the scopes can't be read for a moment (a rate limit, the network), every tool your configuration allows is listed and buildIt.Social checks each call; the scopes are read again on the next list.
+The tools you see depend on the enabled toolsets, read-only mode, the exclude list, and your token's scopes: a token with only `projects:read` never sees write tools, and a token limited to some projects or channels doesn't see `create_channel` and `create_project`. If buildIt.Social refuses the token, only `whoami` is listed, so the agent can tell you why. If the scopes can't be read for a moment (a rate limit, the network), every tool your configuration allows is listed and buildIt.Social checks each call; the scopes are read again on the next list.
 
 ### Toolsets
 
-`items` and `comments` are on by default (15 tools). Turn others on with `BUILDIT_TOOLSETS` (or `--toolsets`), for example `BUILDIT_TOOLSETS=items,comments,planning,pages` or `BUILDIT_TOOLSETS=all` (38 tools). In HTTP mode, the `X-Buildit-Toolsets` header picks them per request.
+`items` and `comments` are on by default (15 tools). Turn others on with `BUILDIT_TOOLSETS` (or `--toolsets`), for example `BUILDIT_TOOLSETS=items,comments,planning,pages` or `BUILDIT_TOOLSETS=all` (40 tools). In HTTP mode, the `X-Buildit-Toolsets` header picks them per request.
 
-**`admin` and `destructive` stay off unless you name them**, even when your token has `projects:admin` or `projects:delete`. Turn them on only for work that needs them, for example a separate client entry with `BUILDIT_TOOLSETS=items,admin` while you reorganize a workflow. Their changes always go through preview and confirm (below).
+**`admin` and `destructive` stay off unless you name them**, even when your token has `projects:admin` or `projects:delete`. Turn them on only for work that needs them, for example a separate client entry with `BUILDIT_TOOLSETS=items,admin` while you reorganize a workflow. Their changes always go through preview and confirm (below), except creating a channel or a project, which changes nothing that exists.
 
 ### Tools
 
@@ -85,7 +85,9 @@ The tools you see depend on the enabled toolsets, read-only mode, the exclude li
 | `chat`                    | `list_channels`            | `chat:read`                         | read-only, open-world   | The channels you belong to (never direct messages). Paged.                                                                                               |
 |                           | `read_channel`             | `chat:read`                         | read-only, open-world   | A channel's messages, newest first, optionally `since` a time. Paged.                                                                                    |
 |                           | `read_thread`              | `chat:read`                         | read-only, open-world   | A message and its replies, oldest first. Paged.                                                                                                          |
-| `admin` (off)             | `get_workflow`             | `projects:admin`                    | read-only               | A workflow's statuses, moves and whole definition, to edit and propose.                                                                                  |
+| `admin` (off)             | `create_channel`           | `projects:admin`                    |                         | A public or private channel, with members; safe to retry with its idempotency key. Needs a token without project or channel limits.                      |
+|                           | `create_project`           | `projects:admin`                    |                         | Turn a channel into a project from a template, with its key (named after the channel); safe to retry. Needs a token without limits and Projects.         |
+|                           | `get_workflow`             | `projects:admin`                    | read-only               | A workflow's statuses, moves and whole definition, to edit and propose.                                                                                  |
 |                           | `list_work_types`          | `projects:admin`                    | read-only               | The org's work types and the projects that use each.                                                                                                     |
 |                           | `propose_workflow_change`  | `projects:admin`                    |                         | Preview a workflow change (statuses, moves, required fields, types); returns a plan handle.                                                              |
 |                           | `propose_work_type_change` | `projects:admin`                    |                         | Preview creating, changing, archiving or restoring a work type.                                                                                          |

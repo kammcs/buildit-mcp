@@ -130,6 +130,8 @@ const MORE_TOOLS = [
   'list_channels',
   'read_channel',
   'read_thread',
+  'create_channel',
+  'create_project',
   'get_workflow',
   'list_work_types',
   'propose_workflow_change',

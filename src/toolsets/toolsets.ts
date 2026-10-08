@@ -87,7 +87,7 @@ export const TOOLSETS: readonly ToolsetInfo[] = [
   {
     name: 'admin',
     description:
-      'Workflows, work types, fields and labels; every change is previewed and confirmed.',
+      'New channels and projects; workflows, work types, fields and labels, each change previewed and confirmed.',
     defaultEnabled: false,
     scopes: ['projects:read', 'projects:admin'],
   },

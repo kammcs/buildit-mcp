@@ -22,8 +22,14 @@ export const AllowedTransitionSchema = z.looseObject({
 });
 export type AllowedTransition = z.infer<typeof AllowedTransitionSchema>;
 
+export const ChannelNameSchema = z.string();
+export type ChannelName = z.infer<typeof ChannelNameSchema>;
+
 export const ChannelRefSchema = z.string();
 export type ChannelRef = z.infer<typeof ChannelRefSchema>;
+
+export const ChannelVisibilitySchema = openEnum(['public', 'private']);
+export type ChannelVisibility = z.infer<typeof ChannelVisibilitySchema>;
 
 export const ColorSchema = z.string();
 export type Color = z.infer<typeof ColorSchema>;
@@ -157,6 +163,9 @@ export type MessageKind = z.infer<typeof MessageKindSchema>;
 export const NameRefSchema = z.string();
 export type NameRef = z.infer<typeof NameRefSchema>;
 
+export const NewProjectKeySchema = z.string();
+export type NewProjectKey = z.infer<typeof NewProjectKeySchema>;
+
 export const OrgRoleSchema = openEnum(['owner', 'admin', 'member', 'guest']);
 export type OrgRole = z.infer<typeof OrgRoleSchema>;
 
@@ -189,6 +198,15 @@ export type ProjectKey = z.infer<typeof ProjectKeySchema>;
 
 export const ProjectRefSchema = z.string();
 export type ProjectRef = z.infer<typeof ProjectRefSchema>;
+
+export const ProjectTemplateSchema = openEnum([
+  'software_scrum',
+  'software_kanban',
+  'design',
+  'ops',
+  'marketing',
+]);
+export type ProjectTemplate = z.infer<typeof ProjectTemplateSchema>;
 
 export const RateLimitsSchema = z.looseObject({
   requests_per_minute: z.number(),
@@ -281,6 +299,15 @@ export type BoardColumn = z.infer<typeof BoardColumnSchema>;
 export const ChannelBriefSchema = z.looseObject({ id: UuidSchema, name: z.string() });
 export type ChannelBrief = z.infer<typeof ChannelBriefSchema>;
 
+export const CreateChannelRequestSchema = z.looseObject({
+  name: ChannelNameSchema,
+  description: z.string().optional(),
+  visibility: ChannelVisibilitySchema,
+  members: z.array(UserRefSchema).optional(),
+  idempotency_key: UuidSchema.optional(),
+});
+export type CreateChannelRequest = z.infer<typeof CreateChannelRequestSchema>;
+
 export const CreatePageRequestSchema = z.looseObject({
   title: PageTitleSchema,
   body: PageBodySchema.optional(),
@@ -289,6 +316,18 @@ export const CreatePageRequestSchema = z.looseObject({
   idempotency_key: UuidSchema.optional(),
 });
 export type CreatePageRequest = z.infer<typeof CreatePageRequestSchema>;
+
+export const CreateProjectRequestSchema = z.looseObject({
+  channel: ChannelRefSchema,
+  key: NewProjectKeySchema,
+  template: ProjectTemplateSchema.optional(),
+  sprints_enabled: z.boolean().optional(),
+  releases_enabled: z.boolean().optional(),
+  estimate_scale: EstimateScaleSchema.optional(),
+  estimate_values: z.array(z.number()).optional(),
+  idempotency_key: UuidSchema.optional(),
+});
+export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
 
 export const CreateReleaseRequestSchema = z.looseObject({
   name: z.string(),
@@ -1308,6 +1347,13 @@ export const BulkUpdateArgsSchema = z.looseObject({
 });
 export type BulkUpdateArgs = z.infer<typeof BulkUpdateArgsSchema>;
 
+export const CreateChannelResponseSchema = z.looseObject({
+  channel: ChannelSchema,
+  members: z.array(UserSchema),
+  created: z.boolean(),
+});
+export type CreateChannelResponse = z.infer<typeof CreateChannelResponseSchema>;
+
 export const CreatePageResponseSchema = z.looseObject({ page: PageSchema, created: z.boolean() });
 export type CreatePageResponse = z.infer<typeof CreatePageResponseSchema>;
 
@@ -1318,6 +1364,12 @@ export const CreatePlanResponseSchema = z.looseObject({
   expires_at: TimestampSchema,
 });
 export type CreatePlanResponse = z.infer<typeof CreatePlanResponseSchema>;
+
+export const CreateProjectResponseSchema = z.looseObject({
+  project: ProjectSummarySchema,
+  created: z.boolean(),
+});
+export type CreateProjectResponse = z.infer<typeof CreateProjectResponseSchema>;
 
 export const CustomFieldValueSchema = z.looseObject({
   field_id: UuidSchema,

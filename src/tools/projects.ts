@@ -4,7 +4,11 @@
 import { z } from 'zod';
 
 import { ApiError } from '../api/client.js';
-import type { DescribeProjectResponse, ProjectMember } from '../api/generated/schemas.js';
+import type {
+  DescribeProjectResponse,
+  ProjectMember,
+  ProjectSummary,
+} from '../api/generated/schemas.js';
 import { defineTool, type ToolContext } from '../toolsets/registry.js';
 import { sanitizeLabel } from '../untrusted.js';
 import { CursorInput, limitInput, nextPageHint, ProjectKeyInput, scopesOf } from './shared.js';
@@ -15,7 +19,7 @@ const label = (v: string, max = 200): string => sanitizeLabel(v, max);
 // list_projects
 // ---------------------------------------------------------------------------
 
-const ProjectOut = z.object({
+export const ProjectOut = z.object({
   key: z.string(),
   name: z.string(),
   id: z.string(),
@@ -30,6 +34,26 @@ const ProjectOut = z.object({
     canceled: z.number(),
   }),
 });
+export type ProjectOut = z.infer<typeof ProjectOut>;
+
+/** A project as list_projects shows it; its name (the channel's) flattened to one line. */
+export function projectOut(p: ProjectSummary): ProjectOut {
+  return {
+    key: p.key,
+    name: label(p.name),
+    id: p.id,
+    archived: p.archived,
+    sprints_enabled: p.sprints_enabled,
+    releases_enabled: p.releases_enabled,
+    estimate_scale: p.estimate_scale,
+    item_counts: {
+      not_started: p.item_counts.not_started,
+      started: p.item_counts.started,
+      done: p.item_counts.done,
+      canceled: p.item_counts.canceled,
+    },
+  };
+}
 
 export const listProjectsTool = defineTool({
   name: 'list_projects',
@@ -61,21 +85,7 @@ export const listProjectsTool = defineTool({
         ...(args.limit ? { limit: args.limit } : {}),
       },
     });
-    const projects = page.items.map((p) => ({
-      key: p.key,
-      name: label(p.name),
-      id: p.id,
-      archived: p.archived,
-      sprints_enabled: p.sprints_enabled,
-      releases_enabled: p.releases_enabled,
-      estimate_scale: p.estimate_scale,
-      item_counts: {
-        not_started: p.item_counts.not_started,
-        started: p.item_counts.started,
-        done: p.item_counts.done,
-        canceled: p.item_counts.canceled,
-      },
-    }));
+    const projects = page.items.map(projectOut);
     const lines = projects.map((p) => {
       const c = p.item_counts;
       return `- ${p.key}: ${p.name}${p.archived ? ' (archived)' : ''} · ${c.not_started} not started, ${c.started} started, ${c.done} done, ${c.canceled} canceled`;

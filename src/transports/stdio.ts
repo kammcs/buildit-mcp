@@ -34,7 +34,7 @@ import {
   DEGRADED_LIST_TTL_MS,
   listedByPolicy,
   resolveListedTools,
-  scopesFromApi,
+  identityFromApi,
   type ListedTools,
   type SwitchableServer,
 } from '../server.js';
@@ -108,6 +108,7 @@ export class StdioIdentity {
         if (result.identity === 'known' && before !== 'known') {
           this.logger.info('token identified', {
             scopes: result.scopes,
+            limited: result.limited,
             tools: result.tools.length,
           });
         }
@@ -213,7 +214,7 @@ export function startStdio(
     },
   });
   const identity = new StdioIdentity(
-    () => resolveListedTools(scopesFromApi(api), catalog, policy, logger),
+    () => resolveListedTools(identityFromApi(api), catalog, policy, logger),
     logger,
     options.now,
   );

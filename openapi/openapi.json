@@ -51,7 +51,7 @@
     },
     {
       "name": "admin",
-      "description": "Workflows and work types (projects:admin)."
+      "description": "Workflows and work types; creating channels and projects (projects:admin)."
     },
     {
       "name": "plans",
@@ -415,6 +415,176 @@
           "read_only": true,
           "destructive": false,
           "idempotent": true,
+          "needs_projects": true
+        }
+      },
+      "post": {
+        "operationId": "create_project",
+        "tags": [
+          "admin"
+        ],
+        "summary": "Turn a channel into a project",
+        "description": "Turns a channel you belong to into a project, from a template: its types, workflows, board columns, custom fields, labels and starter pages, in your language; you become its project admin. The project's name is the channel's. Needs projects:admin, a token without project or channel limits (403 outside_limits otherwise) and the org's Projects feature. A key in use or used before in the org, or a channel that already holds a project, is 422 validation (on `key`, on `channel`). Send an idempotency_key to make retries safe. Then describe_project shows the configuration.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              },
+              "example": {
+                "channel": "demo",
+                "key": "DEMO",
+                "template": "software_scrum",
+                "releases_enabled": true,
+                "idempotency_key": "00000000-0000-4000-8000-000000000063"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Nothing new: a replay of an earlier call (created: false).",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateProjectResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateProjectResponse"
+                },
+                "example": {
+                  "project": {
+                    "id": "00000000-0000-4000-8000-00000000000a",
+                    "key": "DEMO",
+                    "name": "demo",
+                    "channel": {
+                      "id": "00000000-0000-4000-8000-00000000000b",
+                      "name": "demo"
+                    },
+                    "archived": false,
+                    "template_key": "software_scrum",
+                    "sprints_enabled": true,
+                    "releases_enabled": true,
+                    "estimate_scale": "points",
+                    "item_counts": {
+                      "not_started": 0,
+                      "started": 0,
+                      "done": 0,
+                      "canceled": 0
+                    }
+                  },
+                  "created": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "projects:admin",
+        "x-buildit-required-scopes": [
+          "projects:admin"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "projects_off",
+          "scope_missing",
+          "outside_limits",
+          "forbidden",
+          "archived",
+          "not_found",
+          "idempotency_conflict",
+          "body_too_large",
+          "validation",
+          "ambiguous",
+          "rate_limited",
+          "internal",
+          "unavailable"
+        ],
+        "x-buildit-hints": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": false,
           "needs_projects": true
         }
       }
@@ -5622,6 +5792,178 @@
           "idempotent": true,
           "needs_projects": false
         }
+      },
+      "post": {
+        "operationId": "create_channel",
+        "tags": [
+          "admin"
+        ],
+        "summary": "Create a channel",
+        "description": "A public or private channel in the org. You create it and are its first member; `members` adds other people, as the app lets a member add them. Needs projects:admin and a token without project or channel limits (403 outside_limits otherwise); it works whether or not the org has Projects. A name taken in the org (ignoring case) is 422 validation on `name`. Send an idempotency_key to make retries safe: a retry answers the channel with created: false and adds listed people still missing. Turn it into a project with create_project.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChannelRequest"
+              },
+              "example": {
+                "name": "demo",
+                "description": "The demo app's work.",
+                "visibility": "private",
+                "members": [
+                  "sam@example.com"
+                ],
+                "idempotency_key": "00000000-0000-4000-8000-000000000063"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Nothing new: a replay of an earlier call (created: false).",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateChannelResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateChannelResponse"
+                },
+                "example": {
+                  "channel": {
+                    "id": "00000000-0000-4000-8000-00000000000b",
+                    "name": "demo",
+                    "description": "The demo app's work.",
+                    "visibility": "private",
+                    "is_org_wide": false,
+                    "is_archived": false,
+                    "project": null,
+                    "last_message_at": null
+                  },
+                  "members": [
+                    {
+                      "id": "00000000-0000-4000-8000-000000000001",
+                      "display_name": "Ana Ruiz",
+                      "email": "ana@example.com"
+                    },
+                    {
+                      "id": "00000000-0000-4000-8000-000000000002",
+                      "display_name": "Sam Lee",
+                      "email": "sam@example.com"
+                    }
+                  ],
+                  "created": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "projects:admin",
+        "x-buildit-required-scopes": [
+          "projects:admin"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "scope_missing",
+          "outside_limits",
+          "forbidden",
+          "not_found",
+          "idempotency_conflict",
+          "body_too_large",
+          "validation",
+          "ambiguous",
+          "rate_limited",
+          "internal",
+          "unavailable"
+        ],
+        "x-buildit-hints": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": false,
+          "needs_projects": false
+        }
       }
     },
     "/v1/channels/{channel}/messages": {
@@ -7487,6 +7829,15 @@
           "name"
         ]
       },
+      "ChannelName": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100,
+        "description": "1–100 characters, trimmed. Channel names are unique in an org, ignoring case.",
+        "examples": [
+          "demo"
+        ]
+      },
       "ChannelRef": {
         "type": "string",
         "minLength": 1,
@@ -7495,6 +7846,14 @@
         "examples": [
           "demo"
         ]
+      },
+      "ChannelVisibility": {
+        "type": "string",
+        "enum": [
+          "public",
+          "private"
+        ],
+        "description": "public: the org's members (not guests) can find and join it; private: only the people in it see it."
       },
       "Color": {
         "type": "string",
@@ -7625,6 +7984,63 @@
           "completed_points",
           "carried_count",
           "carried_to"
+        ]
+      },
+      "CreateChannelRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/ChannelName"
+          },
+          "description": {
+            "description": "At most 1000 characters; blank means none.",
+            "type": "string",
+            "maxLength": 1000
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ChannelVisibility"
+          },
+          "members": {
+            "description": "People to add besides you (the creator joins it): emails, display names or uuids of the org's active members, guests included; at most 50. An unknown person is 404 not_found and nothing is created.",
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserRef"
+            }
+          },
+          "idempotency_key": {
+            "description": "A random uuid of yours. Sending the same create again returns the first result (created: false) instead of creating twice. Items and pages use it as their id, comments as the message id.",
+            "$ref": "#/components/schemas/Uuid"
+          }
+        },
+        "required": [
+          "name",
+          "visibility"
+        ]
+      },
+      "CreateChannelResponse": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "description": "The channel; `project` is null until it is turned into a project.",
+            "$ref": "#/components/schemas/Channel"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/User"
+            },
+            "description": "The channel's members after the call, by display name."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "false: an earlier call with the same idempotency_key created it."
+          }
+        },
+        "required": [
+          "channel",
+          "members",
+          "created"
         ]
       },
       "CreateItemRequest": {
@@ -7912,6 +8328,70 @@
           "action",
           "preview",
           "expires_at"
+        ]
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "description": "The channel to turn into a project: its uuid or name. You must be a member; it must not be archived or hold a project already.",
+            "$ref": "#/components/schemas/ChannelRef"
+          },
+          "key": {
+            "$ref": "#/components/schemas/NewProjectKey"
+          },
+          "template": {
+            "default": "software_scrum",
+            "$ref": "#/components/schemas/ProjectTemplate"
+          },
+          "sprints_enabled": {
+            "description": "Default: the template's.",
+            "type": "boolean"
+          },
+          "releases_enabled": {
+            "description": "Default: the template's.",
+            "type": "boolean"
+          },
+          "estimate_scale": {
+            "description": "Default: the template's.",
+            "$ref": "#/components/schemas/EstimateScale"
+          },
+          "estimate_values": {
+            "description": "The points allowed, with estimate_scale points (default 1, 2, 3, 5, 8, 13).",
+            "minItems": 1,
+            "maxItems": 30,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 9999.99
+            }
+          },
+          "idempotency_key": {
+            "description": "A random uuid of yours. Sending the same create again returns the first result (created: false) instead of creating twice. Items and pages use it as their id, comments as the message id.",
+            "$ref": "#/components/schemas/Uuid"
+          }
+        },
+        "required": [
+          "channel",
+          "key"
+        ]
+      },
+      "CreateProjectResponse": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "The project as list_projects shows it; its name is the channel's.",
+            "$ref": "#/components/schemas/ProjectSummary"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "false: an earlier call with the same idempotency_key created it."
+          }
+        },
+        "required": [
+          "project",
+          "created"
         ]
       },
       "CreateReleaseRequest": {
@@ -11617,6 +12097,14 @@
           "In progress"
         ]
       },
+      "NewProjectKey": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9]{1,5}$",
+        "description": "The new project's key: 2–6 characters, a letter then letters or digits; sent in any case, stored in upper case. It must be free in the org: not another project's key, current or former, nor the initiative prefix (422 validation on `key` otherwise).",
+        "examples": [
+          "DEMO"
+        ]
+      },
       "OrgRole": {
         "type": "string",
         "enum": [
@@ -12195,6 +12683,17 @@
           "estimate_scale",
           "item_counts"
         ]
+      },
+      "ProjectTemplate": {
+        "type": "string",
+        "enum": [
+          "software_scrum",
+          "software_kanban",
+          "design",
+          "ops",
+          "marketing"
+        ],
+        "description": "What a new project starts with (types, workflows, board, fields, labels, starter pages and features): software_scrum (sprints, story points), software_kanban (a board and releases), design, ops (requests and incidents) or marketing."
       },
       "ProjectType": {
         "type": "object",
@@ -13811,7 +14310,7 @@
       ]
     },
     "projects:admin": {
-      "description": "Propose and apply configuration changes: workflows, work types, custom fields and labels. Always through a plan; the user must still be a project admin (or an org admin, for some work type changes).",
+      "description": "Propose and apply configuration changes: workflows, work types, custom fields and labels. Always through a plan; the user must still be a project admin (or an org admin, for some work type changes). With a token that has no project or channel limits, also create channels and turn channels into projects.",
       "implies": [
         "projects:write"
       ]
@@ -13882,7 +14381,7 @@
     },
     "outside_limits": {
       "status": 403,
-      "when": "The token is limited to some projects or channels, and the call reaches outside them: a project or an item named by key, or a channel. An item named by uuid outside the limits is 404 not_found instead, because the token can't see it.",
+      "when": "The token is limited to some projects or channels, and the call reaches outside them: a project or an item named by key, or a channel. An item named by uuid outside the limits is 404 not_found instead, because the token can't see it. Creating a channel or a project needs a token without limits, so a limited token gets this error there too.",
       "message": "This token is limited to certain projects and channels. GET /v1/me lists them.",
       "hint": "Call get_me to see the projects and channels this token may reach."
     },
@@ -13918,7 +14417,7 @@
     },
     "idempotency_conflict": {
       "status": 409,
-      "when": "The idempotency_key was already used for something else (another item, comment or page).",
+      "when": "The idempotency_key was already used for something else (another item, comment, page, channel or project).",
       "message": "That idempotency_key was used for something else. Send a new random uuid.",
       "hint": "Send a new random uuid as idempotency_key."
     },

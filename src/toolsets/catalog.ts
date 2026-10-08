@@ -39,6 +39,7 @@ import {
   proposeWorkTypeChangeTool,
 } from '../tools/plans.js';
 import { describeProjectTool, findUsersTool, listProjectsTool } from '../tools/projects.js';
+import { createChannelTool, createProjectTool } from '../tools/setup.js';
 import { whoamiTool } from '../tools/whoami.js';
 import type { PromptDefinition, ResourceDefinition, ToolDefinition } from './registry.js';
 
@@ -76,6 +77,8 @@ export const CATALOG: readonly ToolDefinition[] = [
   readChannelTool,
   readThreadTool,
   // admin
+  createChannelTool,
+  createProjectTool,
   getWorkflowTool,
   listWorkTypesTool,
   proposeWorkflowChangeTool,

@@ -39,7 +39,7 @@ import {
   DEGRADED_LIST_TTL_MS,
   listedByPolicy,
   resolveListedTools,
-  scopesFromApi,
+  identityFromApi,
 } from '../server.js';
 import { CATALOG } from '../toolsets/catalog.js';
 import type { ToolDefinition, ToolPolicy } from '../toolsets/registry.js';
@@ -109,7 +109,7 @@ export function createHttpApp(
     excludeTools: config.excludeTools,
   };
 
-  // The token's scopes, briefly, so listing doesn't read /v1/me on every request.
+  // The token's scopes and limits, briefly, so listing doesn't read /v1/me on every request.
   const identities = new IdentityCache(options.identityCache);
 
   const handler = createMcpHandler(
@@ -134,10 +134,9 @@ export function createHttpApp(
       if (!extra.lists) {
         return createMcpServer({ ...listedByPolicy(catalog, policy), api, logger: reqLogger });
       }
-      const readScopes = scopesFromApi(api);
+      const readIdentity = identityFromApi(api);
       const listed = await resolveListedTools(
-        async () =>
-          (await identities.get(token, async () => ({ scopes: await readScopes() }))).scopes,
+        () => identities.get(token, readIdentity),
         catalog,
         policy,
         reqLogger,

@@ -143,6 +143,19 @@ describe('selectTools', () => {
     ).not.toContain('apply_plan');
   });
 
+  it('hides a tool that needs a token without limits from a limited token, when known', () => {
+    const creator = { ...TEST_CATALOG[4]!, name: 'create_channel', unlimitedOnly: true };
+    const catalog = [...TEST_CATALOG, creator];
+    expect(names(selectTools(catalog, policy(), ALL_SCOPES))).toContain('create_channel');
+    expect(names(selectTools(catalog, policy(), ALL_SCOPES, false))).toContain('create_channel');
+    const limited = names(selectTools(catalog, policy(), ALL_SCOPES, true));
+    expect(limited).not.toContain('create_channel');
+    // Other tools stay listed for a limited token.
+    expect(limited).toContain('create_item');
+    // Without the identity (scopes null), limits are unknown: the API decides.
+    expect(names(selectTools(catalog, policy(), null, true))).toContain('create_channel');
+  });
+
   it('reports unknown names in the exclude list', () => {
     expect(unknownToolNames(CATALOG, ['whoami', 'not_a_tool'])).toEqual(['not_a_tool']);
   });

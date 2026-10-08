@@ -1,6 +1,7 @@
 /**
- * The token's identity (its scopes, from GET /v1/me), which decides the
- * tool list, and what to do when it can't be read.
+ * The token's identity (its scopes, and whether it has project or channel
+ * limits, from GET /v1/me), which decides the tool list, and what to do when
+ * it can't be read.
  *
  * - A definite refusal of the token (invalid, revoked, expired, suspended,
  *   agent access off) lists only whoami, so the agent can call it and tell
@@ -13,7 +14,7 @@
  * In HTTP mode, IdentityCache keeps each token's scopes in memory for a
  * short time, so listing tools doesn't read /v1/me on every request. It is
  * keyed by a keyed hash of the token (never the token itself), holds only
- * the scopes, is bounded, and drops an entry on any auth error. It only
+ * the scopes and whether the token is limited, is bounded, and drops an entry on any auth error. It only
  * shapes tool lists; it never authorizes anything.
  */
 import { createHmac, randomBytes } from 'node:crypto';
@@ -49,9 +50,11 @@ export function invalidatesIdentity(err: ApiError): boolean {
   return isTokenRefused(err) || err.code === 'scope_missing' || err.code === 'outside_limits';
 }
 
-/** What is cached per token: only its scopes. */
+/** What is cached per token: only its scopes, and whether it has project or channel limits. */
 export interface KnownIdentity {
   scopes: readonly string[];
+  /** True when the token is limited to chosen projects or channels. */
+  limited: boolean;
 }
 
 export interface IdentityCacheOptions {
@@ -109,7 +112,7 @@ export class IdentityCache {
         // An eviction during the load drops its result.
         if (this.inflight.get(key) === loading) {
           this.inflight.delete(key);
-          this.store(key, { scopes: [...value.scopes] });
+          this.store(key, { scopes: [...value.scopes], limited: value.limited });
         }
         return value;
       },

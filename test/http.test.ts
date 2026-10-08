@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { parseCli, type Config } from '../src/config.js';
 import { createLogger } from '../src/log.js';
 import { startHttp, type HttpServerHandle } from '../src/transports/http.js';
-import { FakeApi, TOKENS } from './support/fake-api.js';
+import { CHANNELS, FakeApi, sampleIdentity, TOKENS } from './support/fake-api.js';
 import { TEST_CATALOG } from './support/test-tools.js';
 
 let api: FakeApi;
@@ -327,7 +327,7 @@ describe('HTTP mode: every toolset', () => {
     };
     try {
       const all = await open(TOKENS.full, 'all', true);
-      expect(await toolNames(all)).toHaveLength(38);
+      expect(await toolNames(all)).toHaveLength(40);
       expect(all.getInstructions()).toContain('apply_plan');
       const templates = (await all.listResourceTemplates()).resourceTemplates;
       expect(templates.map((t) => t.uriTemplate)).toEqual([
@@ -350,6 +350,17 @@ describe('HTTP mode: every toolset', () => {
         ],
         pages: ['create_page', 'get_page', 'list_pages', 'update_page'],
         chat: ['list_channels', 'read_channel', 'read_thread'],
+        admin: [
+          'create_channel',
+          'create_project',
+          'get_workflow',
+          'list_work_types',
+          'propose_field_change',
+          'propose_label_change',
+          'propose_work_type_change',
+          'propose_workflow_change',
+          'apply_plan',
+        ],
         destructive: [
           'apply_plan',
           'propose_archive_status',
@@ -361,6 +372,14 @@ describe('HTTP mode: every toolset', () => {
       for (const [toolset, expected] of Object.entries(perToolset)) {
         const c = await open(TOKENS.full, toolset, false);
         expect(await toolNames(c), toolset).toEqual(expected);
+      }
+      // A token limited to some channels doesn't see the tools that create them (cached as such).
+      const limited = 'buildit_pat_test_http_limited';
+      api.identities[limited] = sampleIdentity(['projects:admin']);
+      api.identities[limited].token.limits.channels = [{ id: CHANNELS.general, name: 'general' }];
+      for (let i = 0; i < 2; i++) {
+        const c = await open(limited, 'admin', false);
+        expect(await toolNames(c)).toEqual(perToolset.admin?.slice(2));
       }
       // A reader sees no planning writes and nothing of the other toolsets.
       const reader = await open(TOKENS.read, 'all', false);

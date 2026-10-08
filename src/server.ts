@@ -17,7 +17,7 @@ import {
 
 import { ApiError, type ApiClient } from './api/client.js';
 import { describeApiError, ToolInputError, toolErrorResult } from './errors.js';
-import { isTokenRefused, isTransientFailure } from './identity.js';
+import { isTokenRefused, isTransientFailure, type KnownIdentity } from './identity.js';
 import type { Logger } from './log.js';
 import { PROMPT_CATALOG, RESOURCE_CATALOG } from './toolsets/catalog.js';
 import {
@@ -285,13 +285,21 @@ export interface ListedTools {
   identity: IdentityState;
   /** The token's scopes, when known (for logs and tests). */
   scopes?: string[];
+  /** Whether the token has project or channel limits, when known. */
+  limited?: boolean;
   /** When /v1/me failed: its code, and how long the API asked to wait, if it said. */
   error?: { code: string; retryAfterMs?: number };
 }
 
-/** Reads the token's scopes from GET /v1/me. */
-export function scopesFromApi(api: ApiClient): () => Promise<readonly string[]> {
-  return async () => (await api.getMe()).token.scopes;
+/** Reads the token's scopes and whether it has project or channel limits from GET /v1/me. */
+export function identityFromApi(api: ApiClient): () => Promise<KnownIdentity> {
+  return async () => {
+    const { token } = await api.getMe();
+    return {
+      scopes: token.scopes,
+      limited: token.limits.projects !== null || token.limits.channels !== null,
+    };
+  };
 }
 
 /** Everything the configuration allows, without the scope rule (the API checks scopes). */
@@ -303,24 +311,26 @@ export function listedByPolicy(
 }
 
 /**
- * The tools to list for a caller: reads the token's scopes (`loadScopes`,
- * GET /v1/me or a cache of it) and applies every rule. When that fails, see
- * IdentityState: a passing failure lists what the configuration allows; a
- * refused token lists only tools that need no scope.
+ * The tools to list for a caller: reads the token's identity
+ * (`loadIdentity`, GET /v1/me or a cache of it) and applies every rule. When
+ * that fails, see IdentityState: a passing failure lists what the
+ * configuration allows; a refused token lists only tools that need no scope.
  */
 export async function resolveListedTools(
-  loadScopes: () => Promise<readonly string[]>,
+  loadIdentity: () => Promise<KnownIdentity>,
   catalog: readonly ToolDefinition[],
   policy: ToolPolicy,
   logger: Logger,
 ): Promise<ListedTools> {
   try {
-    const scopes = [...(await loadScopes())];
+    const known = await loadIdentity();
+    const scopes = [...known.scopes];
     return {
-      tools: selectTools(catalog, policy, scopes),
+      tools: selectTools(catalog, policy, scopes, known.limited),
       ...selectExtras(policy, scopes),
       identity: 'known',
       scopes,
+      limited: known.limited,
     };
   } catch (err) {
     const code =

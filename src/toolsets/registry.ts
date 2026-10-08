@@ -5,11 +5,13 @@
  *   1. its toolset is enabled (config, or the X-Buildit-Toolsets header);
  *   2. read-only mode is off, or the tool is read-only;
  *   3. its name is not in the exclude list;
- *   4. the token has every scope the tool declares (from GET /v1/me).
+ *   4. the token has every scope the tool declares (from GET /v1/me);
+ *   5. the tool doesn't need a token without limits, or the token has none
+ *      (GET /v1/me shows no project or channel limits).
  *
- * Rules 1 to 3 are the operator's policy and also apply to calls. Rule 4 only
- * shapes the list, so an agent never sees tools its token can't use; the API
- * still checks scopes on every call.
+ * Rules 1 to 3 are the operator's policy and also apply to calls. Rules 4
+ * and 5 only shape the list, so an agent never sees tools its token can't
+ * use; the API still checks scopes and limits on every call.
  *
  * One exception: a tool marked `withPlans` (apply_plan) is listed whenever
  * any propose_* tool is, whatever its own toolset, since its scope is the
@@ -91,6 +93,11 @@ export interface ToolDefinition<
   scopes: readonly Scope[];
   /** Listed whenever a propose_* tool is listed, instead of by its toolset and scopes. */
   withPlans?: boolean;
+  /**
+   * Needs a token without project or channel limits (the API answers a
+   * limited token with outside_limits), so it isn't listed for one.
+   */
+  unlimitedOnly?: boolean;
   annotations: ToolHints;
   inputSchema: I;
   outputSchema: O;
@@ -124,11 +131,15 @@ function compareTools(a: ToolDefinition, b: ToolDefinition): number {
  *
  * @param grantedScopes the token's scopes from /v1/me, or `null` to skip the
  *   scope rule (used when serving a call: the API checks scopes itself).
+ * @param limited whether /v1/me shows project or channel limits on the token:
+ *   tools marked `unlimitedOnly` are then left out (ignored when
+ *   `grantedScopes` is null, since the identity isn't known).
  */
 export function selectTools(
   catalog: readonly ToolDefinition[],
   policy: ToolPolicy,
   grantedScopes: Iterable<string> | null,
+  limited = false,
 ): ToolDefinition[] {
   const toolsets = new Set(policy.toolsets);
   const excluded = new Set(policy.excludeTools);
@@ -139,7 +150,8 @@ export function selectTools(
     .filter((tool) => tool.withPlans !== true)
     .filter((tool) => toolsets.has(tool.toolset))
     .filter(allowed)
-    .filter((tool) => scopes === null || tool.scopes.every((s) => scopes.has(s)));
+    .filter((tool) => scopes === null || tool.scopes.every((s) => scopes.has(s)))
+    .filter((tool) => scopes === null || !limited || tool.unlimitedOnly !== true);
   const proposes = listed.some((tool) => tool.name.startsWith(PROPOSE_PREFIX));
   const companions = proposes
     ? catalog.filter((tool) => tool.withPlans === true).filter(allowed)

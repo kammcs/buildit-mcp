@@ -20,7 +20,7 @@ const PAGE_BUDGET_CHARS = 30_000;
 const MIN_MESSAGE_CHARS = 300;
 const MAX_MESSAGE_CHARS = 8_000;
 
-const ChannelOut = z.object({
+export const ChannelOut = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().nullable().describe('People-written; wrapped as untrusted content.'),
@@ -30,9 +30,9 @@ const ChannelOut = z.object({
   project: z.string().nullable().describe("The project's key, for a project channel."),
   last_message_at: z.string().nullable(),
 });
-type ChannelOut = z.infer<typeof ChannelOut>;
+export type ChannelOut = z.infer<typeof ChannelOut>;
 
-function channelOut(c: Channel): ChannelOut {
+export function channelOut(c: Channel): ChannelOut {
   return {
     id: c.id,
     name: sanitizeLabel(c.name, 100),

@@ -17,7 +17,7 @@ import {
   isTransientFailure,
 } from '../src/identity.js';
 import { createLogger } from '../src/log.js';
-import { resolveListedTools, scopesFromApi } from '../src/server.js';
+import { resolveListedTools, identityFromApi } from '../src/server.js';
 import { CATALOG } from '../src/toolsets/catalog.js';
 import { startHttp, type HttpServerHandle } from '../src/transports/http.js';
 import { IDENTITY_REFRESH_MS, startStdio } from '../src/transports/stdio.js';
@@ -130,7 +130,7 @@ describe('failures of /v1/me', () => {
   it('lists the tools the configuration allows when /v1/me is rate limited', async () => {
     rateLimitMe();
     const listed = await resolveListedTools(
-      scopesFromApi(client(TOKENS.read)),
+      identityFromApi(client(TOKENS.read)),
       CATALOG,
       { ...policy, excludeTools: ['rank_item'] },
       quiet,
@@ -148,7 +148,7 @@ describe('failures of /v1/me', () => {
       body: { error: { code: 'unavailable', message: 'Down.', details: {} } },
     });
     const down = await resolveListedTools(
-      scopesFromApi(client(TOKENS.read)),
+      identityFromApi(client(TOKENS.read)),
       CATALOG,
       policy,
       quiet,
@@ -156,7 +156,9 @@ describe('failures of /v1/me', () => {
     expect(down.identity).toBe('unverified');
     expect(down.tools).toHaveLength(DEFAULT_TOOLS.length);
     const unreachable = await resolveListedTools(
-      scopesFromApi(new ApiClient({ baseUrl: 'http://127.0.0.1:9/agent-api', token: TOKENS.read })),
+      identityFromApi(
+        new ApiClient({ baseUrl: 'http://127.0.0.1:9/agent-api', token: TOKENS.read }),
+      ),
       CATALOG,
       policy,
       quiet,
@@ -168,7 +170,7 @@ describe('failures of /v1/me', () => {
   it('keeps read-only mode when listing without scopes', async () => {
     rateLimitMe();
     const listed = await resolveListedTools(
-      scopesFromApi(client(TOKENS.full)),
+      identityFromApi(client(TOKENS.full)),
       CATALOG,
       { ...policy, readOnly: true },
       quiet,
@@ -191,7 +193,7 @@ describe('failures of /v1/me', () => {
             : {};
       api.enqueueError('/v1/me', code, details);
       const listed = await resolveListedTools(
-        scopesFromApi(client(TOKENS.full)),
+        identityFromApi(client(TOKENS.full)),
         CATALOG,
         policy,
         quiet,
@@ -203,7 +205,7 @@ describe('failures of /v1/me', () => {
       ).toEqual(['whoami']);
     }
     const unknown = await resolveListedTools(
-      scopesFromApi(client(TOKENS.unknown)),
+      identityFromApi(client(TOKENS.unknown)),
       CATALOG,
       policy,
       quiet,
@@ -220,10 +222,16 @@ describe('the identity cache', () => {
     let loads = 0;
     const load = () => {
       loads++;
-      return Promise.resolve({ scopes: ['projects:read'] });
+      return Promise.resolve({ scopes: ['projects:read'], limited: false });
     };
-    expect(await cache.get(TOKENS.read, load)).toEqual({ scopes: ['projects:read'] });
-    expect(await cache.get(TOKENS.read, load)).toEqual({ scopes: ['projects:read'] });
+    expect(await cache.get(TOKENS.read, load)).toEqual({
+      scopes: ['projects:read'],
+      limited: false,
+    });
+    expect(await cache.get(TOKENS.read, load)).toEqual({
+      scopes: ['projects:read'],
+      limited: false,
+    });
     expect(loads).toBe(1);
     now += 29_999;
     await cache.get(TOKENS.read, load);
@@ -243,32 +251,38 @@ describe('the identity cache', () => {
   it('shares one load between concurrent reads, and never caches a failure', async () => {
     const cache = new IdentityCache();
     let loads = 0;
-    let release: (v: { scopes: string[] }) => void = () => undefined;
+    let release: (v: { scopes: string[]; limited: boolean }) => void = () => undefined;
     const slow = () => {
       loads++;
-      return new Promise<{ scopes: string[] }>((resolve) => (release = resolve));
+      return new Promise<{ scopes: string[]; limited: boolean }>((resolve) => (release = resolve));
     };
     const both = Promise.all([cache.get('a', slow), cache.get('a', slow)]);
-    release({ scopes: ['chat:read'] });
-    expect(await both).toEqual([{ scopes: ['chat:read'] }, { scopes: ['chat:read'] }]);
+    release({ scopes: ['chat:read'], limited: false });
+    expect(await both).toEqual([
+      { scopes: ['chat:read'], limited: false },
+      { scopes: ['chat:read'], limited: false },
+    ]);
     expect(loads).toBe(1);
 
     const failing = () => Promise.reject(err('rate_limited', 429));
     await expect(cache.get('b', failing)).rejects.toThrow('rate_limited');
     expect(cache.size).toBe(1);
-    expect(await cache.get('b', () => Promise.resolve({ scopes: [] }))).toEqual({ scopes: [] });
+    expect(await cache.get('b', () => Promise.resolve({ scopes: [], limited: false }))).toEqual({
+      scopes: [],
+      limited: false,
+    });
   });
 
   it('forgets a token on eviction, including a load in flight', async () => {
     const cache = new IdentityCache();
-    await cache.get('a', () => Promise.resolve({ scopes: ['projects:read'] }));
+    await cache.get('a', () => Promise.resolve({ scopes: ['projects:read'], limited: false }));
     cache.evict('a');
     expect(cache.size).toBe(0);
 
-    let release: (v: { scopes: string[] }) => void = () => undefined;
+    let release: (v: { scopes: string[]; limited: boolean }) => void = () => undefined;
     const pending = cache.get('b', () => new Promise((resolve) => (release = resolve)));
     cache.evict('b');
-    release({ scopes: ['projects:write'] });
+    release({ scopes: ['projects:write'], limited: false });
     await pending;
     expect(cache.size).toBe(0);
   });
@@ -276,18 +290,18 @@ describe('the identity cache', () => {
   it('holds at most maxEntries tokens, dropping the oldest', async () => {
     const cache = new IdentityCache({ maxEntries: 3 });
     for (const t of ['a', 'b', 'c', 'd'])
-      await cache.get(t, () => Promise.resolve({ scopes: [t] }));
+      await cache.get(t, () => Promise.resolve({ scopes: [t], limited: false }));
     expect(cache.size).toBe(3);
     let loaded = false;
     await cache.get('a', () => {
       loaded = true;
-      return Promise.resolve({ scopes: ['a'] });
+      return Promise.resolve({ scopes: ['a'], limited: false });
     });
     expect(loaded).toBe(true);
     loaded = false;
     await cache.get('d', () => {
       loaded = true;
-      return Promise.resolve({ scopes: ['d'] });
+      return Promise.resolve({ scopes: ['d'], limited: false });
     });
     expect(loaded).toBe(false);
   });

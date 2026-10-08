@@ -75,6 +75,8 @@ const ALL_TOOLS = [
   'read_channel',
   'read_thread',
   // admin
+  'create_channel',
+  'create_project',
   'get_workflow',
   'list_work_types',
   'propose_field_change',
@@ -127,7 +129,7 @@ describe('the tool list', () => {
   it('has every tool with every toolset on and every scope', async () => {
     const c = await client(TOKENS.full);
     expect(await names(c)).toEqual(ALL_TOOLS);
-    expect(ALL_TOOLS).toHaveLength(38);
+    expect(ALL_TOOLS).toHaveLength(40);
   });
 
   it('keeps admin and destructive off by default, even for a token with their scopes', async () => {
@@ -136,6 +138,8 @@ describe('the tool list', () => {
     for (const name of listed) expect(name).not.toMatch(/^(propose_|apply_plan|get_workflow)/);
     const admin = await client(TOKENS.full, { toolsets: ['admin'] });
     expect(await names(admin)).toEqual([
+      'create_channel',
+      'create_project',
       'get_workflow',
       'list_work_types',
       'propose_field_change',

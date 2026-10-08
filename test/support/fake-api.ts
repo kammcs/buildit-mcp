@@ -184,6 +184,13 @@ export interface FakeProject {
   workflowId: string;
   /** false: any move between statuses, with the rules of `allowed`. Default true. */
   restrictTransitions?: boolean;
+  /** A project made with create_project: its template and settings (the seed's are fixed). */
+  settings?: {
+    template: string;
+    sprints: boolean;
+    releases: boolean;
+    scale: 'none' | 'points' | 'tshirt';
+  };
 }
 
 export interface FakeSprint {
@@ -222,6 +229,8 @@ export interface FakeChannel {
   memberIds: string[];
   /** Direct messages are never served. */
   direct: boolean;
+  /** Who made it with create_channel (a replay must be theirs). */
+  createdById?: string;
 }
 
 export interface FakeMessage {
@@ -420,6 +429,18 @@ function projectConfig(key: 'DEMO' | 'OPS', name: string, members: string[]): Fa
     workflowId: uid(Number.parseInt(PROJECT_IDS[key].slice(-4), 16) + 60),
   };
 }
+
+/** What each template starts with in the fake (invented settings). */
+const TEMPLATE_DEFAULTS: Record<
+  string,
+  { sprints: boolean; releases: boolean; scale: 'none' | 'points' | 'tshirt' }
+> = {
+  software_scrum: { sprints: true, releases: false, scale: 'points' },
+  software_kanban: { sprints: false, releases: true, scale: 'none' },
+  design: { sprints: false, releases: false, scale: 'none' },
+  ops: { sprints: false, releases: false, scale: 'none' },
+  marketing: { sprints: false, releases: false, scale: 'none' },
+};
 
 /** Channel, page and message ids of the seed. */
 export const CHANNELS = {
@@ -1516,6 +1537,10 @@ export class FakeApi {
         return this.getWorkflow(call);
       case 'list_work_types':
         return this.listWorkTypes(call);
+      case 'create_channel':
+        return this.createChannel(call);
+      case 'create_project':
+        return this.createProject(call);
       case 'create_plan':
         return this.createPlan(call);
       case 'apply_plan':
@@ -1540,12 +1565,12 @@ export class FakeApi {
   private projectSummary(p: FakeProject): ProjectSummary {
     return {
       ...this.projectBrief(p),
-      channel: { id: uid(Number.parseInt(p.id.slice(-4), 16) + 50), name: p.name },
+      channel: { id: p.channelId, name: p.name },
       archived: false,
-      template_key: 'software',
-      sprints_enabled: true,
-      releases_enabled: true,
-      estimate_scale: 'points',
+      template_key: p.settings?.template ?? 'software',
+      sprints_enabled: p.settings?.sprints ?? true,
+      releases_enabled: p.settings?.releases ?? true,
+      estimate_scale: p.settings?.scale ?? 'points',
       item_counts: this.counts(p),
     };
   }
@@ -2942,6 +2967,187 @@ export class FakeApi {
         })),
     }));
     return { status: 200, body: { items: types } };
+  }
+
+  // -------------------------------------------------------------------------
+  // Creating channels and projects
+  // -------------------------------------------------------------------------
+
+  /** Creating channels and projects needs a token without limits. */
+  private checkUnlimited(identity: FakeIdentity): void {
+    const { projects, channels } = identity.token.limits;
+    if (projects !== null || channels !== null) {
+      throw new FakeError('outside_limits', {
+        kind: projects !== null ? 'project' : 'channel',
+        ref: '(new)',
+      });
+    }
+  }
+
+  /** Whether an id is already used by something of another kind than `own`. */
+  private idUsed(id: string, own: 'channel' | 'project'): boolean {
+    return (
+      this.store.items.some((i) => i.id === id) ||
+      this.store.comments.some((c) => c.id === id) ||
+      this.store.pages.some((x) => x.id === id) ||
+      (own !== 'channel' && this.store.channels.some((c) => c.id === id)) ||
+      (own !== 'project' && this.store.projects.some((x) => x.id === id))
+    );
+  }
+
+  /** A person of the org, by email, id or display name. */
+  private orgUser(ref: string): string {
+    const users = this.store.users;
+    const byEmail = users.find((u) => u.email !== null && lower(u.email) === lower(ref));
+    if (byEmail) return byEmail.id;
+    const byId = users.find((u) => u.id === lower(ref));
+    if (byId) return byId.id;
+    const byName = users.filter((u) => lower(u.display_name) === lower(ref));
+    if (byName.length === 1) return byName[0]!.id;
+    if (byName.length > 1) {
+      throw new FakeError('ambiguous', {
+        kind: 'user',
+        ref,
+        candidates: byName.map((u) => ({ id: u.id, label: u.email ?? u.id })),
+      });
+    }
+    throw new FakeError('not_found', { kind: 'user', ref });
+  }
+
+  private createChannel({ identity, body }: Call): Handled {
+    this.checkUnlimited(identity);
+    const b = body as {
+      name: string;
+      description?: string;
+      visibility: 'public' | 'private';
+      members?: string[];
+      idempotency_key?: string;
+    };
+    const name = b.name.trim();
+    const memberIds = [...new Set((b.members ?? []).map((ref) => this.orgUser(ref)))];
+    const respond = (c: FakeChannel, status: number): Handled => ({
+      status,
+      body: {
+        channel: this.channelOut(c),
+        members: c.memberIds.map((id) => this.user(id)),
+        created: status === 201,
+      },
+    });
+    const id = b.idempotency_key ? lower(b.idempotency_key) : randomUUID();
+    const existing = this.store.channels.find((c) => c.id === id);
+    if (existing) {
+      if (
+        existing.createdById !== identity.user.id ||
+        lower(existing.name) !== lower(name) ||
+        existing.visibility !== b.visibility
+      ) {
+        throw new FakeError('idempotency_conflict', { idempotency_key: b.idempotency_key });
+      }
+      for (const m of memberIds) if (!existing.memberIds.includes(m)) existing.memberIds.push(m);
+      return respond(existing, 200);
+    }
+    if (this.idUsed(id, 'channel')) {
+      throw new FakeError('idempotency_conflict', { idempotency_key: b.idempotency_key });
+    }
+    if (
+      name === '' ||
+      this.store.channels.some((c) => !c.direct && lower(c.name) === lower(name))
+    ) {
+      throw new FakeError('validation', {
+        fields: [{ path: 'name', message: 'A channel with this name already exists.' }],
+      });
+    }
+    const channel: FakeChannel = {
+      id,
+      name,
+      description: b.description?.trim() ? b.description : null,
+      visibility: b.visibility,
+      isOrgWide: false,
+      isArchived: false,
+      projectKey: null,
+      memberIds: [identity.user.id, ...memberIds.filter((m) => m !== identity.user.id)],
+      direct: false,
+      createdById: identity.user.id,
+    };
+    this.store.channels.push(channel);
+    return respond(channel, 201);
+  }
+
+  private createProject({ identity, body }: Call): Handled {
+    this.checkUnlimited(identity);
+    const b = body as {
+      channel: string;
+      key: string;
+      template?: string;
+      sprints_enabled?: boolean;
+      releases_enabled?: boolean;
+      estimate_scale?: 'none' | 'points' | 'tshirt';
+      estimate_values?: number[];
+      idempotency_key?: string;
+    };
+    const key = b.key.toUpperCase();
+    const id = b.idempotency_key ? lower(b.idempotency_key) : randomUUID();
+    const existing = this.store.projects.find((x) => x.id === id);
+    if (existing) {
+      const c = this.store.channels.find((x) => x.id === existing.channelId);
+      const sameChannel =
+        c !== undefined && (c.id === lower(b.channel) || lower(c.name) === lower(b.channel));
+      if (existing.key !== key || !sameChannel) {
+        throw new FakeError('idempotency_conflict', { idempotency_key: b.idempotency_key });
+      }
+      return { status: 200, body: { project: this.projectSummary(existing), created: false } };
+    }
+    if (this.idUsed(id, 'project')) {
+      throw new FakeError('idempotency_conflict', { idempotency_key: b.idempotency_key });
+    }
+    const c = this.channel(b.channel, identity);
+    if (c.isArchived) throw new FakeError('archived', { kind: 'channel', ref: b.channel });
+    if (c.isOrgWide) throw new FakeError('forbidden', { reason: 'admins_only' });
+    if (c.projectKey !== null) {
+      throw new FakeError('validation', {
+        fields: [{ path: 'channel', message: 'This channel already holds a project.' }],
+      });
+    }
+    if (this.store.projects.some((x) => x.key === key)) {
+      throw new FakeError('validation', {
+        fields: [{ path: 'key', message: 'This key is in use or was used before in the org.' }],
+      });
+    }
+    const template = b.template ?? 'software_scrum';
+    const defaults = TEMPLATE_DEFAULTS[template] ?? TEMPLATE_DEFAULTS.software_scrum!;
+    const scale = b.estimate_scale ?? defaults.scale;
+    if (b.estimate_values !== undefined && scale !== 'points') {
+      throw new FakeError('validation', {
+        fields: [{ path: 'estimate_values', message: 'Only with estimate_scale points.' }],
+      });
+    }
+    const base = projectConfig('DEMO', c.name, [...c.memberIds]);
+    const fresh = <T extends { id: string }>(xs: T[]): T[] =>
+      xs.map((x) => ({ ...x, id: nextId() }));
+    const project: FakeProject = {
+      ...base,
+      id,
+      key,
+      adminIds: [identity.user.id],
+      types: fresh(base.types),
+      statuses: fresh(base.statuses),
+      labels: fresh(base.labels),
+      fields: fresh(base.fields),
+      sprints: [],
+      releases: [],
+      estimateValues: b.estimate_values ?? [1, 2, 3, 5, 8, 13],
+      channelId: c.id,
+      workflowId: nextId(),
+      settings: {
+        template,
+        sprints: b.sprints_enabled ?? defaults.sprints,
+        releases: b.releases_enabled ?? defaults.releases,
+        scale,
+      },
+    };
+    this.store.projects.push(project);
+    c.projectKey = key;
+    return { status: 201, body: { project: this.projectSummary(project), created: true } };
   }
 
   // -------------------------------------------------------------------------

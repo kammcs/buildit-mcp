@@ -70,6 +70,7 @@ src/
   tools/pages.ts        list_pages, get_page, create_page, update_page
   tools/chat.ts         list_channels, read_channel, read_thread
   tools/plans.ts        get_workflow, list_work_types, the propose_* tools, apply_plan
+  tools/setup.ts        create_channel, create_project
   transports/stdio.ts   stdio: token from BUILDIT_TOKEN, identity read at startup and refreshed
   transports/http.ts    Streamable HTTP: stateless, Bearer per request, Host/Origin checks
 test/
@@ -89,7 +90,7 @@ Key rules the code relies on:
 
 - **stdout is the protocol in stdio mode.** Never write to it; log through `Logger` (stderr). ESLint forbids `console` in `src/`.
 - **Never log tokens or content.** Log codes, ids, statuses and durations; never titles, descriptions, comments, query strings or bodies. The logger scrubs tokens as a backstop, not as permission.
-- **Stateless.** Nothing about a caller survives the request (HTTP) or the connection (stdio), with one exception: `IdentityCache` (`src/identity.ts`) keeps each token's scopes for 30 seconds in HTTP mode, so listing tools doesn't read `/v1/me` every time. It is keyed by an HMAC of the token (never the token), holds only scopes, is bounded, and is evicted on any auth error. Add no other cache keyed by token.
+- **Stateless.** Nothing about a caller survives the request (HTTP) or the connection (stdio), with one exception: `IdentityCache` (`src/identity.ts`) keeps each token's scopes (and whether it has project or channel limits) for 30 seconds in HTTP mode, so listing tools doesn't read `/v1/me` every time. It is keyed by an HMAC of the token (never the token), holds only those, is bounded, and is evicted on any auth error. Add no other cache keyed by token.
 - **Tool descriptions are static text.** Never build them from server data.
 - **People-written text is wrapped.** Every tool, resource and plan preview that returns titles, descriptions, comments, pages, messages, goals or descriptions passes them through `wrapUntrusted()`; short labels (names, keys) go through `sanitizeLabel()`.
 - **API refusals are tool results**, not exceptions: throw `ApiError` (the client does) and `server.ts` turns it into `isError: true` with the code, message, hint and details.
@@ -99,7 +100,7 @@ Key rules the code relies on:
 1. Create the tool with `defineTool({...})` in the matching file under `src/tools/` (or a new one):
    - `name`: snake_case, stable once released (see the tool list in [docs/design.md](docs/design.md));
    - `toolset`: one of `items`, `comments`, `planning`, `pages`, `chat`, `admin`, `destructive`;
-   - `scopes`: `scopesOf('<operationId>', ...)` for every operation the tool calls, so they come from the contract (each must be listed by its toolset in `toolsets.ts`); a `propose_*` tool uses `planScopesOf('<action>')`, since a plan takes its action's scopes; a tool is listed only with all of its scopes;
+   - `scopes`: `scopesOf('<operationId>', ...)` for every operation the tool calls, so they come from the contract (each must be listed by its toolset in `toolsets.ts`); a `propose_*` tool uses `planScopesOf('<action>')`, since a plan takes its action's scopes; a tool is listed only with all of its scopes; set `unlimitedOnly` when the API refuses a token with project or channel limits (`create_channel`, `create_project`), so such a token doesn't see it;
    - `annotations`: `readOnlyHint` is required; set `destructiveHint`, `idempotentHint` and `openWorldHint` honestly, following the contract's `x-buildit-hints` for the operations it calls;
    - `description`: static text written for an agent: when to use the tool, how to name things (item keys such as DEMO-12, status and type names, people as `me` or an email), and what comes back;
    - `inputSchema` and `outputSchema`: `z.object(...)` with `.describe()` on fields an agent must understand;
@@ -115,7 +116,7 @@ Conventions the tools follow:
 - **Paging:** return `next_cursor`, and end the text with `nextPageHint()`.
 - **Writes:** offer the contract's guards (`if_version`, `description_version`) and idempotency keys; when the agent gives no key, generate one and return it.
 
-Destructive and admin changes never apply directly: a `propose_*` tool (named so) returns a preview and a plan handle through `create_plan`, and `apply_plan` applies it after the person confirms. `apply_plan` is marked `withPlans`, so the registry lists it whenever a `propose_*` tool is listed; `buildInstructions()` adds the confirmation guidance then. A new destructive or configuration change gets a `propose_*` tool, never a direct one. Elicitation is not used yet: the two-step flow must keep working with every client.
+Destructive and admin changes never apply directly: a `propose_*` tool (named so) returns a preview and a plan handle through `create_plan`, and `apply_plan` applies it after the person confirms. `apply_plan` is marked `withPlans`, so the registry lists it whenever a `propose_*` tool is listed; `buildInstructions()` adds the confirmation guidance then. A new destructive or configuration change gets a `propose_*` tool, never a direct one. Creating something new that changes nothing existing (`create_channel`, `create_project`) applies directly, with an idempotency key. Elicitation is not used yet: the two-step flow must keep working with every client.
 
 Resources and prompts are gated like tools, by toolset and scope (`selectGated`). A resource reads through the API like the matching tool and returns its text; a prompt is static text with the person's arguments, checked by a pattern, filled in.
 

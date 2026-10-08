@@ -139,7 +139,7 @@ describe('stdio (built binary)', () => {
   it('lists every toolset when BUILDIT_TOOLSETS enables them, with resources and prompts', async () => {
     const { client } = await connect(TOKENS.full, { auto: true, env: { BUILDIT_TOOLSETS: 'all' } });
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toHaveLength(38);
+    expect(names).toHaveLength(40);
     expect(names.slice(0, ALL_TOOLS.length)).toEqual(ALL_TOOLS);
     for (const name of ['plan_sprint', 'get_page', 'read_thread', 'get_workflow', 'apply_plan']) {
       expect(names).toContain(name);
