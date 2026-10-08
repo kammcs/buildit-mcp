@@ -52,6 +52,14 @@ export const DateSchema = z
   );
 export type Date = z.infer<typeof DateSchema>;
 
+export const DevelopmentBranchSchema = z.strictObject({
+  name: z.string(),
+  state: z.enum(['active', 'deleted']),
+  repo: z.string(),
+  url: z.string(),
+});
+export type DevelopmentBranch = z.infer<typeof DevelopmentBranchSchema>;
+
 export const EmptyRequestSchema = z.strictObject({});
 export type EmptyRequest = z.infer<typeof EmptyRequestSchema>;
 
@@ -357,6 +365,27 @@ export const DescriptionEditSchema = z.union([
   z.strictObject({ mode: z.literal('append'), text: MarkdownDescriptionSchema }),
 ]);
 export type DescriptionEdit = z.infer<typeof DescriptionEditSchema>;
+
+export const DevelopmentCommitSchema = z.strictObject({
+  sha: z.string(),
+  title: z.string().max(255).nullable(),
+  repo: z.string(),
+  url: z.string(),
+  author: z.string().max(100).nullable(),
+  committed_at: TimestampSchema,
+});
+export type DevelopmentCommit = z.infer<typeof DevelopmentCommitSchema>;
+
+export const DevelopmentPullRequestSchema = z.strictObject({
+  number: z.int().min(1),
+  title: z.string().max(255).nullable(),
+  state: z.enum(['open', 'draft', 'merged', 'closed']),
+  repo: z.string(),
+  url: z.string(),
+  author: z.string().max(100).nullable(),
+  updated_at: TimestampSchema,
+});
+export type DevelopmentPullRequest = z.infer<typeof DevelopmentPullRequestSchema>;
 
 export const ErrorSchema = z.strictObject({
   error: z.union([
@@ -1072,6 +1101,18 @@ export const CustomValueOutSchema = z.union([
 ]);
 export type CustomValueOut = z.infer<typeof CustomValueOutSchema>;
 
+export const DevelopmentSchema = z.strictObject({
+  pull_requests: z.array(DevelopmentPullRequestSchema).max(20),
+  branches: z.array(DevelopmentBranchSchema).max(20),
+  commits: z.array(DevelopmentCommitSchema).max(20),
+  counts: z.strictObject({
+    pull_requests: z.int().min(0),
+    branches: z.int().min(0),
+    commits: z.int().min(0),
+  }),
+});
+export type Development = z.infer<typeof DevelopmentSchema>;
+
 export const FieldDefSchema = z.strictObject({
   id: UuidSchema,
   name: z.string(),
@@ -1602,6 +1643,7 @@ export const GetItemResponseSchema = z.strictObject({
   comments: z.array(CommentSchema),
   comments_next_cursor: z.string().nullable(),
   history: z.array(HistoryEventSchema).optional(),
+  development: DevelopmentSchema.optional(),
 });
 export type GetItemResponse = z.infer<typeof GetItemResponseSchema>;
 
@@ -1632,6 +1674,7 @@ export const QUERY_SCHEMAS = {
   get_item: z.strictObject({
     detail: z.enum(['concise', 'full']).optional(),
     include_history: z.enum(['true', 'false']).optional(),
+    include_development: z.enum(['true', 'false']).optional(),
   }),
   get_item_history: z.strictObject({
     cursor: CursorSchema.optional(),

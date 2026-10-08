@@ -3,6 +3,7 @@
  */
 import { z } from 'zod';
 
+import type { Development } from '../api/generated/schemas.js';
 import type { SearchItemsQuery } from '../api/generated/strict.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool } from '../toolsets/registry.js';
@@ -216,6 +217,155 @@ const ChildOut = ItemOutSchema.pick({
   estimate: true,
 });
 
+// The development block: pull requests, branches and commits on GitHub that
+// name the item's key. Their titles, branch names and author names are written on
+// GitHub, outside buildIt.Social, so each is wrapped (source "git"); the text
+// output lists them all inside one block (links only for pull requests: the
+// structured content has every link). Values are cut short, so 20 of each
+// with the longest values stay a small part of a response.
+
+const GIT_SOURCE = 'git';
+const GIT_TITLE_CHARS = 120;
+const GIT_NAME_CHARS = 100;
+const GIT_AUTHOR_CHARS = 50;
+/** The API sends at most 20 of each; the server keeps to that whatever it gets. */
+const DEVELOPMENT_MAX = 20;
+/** A GitHub login: letters, digits and single hyphens, at most 39 characters. */
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+
+/** One line of GitHub text, cut with an ellipsis (the link has the rest), in its own git block. */
+function gitText(value: string, maxChars: number): string {
+  const flat = value.replace(/\s+/g, ' ').trim();
+  let end = maxChars - 1;
+  const code = flat.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1; // don't split a surrogate pair
+  const short = flat.length > maxChars ? `${flat.slice(0, end)}…` : flat;
+  return wrapUntrusted(short, { source: GIT_SOURCE, maxChars: maxChars + 1 });
+}
+const gitNullable = (value: string | null | undefined, maxChars: number): string | null =>
+  value === null || value === undefined || value === '' ? null : gitText(value, maxChars);
+/** An author: a GitHub login is a plain label; anything else (a name from git) is free text, wrapped. */
+const gitAuthor = (value: string | null | undefined): string | null =>
+  value !== null && value !== undefined && GITHUB_LOGIN.test(value)
+    ? value
+    : gitNullable(value, GIT_AUTHOR_CHARS);
+
+const DevelopmentOutSchema = z
+  .object({
+    pull_requests: z.array(
+      z.object({
+        number: z.number(),
+        title: z.string().nullable(),
+        state: z.string(),
+        repo: z.string(),
+        url: z.string(),
+        author: z.string().nullable(),
+        updated_at: z.string(),
+      }),
+    ),
+    branches: z.array(
+      z.object({ name: z.string(), state: z.string(), repo: z.string(), url: z.string() }),
+    ),
+    commits: z.array(
+      z.object({
+        sha: z.string(),
+        title: z.string().nullable(),
+        repo: z.string(),
+        url: z.string(),
+        author: z.string().nullable(),
+        committed_at: z.string(),
+      }),
+    ),
+    counts: z
+      .object({ pull_requests: z.number(), branches: z.number(), commits: z.number() })
+      .describe('Totals; the lists hold at most 20 of each.'),
+  })
+  .describe(
+    'Titles, branch names and authors that are not GitHub logins are wrapped as untrusted content (source "git").',
+  );
+type DevelopmentOut = z.infer<typeof DevelopmentOutSchema>;
+
+function developmentOut(d: Development): DevelopmentOut {
+  return {
+    pull_requests: d.pull_requests.slice(0, DEVELOPMENT_MAX).map((p) => ({
+      number: p.number,
+      title: gitNullable(p.title, GIT_TITLE_CHARS),
+      state: sanitizeLabel(p.state, 30),
+      repo: sanitizeLabel(p.repo, 200),
+      url: sanitizeLabel(p.url, 2048),
+      author: gitAuthor(p.author),
+      updated_at: sanitizeLabel(p.updated_at, 40),
+    })),
+    branches: d.branches.slice(0, DEVELOPMENT_MAX).map((b) => ({
+      name: gitText(b.name, GIT_NAME_CHARS),
+      state: sanitizeLabel(b.state, 30),
+      repo: sanitizeLabel(b.repo, 200),
+      url: sanitizeLabel(b.url, 2048),
+    })),
+    commits: d.commits.slice(0, DEVELOPMENT_MAX).map((c) => ({
+      sha: sanitizeLabel(c.sha, 64),
+      title: gitNullable(c.title, GIT_TITLE_CHARS),
+      repo: sanitizeLabel(c.repo, 200),
+      url: sanitizeLabel(c.url, 2048),
+      author: gitAuthor(c.author),
+      committed_at: sanitizeLabel(c.committed_at, 40),
+    })),
+    counts: {
+      pull_requests: d.counts.pull_requests,
+      branches: d.counts.branches,
+      commits: d.counts.commits,
+    },
+  };
+}
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+/** The development block for the text output: a line of counts, then every ref in one git block. */
+function developmentText(key: string, d: Development): string {
+  const { counts } = d;
+  if (counts.pull_requests + counts.branches + counts.commits === 0) {
+    return `Development on GitHub: nothing names ${key} yet (or the org hasn't connected GitHub).`;
+  }
+  const shown = (list: unknown[], total: number): string =>
+    list.length < total ? ` (the ${list.length} latest shown)` : '';
+  const head = [
+    plural(counts.pull_requests, 'pull request', 'pull requests') +
+      shown(d.pull_requests.slice(0, DEVELOPMENT_MAX), counts.pull_requests),
+    plural(counts.branches, 'branch', 'branches') +
+      shown(d.branches.slice(0, DEVELOPMENT_MAX), counts.branches),
+    plural(counts.commits, 'commit', 'commits') +
+      shown(d.commits.slice(0, DEVELOPMENT_MAX), counts.commits),
+  ];
+  const one = (v: string | null | undefined, max: number): string =>
+    v === null || v === undefined || v === '' ? 'unknown' : sanitizeLabel(v, max);
+  const lines: string[] = [];
+  if (d.pull_requests.length > 0) {
+    lines.push('Pull requests:');
+    for (const p of d.pull_requests.slice(0, DEVELOPMENT_MAX)) {
+      lines.push(
+        `- #${p.number} ${one(p.state, 30)} · ${one(p.repo, 200)} · by ${one(p.author, GIT_AUTHOR_CHARS)} · updated ${one(p.updated_at, 40)} — ${one(p.title, GIT_TITLE_CHARS)} · ${one(p.url, 300)}`,
+      );
+    }
+  }
+  if (d.branches.length > 0) {
+    lines.push('Branches:');
+    for (const b of d.branches.slice(0, DEVELOPMENT_MAX)) {
+      lines.push(`- ${one(b.name, GIT_NAME_CHARS)} (${one(b.state, 30)}) · ${one(b.repo, 200)}`);
+    }
+  }
+  if (d.commits.length > 0) {
+    lines.push('Commits:');
+    for (const c of d.commits.slice(0, DEVELOPMENT_MAX)) {
+      lines.push(
+        `- ${one(c.sha, 64).slice(0, 7)} · ${one(c.repo, 200)} · by ${one(c.author, GIT_AUTHOR_CHARS)} · ${one(c.committed_at, 40)} — ${one(c.title, GIT_TITLE_CHARS)}`,
+      );
+    }
+  }
+  return (
+    `Development on GitHub: ${head.join(', ')}, newest first:\n` + wrapLines(lines, GIT_SOURCE)
+  );
+}
+
 export const getItemTool = defineTool({
   name: 'get_item',
   toolset: 'items',
@@ -224,6 +374,7 @@ export const getItemTool = defineTool({
 - detail="concise" (default): the description cut at ${CONCISE_DESCRIPTION_CHARS} characters and the 5 latest comments.
 - detail="full": the description up to 20,000 characters and the 20 latest comments (each cut at ${COMMENT_CHARS.full} characters).
 - include_history=true adds the 50 latest history events.
+- include_development=true adds the GitHub pull requests, branches and commits that name the item's key (at most 20 of each, newest first, with totals); their text comes from GitHub, wrapped as untrusted content (source "git").
 The result carries version and description_version: pass them to update_item (if_version, and description_version to replace the description) and transition_item. For older comments use list_comments.`,
   scopes: scopesOf('get_item'),
   annotations: {
@@ -236,6 +387,10 @@ The result carries version and description_version: pass them to update_item (if
     item: ItemRefInput,
     detail: z.enum(['concise', 'full']).optional().describe('concise (default) or full.'),
     include_history: z.boolean().optional().describe('Add the 50 latest history events.'),
+    include_development: z
+      .boolean()
+      .optional()
+      .describe('Add its GitHub pull requests, branches and commits.'),
   }),
   outputSchema: z.object({
     item: ItemFullSchema,
@@ -247,6 +402,7 @@ The result carries version and description_version: pass them to update_item (if
       .nullable()
       .describe('For list_comments with order="desc", to read older comments.'),
     history: z.array(HistoryOutSchema).optional(),
+    development: DevelopmentOutSchema.optional(),
   }),
   async run(args, ctx) {
     const detail = args.detail ?? 'concise';
@@ -255,6 +411,7 @@ The result carries version and description_version: pass them to update_item (if
       query: {
         ...(detail === 'full' ? { detail } : {}),
         ...(args.include_history ? { include_history: 'true' } : {}),
+        ...(args.include_development ? { include_development: 'true' } : {}),
       },
     });
     const item = itemFull(
@@ -375,6 +532,8 @@ The result carries version and description_version: pass them to update_item (if
           ),
       );
     }
+    const development = r.development ? developmentOut(r.development) : undefined;
+    if (r.development) parts.push(developmentText(r.item.key, r.development));
     return {
       structured: {
         item,
@@ -383,6 +542,7 @@ The result carries version and description_version: pass them to update_item (if
         comments,
         comments_next_cursor: r.comments_next_cursor,
         ...(history ? { history } : {}),
+        ...(development ? { development } : {}),
       },
       text: parts.join('\n\n'),
     };

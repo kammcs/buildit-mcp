@@ -47,6 +47,14 @@ export type CustomValueIn = z.infer<typeof CustomValueInSchema>;
 export const DateSchema = z.string();
 export type Date = z.infer<typeof DateSchema>;
 
+export const DevelopmentBranchSchema = z.looseObject({
+  name: z.string(),
+  state: openEnum(['active', 'deleted']),
+  repo: z.string(),
+  url: z.string(),
+});
+export type DevelopmentBranch = z.infer<typeof DevelopmentBranchSchema>;
+
 export const EmptyRequestSchema = z.looseObject({});
 export type EmptyRequest = z.infer<typeof EmptyRequestSchema>;
 
@@ -313,6 +321,27 @@ export const DescriptionEditSchema = z.union([
   z.looseObject({ mode: z.literal('append'), text: MarkdownDescriptionSchema }),
 ]);
 export type DescriptionEdit = z.infer<typeof DescriptionEditSchema>;
+
+export const DevelopmentCommitSchema = z.looseObject({
+  sha: z.string(),
+  title: z.string().nullable(),
+  repo: z.string(),
+  url: z.string(),
+  author: z.string().nullable(),
+  committed_at: TimestampSchema,
+});
+export type DevelopmentCommit = z.infer<typeof DevelopmentCommitSchema>;
+
+export const DevelopmentPullRequestSchema = z.looseObject({
+  number: z.number(),
+  title: z.string().nullable(),
+  state: openEnum(['open', 'draft', 'merged', 'closed']),
+  repo: z.string(),
+  url: z.string(),
+  author: z.string().nullable(),
+  updated_at: TimestampSchema,
+});
+export type DevelopmentPullRequest = z.infer<typeof DevelopmentPullRequestSchema>;
 
 export const ErrorSchema = z.looseObject({
   error: z.union([
@@ -992,6 +1021,14 @@ export const CustomValueOutSchema = z.union([
 ]);
 export type CustomValueOut = z.infer<typeof CustomValueOutSchema>;
 
+export const DevelopmentSchema = z.looseObject({
+  pull_requests: z.array(DevelopmentPullRequestSchema),
+  branches: z.array(DevelopmentBranchSchema),
+  commits: z.array(DevelopmentCommitSchema),
+  counts: z.looseObject({ pull_requests: z.number(), branches: z.number(), commits: z.number() }),
+});
+export type Development = z.infer<typeof DevelopmentSchema>;
+
 export const FieldDefSchema = z.looseObject({
   id: UuidSchema,
   name: z.string(),
@@ -1522,6 +1559,7 @@ export const GetItemResponseSchema = z.looseObject({
   comments: z.array(CommentSchema),
   comments_next_cursor: z.string().nullable(),
   history: z.array(HistoryEventSchema).optional(),
+  development: DevelopmentSchema.optional(),
 });
 export type GetItemResponse = z.infer<typeof GetItemResponseSchema>;
 

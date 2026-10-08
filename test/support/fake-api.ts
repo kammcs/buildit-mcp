@@ -43,6 +43,7 @@ import {
   type Comment,
   type CustomFieldValue,
   type DescribeProjectResponse,
+  type Development,
   type HistoryEvent,
   type ItemDetail,
   type ItemSearchResult,
@@ -318,6 +319,8 @@ export interface FakeStore {
   messages: FakeMessage[];
   pages: FakePage[];
   plans: FakePlan[];
+  /** GitHub refs by item id; an item without an entry has none (as for a guest). */
+  development: Record<string, Development>;
 }
 
 let idCounter = 1000;
@@ -695,6 +698,40 @@ export function seedStore(): FakeStore {
       },
     ],
     plans: [],
+    development: {
+      [story.id]: {
+        pull_requests: [
+          {
+            number: 12,
+            title: 'DEMO-42: Show a notice when a share ends',
+            state: 'open',
+            repo: 'octo-org/test-repo',
+            url: 'https://github.com/octo-org/test-repo/pull/12',
+            author: 'samexample',
+            updated_at: '2026-10-07T13:40:00Z',
+          },
+        ],
+        branches: [
+          {
+            name: 'demo-42-share-notices-on-windows',
+            state: 'active',
+            repo: 'octo-org/test-repo',
+            url: 'https://github.com/octo-org/test-repo/tree/demo-42-share-notices-on-windows',
+          },
+        ],
+        commits: [
+          {
+            sha: '4f2c1a9e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39',
+            title: 'DEMO-42: notice when a share ends',
+            repo: 'octo-org/test-repo',
+            url: 'https://github.com/octo-org/test-repo/commit/4f2c1a9e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39',
+            author: 'Sam Example',
+            committed_at: '2026-10-07T13:21:00Z',
+          },
+        ],
+        counts: { pull_requests: 1, branches: 1, commits: 4 },
+      },
+    },
   };
 }
 
@@ -1751,6 +1788,18 @@ export class FakeApi {
         comments: latest.map((c) => this.comment(c)),
         comments_next_cursor: older > 0 ? encodeCursor(latest.length) : null,
         ...(query.include_history === 'true' ? { history } : {}),
+        ...(query.include_development === 'true'
+          ? {
+              development: structuredClone(
+                this.store.development[item.id] ?? {
+                  pull_requests: [],
+                  branches: [],
+                  commits: [],
+                  counts: { pull_requests: 0, branches: 0, commits: 0 },
+                },
+              ),
+            }
+          : {}),
       },
     };
   }

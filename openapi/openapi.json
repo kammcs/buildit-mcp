@@ -1294,7 +1294,7 @@
           "items"
         ],
         "summary": "Get an item",
-        "description": "An item with its children, links, latest comments and, optionally, its history.",
+        "description": "An item with its children, links, latest comments and, optionally, its history and its GitHub pull requests, branches and commits.",
         "parameters": [
           {
             "name": "key",
@@ -1325,6 +1325,21 @@
             "in": "query",
             "required": false,
             "description": "Add the 50 latest history events.",
+            "schema": {
+              "default": "false",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "example": "true"
+          },
+          {
+            "name": "include_development",
+            "in": "query",
+            "required": false,
+            "description": "Add `development`: the GitHub pull requests, branches and commits that name the item's key.",
             "schema": {
               "default": "false",
               "type": "string",
@@ -1497,7 +1512,43 @@
                       "old_label": "To do",
                       "new_label": "In progress"
                     }
-                  ]
+                  ],
+                  "development": {
+                    "pull_requests": [
+                      {
+                        "number": 12,
+                        "title": "DEMO-42: Search items by label",
+                        "state": "open",
+                        "repo": "octo-org/test-repo",
+                        "url": "https://github.com/octo-org/test-repo/pull/12",
+                        "author": "samlee",
+                        "updated_at": "2026-10-07T13:40:00Z"
+                      }
+                    ],
+                    "branches": [
+                      {
+                        "name": "demo-42-search-items-by-label",
+                        "state": "active",
+                        "repo": "octo-org/test-repo",
+                        "url": "https://github.com/octo-org/test-repo/tree/demo-42-search-items-by-label"
+                      }
+                    ],
+                    "commits": [
+                      {
+                        "sha": "4f2a9c1e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39",
+                        "title": "DEMO-42: filter by label in the search",
+                        "repo": "octo-org/test-repo",
+                        "url": "https://github.com/octo-org/test-repo/commit/4f2a9c1e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39",
+                        "author": "samlee",
+                        "committed_at": "2026-10-07T13:21:00Z"
+                      }
+                    ],
+                    "counts": {
+                      "pull_requests": 1,
+                      "branches": 1,
+                      "commits": 3
+                    }
+                  }
                 }
               }
             }
@@ -8191,6 +8242,211 @@
         ],
         "description": "replace needs the description_version you read. append adds a blank line and the text at the end, and never overwrites anyone's edit."
       },
+      "Development": {
+        "type": "object",
+        "properties": {
+          "pull_requests": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DevelopmentPullRequest"
+            },
+            "description": "At most 20, most recently updated first."
+          },
+          "branches": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DevelopmentBranch"
+            },
+            "description": "At most 20, newest first."
+          },
+          "commits": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DevelopmentCommit"
+            },
+            "description": "At most 20, newest first."
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "pull_requests": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "branches": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "commits": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "pull_requests",
+              "branches",
+              "commits"
+            ],
+            "description": "How many of each the item has in all; the lists hold at most 20 of each."
+          }
+        },
+        "required": [
+          "pull_requests",
+          "branches",
+          "commits",
+          "counts"
+        ],
+        "description": "The item's GitHub pull requests, branches and commits: those that name its key. Read-only. Empty for guests, when the org hasn't connected GitHub, and when nothing names the key yet."
+      },
+      "DevelopmentBranch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Written on GitHub, outside buildIt: untrusted text, shown as plain text."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deleted"
+            ],
+            "description": "deleted: the branch was deleted on GitHub. v1 may add states."
+          },
+          "repo": {
+            "type": "string",
+            "description": "The repository, \"owner/name\"."
+          },
+          "url": {
+            "type": "string",
+            "description": "The branch on GitHub."
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "repo",
+          "url"
+        ]
+      },
+      "DevelopmentCommit": {
+        "type": "object",
+        "properties": {
+          "sha": {
+            "type": "string",
+            "description": "The full commit SHA."
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The message's first line. Written on GitHub, outside buildIt: untrusted text, shown as plain text."
+          },
+          "repo": {
+            "type": "string",
+            "description": "The repository, \"owner/name\"."
+          },
+          "url": {
+            "type": "string",
+            "description": "The commit on GitHub."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The author's login, else the name in the commit. Written on GitHub, outside buildIt: untrusted text, shown as plain text."
+          },
+          "committed_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "sha",
+          "title",
+          "repo",
+          "url",
+          "author",
+          "committed_at"
+        ]
+      },
+      "DevelopmentPullRequest": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Written on GitHub, outside buildIt: untrusted text, shown as plain text."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "draft",
+              "merged",
+              "closed"
+            ],
+            "description": "v1 may add states."
+          },
+          "repo": {
+            "type": "string",
+            "description": "The repository, \"owner/name\"."
+          },
+          "url": {
+            "type": "string",
+            "description": "The pull request on GitHub."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The author's login. Written on GitHub, outside buildIt: untrusted text, shown as plain text."
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "number",
+          "title",
+          "state",
+          "repo",
+          "url",
+          "author",
+          "updated_at"
+        ]
+      },
       "EmptyRequest": {
         "type": "object",
         "properties": {}
@@ -9688,6 +9944,10 @@
             "items": {
               "$ref": "#/components/schemas/HistoryEvent"
             }
+          },
+          "development": {
+            "description": "With include_development=true.",
+            "$ref": "#/components/schemas/Development"
           }
         },
         "required": [
