@@ -37,7 +37,7 @@ The API is versioned (`/v1`) and only grows: new endpoints, new optional fields,
 
 ## Identity: personal access tokens
 
-- A person creates a **personal access token** in buildIt.Social, once an org admin has turned agent access on for the org. Tokens start with `buildit_pat_`, which lets secret scanners find leaked ones.
+- A person creates a **personal access token** in buildIt.Social (Settings → Agent tokens), once an org admin has turned agent access on for the org (Settings → the org's name → Integrations → Agent access). Tokens start with `buildit_pat_`, which lets secret scanners find leaked ones.
 - A token is bound to **one org**, carries **scopes**, can be **limited to chosen projects and channels**, and always **expires** (a year at most). The owner or an org admin can revoke it at any time.
 - Every API call **acts as the token's owner**: the same permission rules apply as in the app, and buildIt.Social labels the changes as made through the agent, so people can see what an agent did.
 

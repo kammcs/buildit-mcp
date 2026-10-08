@@ -7188,7 +7188,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "buildit_pat",
-        "description": "A personal access token: buildit_pat_, 32 random bytes in base62, and a 6-character CRC32 checksum. Created in buildIt.Social under Settings → Agent access; bound to one org, with scopes and optional project and channel limits."
+        "description": "A personal access token: buildit_pat_, 32 random bytes in base62, and a 6-character CRC32 checksum. Created in buildIt.Social under Settings → Agent tokens, once an org owner or admin has turned on Agent access (Settings → the org → Integrations); bound to one org, with scopes and optional project and channel limits."
       }
     },
     "parameters": {
@@ -14340,20 +14340,20 @@
     "token_invalid": {
       "status": 401,
       "when": "No bearer token, a malformed one (bad prefix or checksum), or one that doesn't exist.",
-      "message": "Send Authorization: Bearer buildit_pat_... with a token created in buildIt.Social (Settings → Agent access). Check that the whole token was copied.",
+      "message": "Send Authorization: Bearer buildit_pat_... with a token created in buildIt.Social (Settings → Agent tokens). Check that the whole token was copied.",
       "hint": "Check the Authorization header: Bearer, then the whole buildit_pat_ token."
     },
     "token_expired": {
       "status": 401,
       "when": "The token is past its expiry date.",
-      "message": "This token has expired. Create a new one in buildIt.Social (Settings → Agent access).",
-      "hint": "Ask the user to create a new token in buildIt.Social (Settings → Agent access)."
+      "message": "This token has expired. Create a new one in buildIt.Social (Settings → Agent tokens).",
+      "hint": "Ask the user to create a new token in buildIt.Social (Settings → Agent tokens)."
     },
     "token_revoked": {
       "status": 401,
       "when": "The token was revoked: by its owner or an org admin, or automatically (the user left the org, became a guest or deleted their account).",
-      "message": "This token was revoked. Create a new one in buildIt.Social if you still have access.",
-      "hint": "Ask the user to create a new token in buildIt.Social, if they still have access."
+      "message": "This token was revoked. Create a new one in buildIt.Social (Settings → Agent tokens) if you still have access.",
+      "hint": "Ask the user to create a new token in buildIt.Social (Settings → Agent tokens), if they still have access."
     },
     "token_suspended": {
       "status": 401,
@@ -14364,8 +14364,8 @@
     "agent_access_off": {
       "status": 403,
       "when": "The org's Agent access switch is off. Every token of the org shows as suspended and works again when the switch is turned back on.",
-      "message": "Agent access is off for this org. Ask an org owner or admin to turn it on.",
-      "hint": "Ask an org owner or admin to turn Agent access back on; tokens then work again."
+      "message": "Agent access is off for this org. Ask an org owner or admin to turn it on in buildIt.Social (Settings → the org → Integrations → Agent access).",
+      "hint": "Ask an org owner or admin to turn on Agent access (Settings → the org → Integrations); tokens then work again."
     },
     "projects_off": {
       "status": 403,

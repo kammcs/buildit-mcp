@@ -72,12 +72,13 @@ export const ERROR_HINTS: Readonly<Partial<Record<ErrorCode, string>>> = {
   bad_request:
     'Send a JSON body with Content-Type: application/json, and check the path and query.',
   token_invalid: 'Check the Authorization header: Bearer, then the whole buildit_pat_ token.',
-  token_expired: 'Ask the user to create a new token in buildIt.Social (Settings → Agent access).',
-  token_revoked: 'Ask the user to create a new token in buildIt.Social, if they still have access.',
+  token_expired: 'Ask the user to create a new token in buildIt.Social (Settings → Agent tokens).',
+  token_revoked:
+    'Ask the user to create a new token in buildIt.Social (Settings → Agent tokens), if they still have access.',
   token_suspended:
     "Ask an org admin to reactivate the user's membership; the token then works again.",
   agent_access_off:
-    'Ask an org owner or admin to turn Agent access back on; tokens then work again.',
+    'Ask an org owner or admin to turn on Agent access (Settings → the org → Integrations); tokens then work again.',
   projects_off: "Projects isn't available in this org: use pages or chat instead.",
   scope_missing:
     "Ask the user for a token with details.scope; retrying with this token won't help.",

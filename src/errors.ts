@@ -39,7 +39,7 @@ export class ToolInputError extends Error {
  */
 const LOCAL_HINTS: Record<string, string> = {
   http_401:
-    'The token was refused. Ask the person to check it in buildIt.Social (it may be expired, revoked, or suspended by the org).',
+    'The token was refused. Ask the person to check it in buildIt.Social, under Settings → Agent tokens (it may be expired, revoked, or suspended by the org).',
   http_403: 'The token or its owner may not do this. Do not retry the same call.',
   http_429: 'Too many calls. Wait a little, then retry.',
   invalid_arguments: 'Fix the arguments as described, then call the tool again.',

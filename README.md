@@ -13,7 +13,7 @@ It runs on your own machine (stdio) or as a stateless HTTP server for a team. It
 ## What you need
 
 - Node.js 20 or newer (22 recommended).
-- A buildIt.Social **personal access token**. An org admin first turns on agent access for the org; then you can create a token for yourself, choosing its scopes, an expiry, and optionally the projects and channels it may reach. Tokens start with `buildit_pat_`.
+- A buildIt.Social **personal access token**. An org admin first turns on agent access for the org (Settings → the org's name → Integrations → Agent access); then you can create a token for yourself in Settings → Agent tokens, choosing its scopes, an expiry, and optionally the projects and channels it may reach. Tokens start with `buildit_pat_`.
 
 **Keep the token out of files.** Put it in an environment variable (`BUILDIT_TOKEN`) in your user environment or shell profile, and reference that variable from your client's configuration. Never paste it into a config file, especially one in a repository.
 
