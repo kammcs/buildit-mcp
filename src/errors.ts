@@ -226,7 +226,8 @@ function formatKnownDetails(code: string, d: Record<string, unknown>): string[] 
     }
     case 'field_required':
       return [`- set: ${list(d.fields)}`];
-    case 'validation': {
+    case 'validation':
+    case 'image_layout_invalid': {
       const fields = Array.isArray(d.fields) ? d.fields : [];
       return fields.map((f) => {
         const r = record(f);

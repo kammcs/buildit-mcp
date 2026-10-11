@@ -611,6 +611,14 @@ export const ErrorSchema = z.strictObject({
       }),
     }),
     z.strictObject({
+      code: z.literal('image_layout_invalid'),
+      message: z.string().min(1),
+      hint: z.string().optional(),
+      details: z.strictObject({
+        fields: z.array(z.strictObject({ path: z.string(), message: z.string() })).min(1),
+      }),
+    }),
+    z.strictObject({
       code: z.literal('ambiguous'),
       message: z.string().min(1),
       hint: z.string().optional(),
@@ -1261,7 +1269,17 @@ export const MessageSchema = z.strictObject({
   body: z.string(),
   code: z.string().nullable(),
   code_language: z.string().nullable(),
-  file: z.strictObject({ id: UuidSchema, name: z.string() }).nullable(),
+  file: z
+    .strictObject({ id: UuidSchema, name: z.string(), duration_ms: z.int().min(1).nullable() })
+    .nullable(),
+  photos: z.array(
+    z.strictObject({
+      id: UuidSchema,
+      name: z.string(),
+      alt: z.string().nullable(),
+      duration_ms: z.int().min(1).nullable(),
+    }),
+  ),
   mentions: z.array(UserSchema),
   reply_count: z.int(),
   last_reply_at: TimestampSchema.nullable(),

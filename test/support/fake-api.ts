@@ -2676,6 +2676,7 @@ export class FakeApi {
       code: null,
       code_language: null,
       file: null,
+      photos: [],
       mentions: [],
       reply_count: replies.length,
       last_reply_at:

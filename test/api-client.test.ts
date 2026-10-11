@@ -505,6 +505,23 @@ describe('error results', () => {
     expect(text).not.toContain('Fix each field in details.fields');
   });
 
+  it('list the refused image titles of image_layout_invalid, with the contract hint', () => {
+    const text = describeApiError(
+      new ApiError({
+        code: 'image_layout_invalid',
+        message: 'The image title "40% wrap-up" looks like a layout but isn\'t one.',
+        status: 422,
+        requestId: 'r',
+        details: {
+          fields: [{ path: 'body', message: 'The image title "40% wrap-up" looks like a layout.' }],
+        },
+      }),
+    );
+    expect(text).toContain('image_layout_invalid');
+    expect(text).toContain('- body: The image title "40% wrap-up" looks like a layout.');
+    expect(text).toContain(`What to do: ${ERROR_HINTS.image_layout_invalid}`);
+  });
+
   it('list the moves of a refused transition, and plan details', () => {
     const moves = describeApiError(
       new ApiError({
