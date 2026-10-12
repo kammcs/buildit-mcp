@@ -71,6 +71,20 @@ describe('resources', () => {
     await expect(c.client.readResource({ uri: `buildit://pages/${uid(1)}x` })).rejects.toThrow();
   });
 
+  it('answers a malformed percent-encoding as invalid params, without calling the API', async () => {
+    const c = await client();
+    const before = api.requests.length;
+    for (const uri of ['buildit://items/%E0%A4%A', 'buildit://pages/%']) {
+      const err = await c.client.readResource({ uri }).then(
+        () => undefined,
+        (e: unknown) => e as { code?: number; message?: string },
+      );
+      expect(err?.code, uri).toBe(-32602);
+      expect(err?.message).toMatch(/percent-encoded/);
+    }
+    expect(api.requests.length).toBe(before);
+  });
+
   it('wraps and defuses hostile content', async () => {
     const item = api.store.items.find((i) => i.number === 43)!;
     item.title = HOSTILE.slice(0, 255);

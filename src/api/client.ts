@@ -17,7 +17,9 @@
  *
  * The client holds the token of one caller and is created per caller (once
  * in stdio mode, per HTTP request in HTTP mode). It never logs the token,
- * request bodies, query strings or response bodies.
+ * request bodies, query strings or response bodies, and it logs an
+ * operation's path template (/v1/items/{key}) rather than the filled-in path,
+ * which can carry names.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -113,6 +115,13 @@ export interface ApiRequestOptions {
   /** The MCP client's name and version, when known; sent in X-Buildit-Client. */
   client?: { name: string; version?: string | undefined } | undefined;
   signal?: AbortSignal;
+  /** The contract's operation id, for the log. */
+  operation?: string;
+  /**
+   * The path with its placeholders (/v1/projects/{key}/sprints/{sprint}),
+   * logged instead of the filled-in path, which can carry names.
+   */
+  pathTemplate?: string;
 }
 
 export interface ApiClientOptions {
@@ -222,12 +231,18 @@ export class ApiClient {
 
   /** GET /v1/meta */
   async getMeta(options: ApiRequestOptions = {}): Promise<MetaResponse> {
-    return this.requestParsed('GET', '/v1/meta', MetaResponseSchema, options);
+    return this.requestParsed('GET', '/v1/meta', MetaResponseSchema, {
+      operation: 'get_meta',
+      ...options,
+    });
   }
 
   /** GET /v1/me */
   async getMe(options: ApiRequestOptions = {}): Promise<MeResponse> {
-    return this.requestParsed('GET', '/v1/me', MeResponseSchema, options);
+    return this.requestParsed('GET', '/v1/me', MeResponseSchema, {
+      operation: 'get_me',
+      ...options,
+    });
   }
 
   /** A request whose JSON response is validated with `schema`. */
@@ -301,7 +316,8 @@ export class ApiClient {
       const logFields = {
         request_id: requestId,
         method,
-        path,
+        ...(options.operation ? { operation: options.operation } : {}),
+        path: options.pathTemplate ?? path,
         ...(options.tool ? { tool: options.tool } : {}),
       };
       const headers: Record<string, string> = {

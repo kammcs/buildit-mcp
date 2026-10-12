@@ -28,9 +28,16 @@ export async function connect(
   api: FakeApi,
   token: string = TOKENS.full,
   policy: Partial<ToolPolicy> = {},
+  /** Where the server's log lines go (dropped by default). */
+  logSink: (line: string) => void = () => undefined,
 ): Promise<Connected> {
-  const apiClient = new ApiClient({ baseUrl: api.url, token, sleep: () => Promise.resolve() });
-  const logger = createLogger({ sink: () => undefined });
+  const logger = createLogger({ level: 'debug', sink: logSink });
+  const apiClient = new ApiClient({
+    baseUrl: api.url,
+    token,
+    logger,
+    sleep: () => Promise.resolve(),
+  });
   const fullPolicy: ToolPolicy = {
     toolsets: [...TOOLSET_NAMES],
     readOnly: false,

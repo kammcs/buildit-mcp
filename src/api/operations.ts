@@ -9,6 +9,7 @@
  */
 import type { z } from 'zod';
 
+import { ToolInputError } from '../errors.js';
 import type { ApiClient, ApiRequestOptions, QueryValue } from './client.js';
 import { OPERATIONS, type OperationId } from './generated/operations.js';
 import type { OperationIO } from './generated/strict.js';
@@ -27,11 +28,24 @@ export interface OperationArgs<Id extends OperationId> {
   body?: OperationIO[Id]['body'];
 }
 
-/** Fills in the path's placeholders. */
+/** A path segment that would climb or stay in place once the URL is resolved. */
+const DOT_SEGMENT = /^\.{1,2}$/;
+
+/**
+ * Fills in the path's placeholders. A value is URL-encoded, so it stays one
+ * segment; a value that is "." or "..", or has such a segment between
+ * slashes, is refused (ToolInputError) because the URL would resolve it
+ * into another route.
+ */
 export function operationPath(id: OperationId, values: Record<string, string> = {}): string {
   return OPERATIONS[id].path.replace(/\{(\w+)\}/g, (_match, name: string) => {
     const value = values[name];
     if (value === undefined) throw new Error(`${id}: missing path parameter ${name}`);
+    if (value.split(/[/\\]/).some((segment) => DOT_SEGMENT.test(segment))) {
+      throw new ToolInputError(
+        `${name} can't be "." or "..", or contain such a part between slashes. Use the name or id as listed.`,
+      );
+    }
     return encodeURIComponent(value);
   });
 }
@@ -50,6 +64,9 @@ export async function callOperation<Id extends OperationId>(
   const schema = op.response as unknown as z.ZodType<OperationResponse<Id>>;
   return api.requestParsed(op.method, path, schema, {
     ...options,
+    // Logged instead of the filled-in path, which can carry names.
+    operation: id,
+    pathTemplate: op.path,
     ...(query === undefined ? {} : { query }),
     // A POST without a body still sends an empty object, which the contract expects.
     ...(body === undefined ? (op.hasBody ? { body: {} } : {}) : { body }),
