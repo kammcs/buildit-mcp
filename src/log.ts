@@ -5,8 +5,9 @@
  * writes to it. Every line is one JSON object. Tokens never reach the log:
  * callers don't pass them, and as a second line of defence every string is
  * scrubbed of bearer credentials, token-shaped strings and any secret the
- * process registered, and fields whose names look like credentials are
- * replaced wholesale.
+ * process registered (field names included), and fields whose names look
+ * like credentials are replaced wholesale. Errors are logged by name and
+ * message, never with their stacks.
  */
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -37,10 +38,14 @@ const REDACTED = '[redacted]';
 /** Field names whose values are never logged. */
 const SECRET_KEY = /(authorization|token|secret|password|api[-_]?key|cookie)/i;
 
-/** Bearer credentials and buildIt personal access tokens, wherever they appear in a string. */
+/**
+ * Bearer credentials and buildIt personal access tokens, wherever they appear
+ * in a string. The token pattern has no word boundary in front, so a token
+ * glued to other text (`MY_buildit_pat_...`, `x1buildit_pat_...`) is caught too.
+ */
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[^\s"',;]+/gi,
-  /\bbuildit_pat_[A-Za-z0-9_]+/g,
+  /buildit_pat_[A-Za-z0-9_]+/g,
 ];
 
 export function scrubString(value: string, secrets: readonly string[] = []): string {
@@ -57,12 +62,14 @@ function scrub(value: unknown, secrets: readonly string[], depth: number): unkno
   if (value === null || typeof value !== 'object') return value;
   if (depth > 6) return '[truncated]';
   if (value instanceof Error) {
-    return { name: value.name, message: scrubString(value.message, secrets) };
+    // Never the stack: it repeats the message and adds local paths.
+    return { name: scrubString(value.name, secrets), message: scrubString(value.message, secrets) };
   }
   if (Array.isArray(value)) return value.map((v) => scrub(v, secrets, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(value)) {
-    out[key] = SECRET_KEY.test(key) ? REDACTED : scrub(v, secrets, depth + 1);
+    // Names are scrubbed too: a token can arrive as a field name (a map keyed by token).
+    out[scrubString(key, secrets)] = SECRET_KEY.test(key) ? REDACTED : scrub(v, secrets, depth + 1);
   }
   return out;
 }
