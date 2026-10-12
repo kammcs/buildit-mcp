@@ -11,6 +11,7 @@ import {
   HOSTILE,
   injectionIsInsideBlocks,
   type Connected,
+  stripIds,
 } from './support/harness.js';
 
 let api: FakeApi;
@@ -47,7 +48,7 @@ describe('resources', () => {
     const c = await client(TOKENS.read);
     const text = await readText(c, 'buildit://items/DEMO-42');
     expect(text).toContain('DEMO-42 · Story (standard) · In progress (started)');
-    expect(text).toContain('<untrusted_content source="description">');
+    expect(stripIds(text)).toContain('<untrusted_content source="description">');
     expect(api.requests.at(-1)?.headers['x-buildit-tool']).toBe('resource:item');
     const r = await c.client.readResource({ uri: 'buildit://items/DEMO-42' });
     expect(r.contents[0]).toMatchObject({ mimeType: 'text/markdown' });
@@ -56,7 +57,7 @@ describe('resources', () => {
   it('reads a page through the API, as get_page does', async () => {
     const c = await client();
     const text = await readText(c, `buildit://pages/${PAGES.home}`);
-    expect(text).toContain('<untrusted_content source="page" author="Sam Example">');
+    expect(stripIds(text)).toContain('<untrusted_content source="page" author="Sam Example">');
     expect(text).toContain('Start here.');
   });
 
@@ -69,6 +70,20 @@ describe('resources', () => {
       /item key/,
     );
     await expect(c.client.readResource({ uri: `buildit://pages/${uid(1)}x` })).rejects.toThrow();
+  });
+
+  it('answers a malformed percent-encoding as invalid params, without calling the API', async () => {
+    const c = await client();
+    const before = api.requests.length;
+    for (const uri of ['buildit://items/%E0%A4%A', 'buildit://pages/%']) {
+      const err = await c.client.readResource({ uri }).then(
+        () => undefined,
+        (e: unknown) => e as { code?: number; message?: string },
+      );
+      expect(err?.code, uri).toBe(-32602);
+      expect(err?.message).toMatch(/percent-encoded/);
+    }
+    expect(api.requests.length).toBe(before);
   });
 
   it('wraps and defuses hostile content', async () => {

@@ -11,6 +11,7 @@ import {
   HOSTILE,
   injectionIsInsideBlocks,
   type Connected,
+  stripIds,
 } from './support/harness.js';
 
 let api: FakeApi;
@@ -96,7 +97,7 @@ describe('get_page', () => {
       updated_by: { name: 'Sam Example' },
       next_offset: null,
     });
-    expect(r.text).toContain('<untrusted_content source="page" author="Sam Example">');
+    expect(stripIds(r.text)).toContain('<untrusted_content source="page" author="Sam Example">');
     expect(r.text).toContain('# Demo project');
     expect(r.text).toContain('version 3');
   });

@@ -16,6 +16,7 @@ import {
   ItemRefInput,
   nextPageHint,
   scopesOf,
+  wrapLines,
 } from './shared.js';
 
 /** The text budget of one page of comments, shared by its comments. */
@@ -127,8 +128,18 @@ export const addCommentTool = defineTool({
     });
     const comment = commentOut(r.comment, 2000);
     const headline = r.created
-      ? `Comment posted on ${key.toUpperCase()}${comment.mentions.length > 0 ? `, mentioning ${comment.mentions.join(', ')}` : ''}.`
+      ? `Comment posted on ${key.toUpperCase()}${comment.mentions.length > 0 ? `, mentioning ${comment.mentions.length} person(s)` : ''}.`
       : `Nothing new: this comment was already posted on ${key.toUpperCase()} with this idempotency_key.`;
+    // The names of the people mentioned are people-written: in a block of their own.
+    const mentioned =
+      comment.mentions.length > 0
+        ? [
+            `Mentioned:\n${wrapLines(
+              comment.mentions.map((m) => `- ${m}`),
+              'mentions',
+            )}`,
+          ]
+        : [];
     return {
       structured: {
         item: key.toUpperCase(),
@@ -136,7 +147,7 @@ export const addCommentTool = defineTool({
         created: r.created,
         idempotency_key: idempotencyKey,
       },
-      text: [headline, commentText(comment)].join('\n'),
+      text: [headline, ...mentioned, commentText(comment)].join('\n'),
     };
   },
 });

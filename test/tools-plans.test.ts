@@ -12,6 +12,7 @@ import {
   HOSTILE,
   injectionIsInsideBlocks,
   type Connected,
+  stripIds,
 } from './support/harness.js';
 
 let api: FakeApi;
@@ -65,7 +66,7 @@ describe('destructive: propose, then apply', () => {
     const p = await propose(c, 'propose_delete_item', { item: 'DEMO-42' });
     expect(p.structured).toMatchObject({ action: 'delete_item', item_count: 2, effects_total: 2 });
     expect(p.text).toContain('Deletes DEMO-42 and its 1 child item(s)');
-    expect(p.text).toContain('<untrusted_content source="plan_preview">');
+    expect(stripIds(p.text)).toContain('<untrusted_content source="plan_preview">');
     expect(p.text).toContain(`Handle ${p.handle}`);
     // The API's summary comes first, inside the block.
     expect(p.text.split('\n')[1]).toContain('Deletes DEMO-42');
@@ -200,7 +201,7 @@ describe('the plan rules', () => {
 
 /** The lines of the preview block (inside <untrusted_content>), and what follows it. */
 function previewParts(text: string): { block: string[]; after: string[] } {
-  const lines = text.split('\n');
+  const lines = stripIds(text).split('\n');
   const end = lines.indexOf('</untrusted_content>');
   return { block: lines.slice(1, end), after: lines.slice(end + 1) };
 }

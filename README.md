@@ -44,14 +44,15 @@ Every setting is an environment variable, and also a flag (the flag wins). The t
 | `BUILDIT_HTTP`            | `--http`            | `false`                                             | Serve Streamable HTTP instead of stdio.                                                                                                                             |
 | `BUILDIT_HOST`            | `--host`            | `127.0.0.1`                                         | HTTP bind address.                                                                                                                                                  |
 | `BUILDIT_PORT`            | `--port`            | `8765`                                              | HTTP port.                                                                                                                                                          |
-| `BUILDIT_ALLOWED_HOSTS`   | `--allowed-hosts`   | localhost names on a loopback bind                  | Hostnames accepted in the `Host` header (DNS-rebinding protection).                                                                                                 |
+| `BUILDIT_ALLOWED_HOSTS`   | `--allowed-hosts`   | localhost names on a loopback bind                  | Hostnames accepted in the `Host` header (DNS-rebinding protection). Required when binding off loopback, unless `BUILDIT_ALLOW_ANY_HOST` is set.                     |
 | `BUILDIT_ALLOWED_ORIGINS` | `--allowed-origins` | localhost names on a loopback bind                  | Hostnames accepted in the `Origin` header. Off loopback, requests with any other `Origin` are refused. `moz-extension://*`-style entries admit a browser extension. |
+| `BUILDIT_ALLOW_ANY_HOST`  | `--allow-any-host`  | `false`                                             | Off loopback, serve without checking the `Host` header (for example behind a proxy that checks it). Without it, such a bind needs `BUILDIT_ALLOWED_HOSTS`.          |
 
 The tools you see depend on the enabled toolsets, read-only mode, the exclude list, and your token's scopes: a token with only `projects:read` never sees write tools, and a token limited to some projects or channels doesn't see `create_channel` and `create_project`. If buildIt.Social refuses the token, only `whoami` is listed, so the agent can tell you why. If the scopes can't be read for a moment (a rate limit, the network), every tool your configuration allows is listed and buildIt.Social checks each call; the scopes are read again on the next list.
 
 ### Toolsets
 
-`items` and `comments` are on by default (15 tools). Turn others on with `BUILDIT_TOOLSETS` (or `--toolsets`), for example `BUILDIT_TOOLSETS=items,comments,planning,pages` or `BUILDIT_TOOLSETS=all` (40 tools). In HTTP mode, the `X-Buildit-Toolsets` header picks them per request.
+`items` and `comments` are on by default (15 tools). Turn others on with `BUILDIT_TOOLSETS` (or `--toolsets`), for example `BUILDIT_TOOLSETS=items,comments,planning,pages` or `BUILDIT_TOOLSETS=all` (40 tools). In HTTP mode, the `X-Buildit-Toolsets` header picks them per request, among the ones the server enables: it can narrow them, never add one.
 
 **`admin` and `destructive` stay off unless you name them**, even when your token has `projects:admin` or `projects:delete`. Turn them on only for work that needs them, for example a separate client entry with `BUILDIT_TOOLSETS=items,admin` while you reorganize a workflow. Their changes always go through preview and confirm (below), except creating a channel or a project, which changes nothing that exists.
 
@@ -213,7 +214,7 @@ node dist/index.js --http            # http://127.0.0.1:8765/mcp
 - Every request must carry `Authorization: Bearer <token>`; the server uses that request's token for its API calls and keeps nothing afterwards. A token is required even on localhost.
 - It binds to `127.0.0.1` and accepts only localhost `Host` and `Origin` headers, unless configured otherwise.
 - It serves both MCP protocol versions in use: 2026-07-28 (stateless) and 2025-11-25.
-- An `X-Buildit-Toolsets: items,comments` header picks the toolsets for one request. Read-only mode and the exclude list set on the server always apply.
+- An `X-Buildit-Toolsets: items,comments` header picks the toolsets for one request, among the ones the server enables: the server's toolsets are a ceiling the header can only narrow. For example, a server started with `--toolsets items` lists no `propose_*` tool and no `apply_plan` for a request that asks for `destructive`. Read-only mode and the exclude list set on the server always apply.
 - `GET /healthz` answers `200` for health checks.
 
 For Claude Code:
@@ -231,13 +232,15 @@ node dist/index.js --http --host 0.0.0.0 --port 8765
 # with BUILDIT_ALLOWED_HOSTS=mcp.example.com
 ```
 
+Bound to anything but loopback, the server refuses to start without `BUILDIT_ALLOWED_HOSTS` (the hostnames clients use), so the `Host` header is always checked. If a proxy in front checks it instead, set `BUILDIT_ALLOW_ANY_HOST=true` (or pass `--allow-any-host`) to start anyway; the server then logs a warning.
+
 Deployment files (a container image, and a compose file with TLS) and a full guide will follow. Until then, the essentials are under [Hardening](#hardening).
 
 ## Security notes
 
 - **Tokens:** keep them in environment variables or your client's secret storage, never in files you commit. Give each token only the scopes it needs, limit it to the projects and channels the work needs, and choose a short expiry. If a token leaks, revoke it in buildIt.Social at once.
 - **The agent acts as you.** Everything it does is done with your permissions and is labelled in buildIt.Social as done through your agent.
-- **People-written content is marked.** Titles, descriptions, comments, pages and messages (and GitHub titles, branch names and authors) come back inside `<untrusted_content>` blocks, and the server tells the agent to treat them as data, never instructions. This reduces, but cannot remove, the risk of prompt injection, so prefer narrow scopes and review what an agent proposes.
+- **People-written content is marked.** Titles, descriptions, comments, pages and messages, the names of people, projects, channels and the like (and GitHub titles, branch names and authors) come back inside `<untrusted_content>` blocks, and the server tells the agent to treat them as data, never instructions. Each block carries a random id, repeated in its closing tag, and only that closing tag ends it. This reduces, but cannot remove, the risk of prompt injection, so prefer narrow scopes and review what an agent proposes.
 - **Destructive and admin changes are previewed and need your confirmation** ([above](#preview-then-confirm)), and their toolsets are off unless you turn them on. Read the preview before you say yes: it is what will happen.
 - **Chat is read only**, and never reaches direct messages.
 - **Logs** are JSON on stderr and never contain tokens or content.
@@ -247,7 +250,8 @@ Deployment files (a container image, and a compose file with TLS) and a full gui
 For an HTTP server that anyone other than you can reach:
 
 - terminate TLS in front of it (a reverse proxy such as Caddy or nginx);
-- set `BUILDIT_ALLOWED_HOSTS` to the hostnames clients use, and `BUILDIT_ALLOWED_ORIGINS` only if a browser-based client needs it;
+- set `BUILDIT_ALLOWED_HOSTS` to the hostnames clients use (required off loopback, unless you set `BUILDIT_ALLOW_ANY_HOST` because the proxy checks the `Host` header), and `BUILDIT_ALLOWED_ORIGINS` only if a browser-based client needs it;
+- enable only the toolsets the team needs with `BUILDIT_TOOLSETS`: a request's `X-Buildit-Toolsets` header can narrow them, never add one;
 - optionally restrict client IP addresses at the proxy;
 - keep it updated: `whoami` says when the API needs a newer version ([Versions](#versions)).
 

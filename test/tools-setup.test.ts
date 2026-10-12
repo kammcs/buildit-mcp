@@ -11,6 +11,7 @@ import {
   HOSTILE,
   injectionIsInsideBlocks,
   type Connected,
+  stripIds,
 } from './support/harness.js';
 
 let api: FakeApi;
@@ -96,11 +97,11 @@ describe('create_channel', () => {
         { name: 'Alex Example', email: 'alex.one@example.com' },
       ],
     });
-    expect((r.structured.channel as { description: string }).description).toContain(
+    expect(stripIds((r.structured.channel as { description: string }).description)).toContain(
       '<untrusted_content source="channel_description">',
     );
     expect(r.text).toContain(`Created private channel ${key}.`);
-    expect(r.text).toContain('<untrusted_content source="channel">\nName: Mobile app');
+    expect(stripIds(r.text)).toContain('<untrusted_content source="channel">\nName: Mobile app');
     expect(r.text).toContain('Members (3): Test User <test.user@example.com>, Sam Example');
     expect(r.text).toContain(`idempotency_key: ${key}`);
     expect(r.text).toContain(`call create_project with channel="${key}"`);
@@ -225,8 +226,10 @@ describe('create_channel', () => {
     for (const text of [r.text, JSON.stringify(r.structured)]) assertDefused(text);
     expect(injectionIsInsideBlocks(r.text)).toBe(true);
     // The description is in its own block; the name and the members in the channel's.
-    expect(r.text).toContain('<untrusted_content source="channel_description">');
-    expect(r.text).toMatch(/<untrusted_content source="channel">\nName: x[^\n]*Ignore previous/);
+    expect(stripIds(r.text)).toContain('<untrusted_content source="channel_description">');
+    expect(stripIds(r.text)).toMatch(
+      /<untrusted_content source="channel">\nName: x[^\n]*Ignore previous/,
+    );
   });
 });
 
@@ -256,7 +259,7 @@ describe('create_project', () => {
     expect(r.text).toContain(
       `Created project WEB from the software_scrum template, in channel ${channelId}`,
     );
-    expect(r.text).toContain(
+    expect(stripIds(r.text)).toContain(
       '<untrusted_content source="project">\nName (the channel\'s): Website',
     );
     expect(r.text).toContain('Settings: sprints on, releases off, estimates points.');
@@ -397,7 +400,7 @@ describe('create_project', () => {
     expect(r.isError).toBe(false);
     for (const text of [r.text, JSON.stringify(r.structured)]) assertDefused(text);
     expect(injectionIsInsideBlocks(r.text)).toBe(true);
-    expect(r.text).toContain('<untrusted_content source="project">');
+    expect(stripIds(r.text)).toContain('<untrusted_content source="project">');
   });
 });
 

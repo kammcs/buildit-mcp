@@ -6,11 +6,13 @@
  * - Host and Origin are checked before anything else (DNS-rebinding
  *   protection): on a loopback bind only localhost names pass; elsewhere the
  *   configured lists apply, and any request with an Origin header is refused
- *   unless its hostname is listed.
+ *   unless its hostname is listed. Off loopback, allowed hosts are required
+ *   unless the operator explicitly opts out (allowAnyHost).
  * - GET and DELETE on the endpoint answer 405: there are no sessions to
  *   resume or end, and no standalone event stream.
- * - `X-Buildit-Toolsets` picks the toolsets for one request; read-only mode
- *   and the exclude list from the server's own config still apply.
+ * - `X-Buildit-Toolsets` narrows the toolsets for one request: only toolsets
+ *   the server's own config enables can be picked, and read-only mode and
+ *   the exclude list still apply. The header can never add a toolset.
  * - Both protocol eras are served: 2026-07-28 (stateless, per-request _meta)
  *   and the 2025-11-25 initialize handshake (through the SDK's stateless
  *   fallback).
@@ -101,6 +103,11 @@ export function createHttpApp(
 ): { app: Hono; handler: McpHttpHandler } {
   const catalog = options.catalog ?? CATALOG;
   const loopback = isLoopbackHost(config.http.host);
+  if (!loopback && config.http.allowedHosts === undefined && config.http.allowAnyHost !== true) {
+    throw new ConfigError(
+      `Binding to ${config.http.host} needs allowed hosts (BUILDIT_ALLOWED_HOSTS), or BUILDIT_ALLOW_ANY_HOST=true to serve without the Host check.`,
+    );
+  }
   const allowedHosts =
     config.http.allowedHosts ?? (loopback ? localhostAllowedHostnames() : undefined);
   const allowedOrigins = config.http.allowedOrigins ?? (loopback ? localhostAllowedOrigins() : []);
@@ -203,12 +210,15 @@ export function createHttpApp(
     let toolsets = config.toolsets;
     const header = c.req.header(TOOLSETS_HEADER);
     if (header !== undefined) {
+      let asked: ToolsetName[];
       try {
-        toolsets = parseToolsets(header, 'X-Buildit-Toolsets');
+        asked = parseToolsets(header, 'X-Buildit-Toolsets');
       } catch (err) {
         if (!(err instanceof ConfigError)) throw err;
         return c.json(jsonRpcError(-32602, err.message), 400);
       }
+      // The configured toolsets are a ceiling: the header can only narrow them.
+      toolsets = config.toolsets.filter((t) => asked.includes(t));
     }
 
     let parsedBody: unknown = undefined;

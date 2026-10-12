@@ -20,6 +20,7 @@ import {
   IMAGE_LAYOUT_NOTE,
   KEEP_IMAGE_TITLES,
   limitInput,
+  NAME_CHARS,
   nextPageHint,
   PersonSchema,
   person,
@@ -62,7 +63,7 @@ function pageSummaryOut(p: PageSummary): PageSummaryOut {
     updated_at: p.updated_at,
     updated_by: p.updated_by ? person(p.updated_by) : null,
     updated_via_agent:
-      p.updated_via_agent === null ? null : sanitizeLabel(p.updated_via_agent, 100),
+      p.updated_via_agent === null ? null : sanitizeLabel(p.updated_via_agent, NAME_CHARS),
   };
 }
 
@@ -89,7 +90,7 @@ function pageOut(p: Page, offset: number, windowChars = PAGE_WINDOW_CHARS): Page
   const end = start + window.length;
   return {
     ...pageSummaryOut(p),
-    channel: { id: p.channel.id, name: sanitizeLabel(p.channel.name, 100) },
+    channel: { id: p.channel.id, name: sanitizeLabel(p.channel.name, NAME_CHARS) },
     created_at: p.created_at,
     created_by: p.created_by ? person(p.created_by) : null,
     body: wrapUntrusted(window, {
@@ -104,10 +105,21 @@ function pageOut(p: Page, offset: number, windowChars = PAGE_WINDOW_CHARS): Page
 }
 
 function pageText(p: PageOut, headline: string): string {
+  // The title, the channel's name and the people's names were written by
+  // people: one block holds them, then the body has its own.
+  const info = [
+    `Title: ${p.title}`,
+    `Channel: ${p.channel.name}`,
+    ...(p.updated_by || p.updated_via_agent
+      ? [
+          `Last changed by: ${p.updated_by ? p.updated_by.name : 'unknown'}${p.updated_via_agent ? `, through the agent ${p.updated_via_agent}` : ''}`,
+        ]
+      : []),
+  ];
   const lines = [
     headline,
-    `Page ${p.id} · version ${p.version} · channel ${p.channel.name} · updated ${p.updated_at}${p.updated_by ? ` by ${p.updated_by.name}` : ''}${p.updated_via_agent ? ` via ${p.updated_via_agent}` : ''}${p.parent_id ? ` · parent ${p.parent_id}` : ''}`,
-    wrapUntrusted(p.title, { source: 'page_title', maxChars: 200 }),
+    `Page ${p.id} · version ${p.version} · channel ${p.channel.id} · updated ${p.updated_at}${p.parent_id ? ` · parent ${p.parent_id}` : ''}`,
+    wrapLines(info, 'page_info'),
     p.body,
   ];
   if (p.next_offset !== null) {

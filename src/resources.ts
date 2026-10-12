@@ -15,6 +15,15 @@ import type { ResourceDefinition } from './toolsets/registry.js';
 const ITEM_KEY_RE = /^#?[A-Za-z][A-Za-z0-9]{1,5}-[1-9][0-9]{0,8}$/;
 const UUID_RE = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 
+/** A URI variable, percent-decoded; a malformed escape is the caller's error, not ours. */
+function decode(value: string | undefined, what: string): string {
+  try {
+    return decodeURIComponent(value ?? '');
+  } catch {
+    throw new ToolInputError(`The URI's ${what} is not validly percent-encoded.`);
+  }
+}
+
 export const itemResource: ResourceDefinition = {
   name: 'item',
   toolset: 'items',
@@ -25,7 +34,7 @@ export const itemResource: ResourceDefinition = {
   uriTemplate: 'buildit://items/{key}',
   mimeType: 'text/markdown',
   async read(vars, ctx) {
-    const key = decodeURIComponent(vars.key ?? '');
+    const key = decode(vars.key, 'item key');
     if (!ITEM_KEY_RE.test(key) && !UUID_RE.test(key)) {
       throw new ToolInputError('An item key such as DEMO-12.');
     }
@@ -43,7 +52,7 @@ export const pageResource: ResourceDefinition = {
   uriTemplate: 'buildit://pages/{id}',
   mimeType: 'text/markdown',
   async read(vars, ctx) {
-    const id = decodeURIComponent(vars.id ?? '');
+    const id = decode(vars.id, 'page id');
     if (!UUID_RE.test(id)) throw new ToolInputError('A page id (a uuid).');
     return (await readPage(ctx, id)).text;
   },

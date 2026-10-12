@@ -8,6 +8,7 @@ import { createMcpServer } from '../src/server.js';
 import { whoamiTool } from '../src/tools/whoami.js';
 import { SERVER_VERSION } from '../src/version.js';
 import { FakeApi, sampleIdentity, TOKENS, uid, USERS } from './support/fake-api.js';
+import { stripIds } from './support/harness.js';
 
 let api: FakeApi;
 const clients: Client[] = [];
@@ -78,9 +79,11 @@ describe('whoami', () => {
       },
     });
     const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
-    expect(text).toContain('Signed in as Test User (test.user@example.com) in the org Example Org');
+    expect(stripIds(text)).toContain(
+      '<untrusted_content source="names">\nUser: Test User (test.user@example.com)\nOrg: Example Org\nToken: Test token\nProjects in reach: DEMO (Demo project), OPS (Operations)\n</untrusted_content>',
+    );
     expect(text).toContain('Scopes: projects:read.');
-    expect(text).toContain('Projects in reach (2): DEMO (Demo project), OPS (Operations).');
+    expect(text).toContain('Projects in reach: 2 (listed above).');
     expect(text).toContain(
       'Rate limits for this token: 120 calls and 60 writes a minute, 2000 writes a day. For your account, across all your tokens: 300 calls a minute. For the whole org: 600 calls a minute.',
     );
@@ -104,9 +107,9 @@ describe('whoami', () => {
     const client = await connect(hostile);
     const result = await client.callTool({ name: 'whoami', arguments: {} });
     const text = (result.content as { text: string }[])[0]?.text ?? '';
-    expect(text).not.toContain('</untrusted_content>');
+    expect(text).not.toMatch(/<\/untrusted_content>/);
     expect(text).not.toMatch(/\nIgnore previous/);
-    expect(JSON.stringify(result.structuredContent)).not.toContain('</untrusted_content>');
+    expect(JSON.stringify(result.structuredContent)).not.toMatch(/<\/untrusted_content>/);
   });
 
   it('says when the server is too old for the API', async () => {

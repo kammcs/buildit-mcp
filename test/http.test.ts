@@ -310,7 +310,10 @@ describe('HTTP mode: the real tools', () => {
 
 describe('HTTP mode: every toolset', () => {
   it('lists the right tools per toolset header, and applies a plan across requests', async () => {
-    const real = await startHttp(httpConfig(), createLogger({ sink: () => undefined }));
+    const real = await startHttp(
+      httpConfig(['--toolsets', 'all']),
+      createLogger({ sink: () => undefined }),
+    );
     const open = async (token: string, toolsets: string, modern: boolean): Promise<Client> => {
       const transport = new StreamableHTTPClientTransport(new URL(real.url), {
         requestInit: {
@@ -410,6 +413,44 @@ describe('HTTP mode: every toolset', () => {
       const item = await all.readResource({ uri: 'buildit://items/DEMO-42' });
       expect(JSON.stringify(item.contents)).toContain('DEMO-42');
       expect(api.violations).toEqual([]);
+    } finally {
+      await Promise.all(clients.splice(0).map((c) => c.close()));
+      await real.close();
+      api.reset();
+    }
+  });
+
+  it('treats the configured toolsets as a ceiling the header can only narrow', async () => {
+    const real = await startHttp(
+      httpConfig(['--toolsets', 'items']),
+      createLogger({ sink: () => undefined }),
+    );
+    const open = async (toolsets: string): Promise<Client> => {
+      const transport = new StreamableHTTPClientTransport(new URL(real.url), {
+        requestInit: {
+          headers: { Authorization: `Bearer ${TOKENS.full}`, 'X-Buildit-Toolsets': toolsets },
+        },
+      });
+      const client = new Client({ name: 'http-test', version: '1.0.0' });
+      await client.connect(transport);
+      clients.push(client);
+      return client;
+    };
+    try {
+      // A toolset the operator didn't enable can't be added by a caller.
+      const destructive = await open('destructive');
+      const names = await toolNames(destructive);
+      expect(names.filter((n) => n.startsWith('propose_') || n === 'apply_plan')).toEqual([]);
+      expect(names).toEqual([]);
+      await expect(
+        destructive.callTool({ name: 'apply_plan', arguments: { handle: 'plan_test_handle' } }),
+      ).rejects.toThrow(/apply_plan not found/);
+      // "all" means all of the configured ones; mixing in an enabled toolset keeps only that one.
+      expect(await toolNames(await open('all'))).toHaveLength(13);
+      const mixed = await toolNames(await open('items,admin,destructive'));
+      expect(mixed).toHaveLength(13);
+      expect(mixed.some((n) => n.startsWith('propose_') || n === 'create_project')).toBe(false);
+      expect(api.requests.some((r) => r.path.startsWith('/v1/plans'))).toBe(false);
     } finally {
       await Promise.all(clients.splice(0).map((c) => c.close()));
       await real.close();

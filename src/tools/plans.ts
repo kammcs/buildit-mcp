@@ -32,6 +32,7 @@ import {
   ProjectKeyInput,
   scopesOf,
   UserRefInput,
+  wrapLines,
 } from './shared.js';
 
 const NameRef = (what: string) => z.string().min(1).max(60).describe(what);
@@ -411,8 +412,9 @@ export const getWorkflowTool = defineTool({
       types: r.types.map((t) => ({ id: t.id, name: name(t.name) })),
       workflow_def: workflowDef,
     };
-    const lines = [
-      `Workflow ${structured.workflow.name} of ${r.project.key} (id ${w.id}; types: ${structured.workflow.types.join(', ') || 'none'}):`,
+    // Workflow, status, type and field names are people-written: one block holds them.
+    const named = [
+      `Workflow: ${structured.workflow.name} (types: ${structured.workflow.types.join(', ') || 'none'})`,
       ...workflowLines(
         w.restrict_transitions,
         w.statuses.map((s) => ({
@@ -428,6 +430,10 @@ export const getWorkflowTool = defineTool({
         })),
       ),
       `Fields: ${structured.fields.map((f) => `${f.name} (cf:${f.id})`).join(', ') || 'none'}.`,
+    ];
+    const lines = [
+      `Workflow ${w.id} of ${r.project.key}:`,
+      wrapLines(named, 'workflow'),
       `The whole definition, with the ids of its ${def.statuses?.length ?? 0} statuses and ${def.transitions?.length ?? 0} transitions, is workflow_def in the structured result: edit it and pass it to propose_workflow_change.`,
     ];
     return { structured, text: lines.join('\n') };
@@ -479,12 +485,14 @@ export const listWorkTypesTool = defineTool({
         workflow: sanitizeLabel(p.workflow.name, 60),
       })),
     }));
+    const lines = types.map(
+      (t) =>
+        `- ${t.name} (${t.level}${t.archived ? ', archived' : ''}) · ${t.projects.map((p) => `${p.project}: ${p.workflow}`).join(', ') || 'no project'} · id ${t.id}`,
+    );
+    // One block for the list: type and workflow names are people-written.
     const text = [
       `${types.length} work type(s):`,
-      ...types.map(
-        (t) =>
-          `- ${t.name} (${t.level}${t.archived ? ', archived' : ''}) · ${t.projects.map((p) => `${p.project}: ${p.workflow}`).join(', ') || 'no project'} · id ${t.id}`,
-      ),
+      ...(lines.length > 0 ? [wrapLines(lines, 'work_type_list')] : []),
     ].join('\n');
     return { structured: { types }, text };
   },

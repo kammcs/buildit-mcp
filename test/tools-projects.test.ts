@@ -100,9 +100,9 @@ describe('describe_project', () => {
     const c = await client();
     const r = await c.call('describe_project', { project: 'DEMO' });
     expect(r.isError).toBe(false);
-    expect(r.text).not.toContain('</untrusted_content>');
+    assertDefused(r.text);
     expect(r.text).not.toMatch(/\nIgnore previous/);
-    expect(JSON.stringify(r.structured)).not.toContain('</untrusted_content>');
+    assertDefused(JSON.stringify(r.structured));
   });
 });
 

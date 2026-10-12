@@ -10,6 +10,8 @@ import {
   type Config,
   type Env,
 } from '../src/config.js';
+import { createLogger } from '../src/log.js';
+import { createHttpApp } from '../src/transports/http.js';
 
 const TOKEN = 'buildit_pat_test_config_token';
 
@@ -160,9 +162,37 @@ describe('parseCli', () => {
     expect(config.warnings).toEqual([]);
   });
 
-  it('warns when binding off loopback without allowed hosts', () => {
-    const config = run(['--http', '--host', '0.0.0.0'], {});
-    expect(config.warnings.join(' ')).toMatch(/BUILDIT_ALLOWED_HOSTS/);
+  it('refuses to bind off loopback without allowed hosts, unless told to', () => {
+    expect(() => run(['--http', '--host', '0.0.0.0'], {})).toThrow(ConfigError);
+    expect(() => run(['--http', '--host', 'mcp.example.com'], {})).toThrow(
+      /BUILDIT_ALLOWED_HOSTS[\s\S]*BUILDIT_ALLOW_ANY_HOST=true/,
+    );
+    // Loopback needs nothing; a bind off loopback with allowed hosts needs nothing more.
+    expect(run(['--http'], {}).http.allowAnyHost).toBeUndefined();
+    expect(
+      run(['--http', '--host', '0.0.0.0', '--allowed-hosts', 'mcp.example.com'], {}).http
+        .allowAnyHost,
+    ).toBeUndefined();
+    // The explicit opt-out, by flag or environment variable, still warns.
+    for (const config of [
+      run(['--http', '--host', '0.0.0.0', '--allow-any-host'], {}),
+      run(['--http', '--host', '0.0.0.0'], { BUILDIT_ALLOW_ANY_HOST: 'true' }),
+    ]) {
+      expect(config.http.allowAnyHost).toBe(true);
+      expect(config.warnings.join(' ')).toMatch(/Host header is not checked/);
+    }
+    expect(() => run(['--http', '--host', '0.0.0.0'], { BUILDIT_ALLOW_ANY_HOST: 'false' })).toThrow(
+      ConfigError,
+    );
+    // The HTTP app refuses such a configuration too, whoever builds it.
+    const config = run(['--http', '--host', '0.0.0.0', '--allow-any-host'], {});
+    expect(() =>
+      createHttpApp(
+        { ...config, http: { host: '0.0.0.0', port: 0 } },
+        createLogger({ sink: () => undefined }),
+      ),
+    ).toThrow(ConfigError);
+    expect(() => createHttpApp(config, createLogger({ sink: () => undefined }))).not.toThrow();
   });
 
   it('rejects wildcard web origins and bad hostnames', () => {

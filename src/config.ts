@@ -28,6 +28,12 @@ export interface HttpConfig {
   allowedHosts?: string[];
   /** Origin hostnames accepted in the Origin header; undefined means the loopback default (or none off loopback). */
   allowedOrigins?: string[];
+  /**
+   * Off loopback without allowedHosts, serve anyway with the Host header
+   * unchecked (the operator's explicit choice, for example behind a proxy
+   * that checks it). Without it, that configuration is refused.
+   */
+  allowAnyHost?: boolean;
 }
 
 export interface Config {
@@ -72,6 +78,10 @@ Options (each also has an environment variable):
   --port <port>             BUILDIT_PORT              HTTP port (default ${DEFAULT_HTTP_PORT})
   --allowed-hosts <list>    BUILDIT_ALLOWED_HOSTS     Hostnames accepted in the Host header
   --allowed-origins <list>  BUILDIT_ALLOWED_ORIGINS   Hostnames accepted in the Origin header
+  --allow-any-host          BUILDIT_ALLOW_ANY_HOST=true
+                                                      Off loopback, serve without checking the
+                                                      Host header (otherwise BUILDIT_ALLOWED_HOSTS
+                                                      is required there)
   -h, --help                                          Show this help
   -v, --version                                       Show the version
 
@@ -243,6 +253,7 @@ export function parseCli(argv: readonly string[], env: Env): CliAction {
         port: { type: 'string' },
         'allowed-hosts': { type: 'string' },
         'allowed-origins': { type: 'string' },
+        'allow-any-host': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
       },
@@ -313,8 +324,17 @@ export function parseCli(argv: readonly string[], env: Env): CliAction {
       );
     }
     if (!isLoopbackHost(host) && httpConfig.allowedHosts === undefined) {
+      const anyHost =
+        values['allow-any-host'] === true ||
+        parseBoolean('BUILDIT_ALLOW_ANY_HOST', env.BUILDIT_ALLOW_ANY_HOST, false);
+      if (!anyHost) {
+        throw new ConfigError(
+          `Binding to ${host} needs BUILDIT_ALLOWED_HOSTS (or --allowed-hosts): the hostnames clients use, so the Host header can be checked. To serve without that check (for example behind a proxy that checks it), set BUILDIT_ALLOW_ANY_HOST=true or pass --allow-any-host.`,
+        );
+      }
+      httpConfig.allowAnyHost = true;
       warnings.push(
-        `Binding to ${host} without BUILDIT_ALLOWED_HOSTS: the Host header is not checked. Set it to the hostnames clients use.`,
+        `Binding to ${host} without BUILDIT_ALLOWED_HOSTS, as BUILDIT_ALLOW_ANY_HOST asks: the Host header is not checked.`,
       );
     }
   }
