@@ -11,6 +11,7 @@ import {
   HOSTILE,
   injectionIsInsideBlocks,
   type Connected,
+  stripIds,
 } from './support/harness.js';
 
 let api: FakeApi;
@@ -47,7 +48,7 @@ describe('resources', () => {
     const c = await client(TOKENS.read);
     const text = await readText(c, 'buildit://items/DEMO-42');
     expect(text).toContain('DEMO-42 · Story (standard) · In progress (started)');
-    expect(text).toContain('<untrusted_content source="description">');
+    expect(stripIds(text)).toContain('<untrusted_content source="description">');
     expect(api.requests.at(-1)?.headers['x-buildit-tool']).toBe('resource:item');
     const r = await c.client.readResource({ uri: 'buildit://items/DEMO-42' });
     expect(r.contents[0]).toMatchObject({ mimeType: 'text/markdown' });
@@ -56,7 +57,7 @@ describe('resources', () => {
   it('reads a page through the API, as get_page does', async () => {
     const c = await client();
     const text = await readText(c, `buildit://pages/${PAGES.home}`);
-    expect(text).toContain('<untrusted_content source="page" author="Sam Example">');
+    expect(stripIds(text)).toContain('<untrusted_content source="page" author="Sam Example">');
     expect(text).toContain('Start here.');
   });
 

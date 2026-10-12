@@ -7,6 +7,7 @@ import {
   HOSTILE,
   injectionIsInsideBlocks,
   type Connected,
+  stripIds,
 } from './support/harness.js';
 
 let api: FakeApi;
@@ -120,9 +121,9 @@ describe('search_items', () => {
     expect(keys(r.structured)).toEqual(['DEMO-42', 'DEMO-46']);
     expect(r.structured.text_search).toBe(true);
     expect(r.structured.next_cursor).toBeNull();
-    expect((r.structured.items as { match?: { snippet: string } }[])[0]?.match?.snippet).toContain(
-      '<untrusted_content source="snippet">',
-    );
+    expect(
+      stripIds((r.structured.items as { match?: { snippet: string } }[])[0]?.match?.snippet ?? ''),
+    ).toContain('<untrusted_content source="snippet">');
     expect(r.text).toContain('Text search returns one page of at most 50');
   });
 
@@ -140,7 +141,9 @@ describe('search_items', () => {
     const c = await client();
     const r = await c.call('search_items', { parent: 'DEMO-12', detail: 'full', limit: 50 });
     const items = r.structured.items as { key: string; description?: string; custom?: unknown[] }[];
-    expect(items[0]?.description).toContain('<untrusted_content source="description">');
+    expect(stripIds(items[0]?.description ?? '')).toContain(
+      '<untrusted_content source="description">',
+    );
     expect(items[0]?.custom).toEqual([{ field: 'Severity', kind: 'single_select', value: 'High' }]);
     expect(r.text).toContain('page size cut to 20');
     expect(api.requests.at(-1)?.query).toContain('limit=20');
@@ -164,7 +167,7 @@ describe('search_items', () => {
     expect(injectionIsInsideBlocks(r.text)).toBe(true);
     const json = JSON.stringify(r.structured);
     assertDefused(json);
-    expect(json).not.toContain('</untrusted_content>');
+    assertDefused(json);
     const full = await c.call('search_items', { parent: 'DEMO-12', detail: 'full' });
     assertDefused(full.text);
     expect(injectionIsInsideBlocks(full.text)).toBe(true);
@@ -201,7 +204,7 @@ describe('get_item', () => {
     expect(s.comments_next_cursor).toBeNull();
     expect(s).not.toHaveProperty('history');
     expect(r.text).toContain('version 7 · description_version 2');
-    expect(r.text).toContain('<untrusted_content source="comment" author="Sam Example">');
+    expect(stripIds(r.text)).toContain('<untrusted_content source="comment" author="Sam Example">');
     expect(api.requests.at(-1)?.path).toBe('/v1/items/demo-42');
   });
 
@@ -349,19 +352,21 @@ describe('get_item with include_development', () => {
     });
     const block = (s: unknown) =>
       `<untrusted_content source="git">\n${String(s)}\n</untrusted_content>`;
-    expect(d.pull_requests[0]?.title).toBe(block('DEMO-42: Show a notice when a share ends'));
+    expect(stripIds(String(d.pull_requests[0]?.title))).toBe(
+      block('DEMO-42: Show a notice when a share ends'),
+    );
     // A GitHub login is a plain label; a name from git is free text, wrapped.
     expect(d.pull_requests[0]?.author).toBe('samexample');
     expect(d.branches[0]).toMatchObject({ state: 'active', repo: 'octo-org/test-repo' });
-    expect(d.branches[0]?.name).toBe(block('demo-42-share-notices-on-windows'));
+    expect(stripIds(String(d.branches[0]?.name))).toBe(block('demo-42-share-notices-on-windows'));
     expect(d.commits[0]).toMatchObject({
       sha: '4f2c1a9e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39',
       committed_at: '2026-10-07T13:21:00Z',
     });
-    expect(d.commits[0]?.title).toBe(block('DEMO-42: notice when a share ends'));
-    expect(d.commits[0]?.author).toBe(block('Sam Example'));
+    expect(stripIds(String(d.commits[0]?.title))).toBe(block('DEMO-42: notice when a share ends'));
+    expect(stripIds(String(d.commits[0]?.author))).toBe(block('Sam Example'));
 
-    expect(r.text).toContain(
+    expect(stripIds(r.text)).toContain(
       'Development on GitHub: 1 pull request, 1 branch, 4 commits (the 1 latest shown), newest first:\n<untrusted_content source="git">\nPull requests:\n- #12 open · octo-org/test-repo · by samexample',
     );
     expect(r.text).toContain('- demo-42-share-notices-on-windows (active) · octo-org/test-repo');
@@ -421,9 +426,9 @@ describe('get_item with include_development', () => {
       s.commits[0]!.title,
       s.commits[0]!.author,
     ]) {
-      expect(v.startsWith('<untrusted_content source="git">\n')).toBe(true);
-      expect(v.endsWith('\n</untrusted_content>')).toBe(true);
-      expect(v.match(/<\/untrusted_content>/g)).toHaveLength(1);
+      expect(stripIds(v).startsWith('<untrusted_content source="git">\n')).toBe(true);
+      expect(stripIds(v).endsWith('\n</untrusted_content>')).toBe(true);
+      expect(v.match(/<\/untrusted_content id=/g)).toHaveLength(1);
     }
   });
 });
@@ -484,9 +489,10 @@ describe('response size', () => {
     // 20 of each with the longest values the API allows add about 11k tokens at most
     // (titles, names and authors are cut; the text links only pull requests). Real
     // blocks are a few thousand characters.
-    expect(size(r) - size(without)).toBeLessThan(45_000);
+    // Block ids add some 30 characters to each of the 120 wrapped values.
+    expect(size(r) - size(without)).toBeLessThan(50_000);
     const s = r.structured.development as { pull_requests: { title: string }[] };
-    expect(s.pull_requests[0]?.title).toBe(
+    expect(stripIds(s.pull_requests[0]?.title ?? '')).toBe(
       `<untrusted_content source="git">\n${'t'.repeat(119)}…\n</untrusted_content>`,
     );
   });

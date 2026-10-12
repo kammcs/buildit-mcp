@@ -9,6 +9,7 @@ import {
   HOSTILE,
   injectionIsInsideBlocks,
   type Connected,
+  stripIds,
 } from './support/harness.js';
 
 let api: FakeApi;
@@ -50,7 +51,7 @@ describe('list_comments', () => {
     }[];
     expect(comments.map((x) => x.author.name)).toEqual(['Sam Example', 'Test User']);
     expect(comments[1]).toMatchObject({ via_agent: 'Test token', mentions: ['Sam Example'] });
-    expect(comments[0]?.body).toBe(
+    expect(stripIds(comments[0]?.body ?? '')).toBe(
       '<untrusted_content source="comment" author="Sam Example">\nReproduced on Windows 11.\n</untrusted_content>',
     );
     expect(r.text).toContain('2 comment(s) on DEMO-42, oldest first:');

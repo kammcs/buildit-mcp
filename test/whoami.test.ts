@@ -104,9 +104,9 @@ describe('whoami', () => {
     const client = await connect(hostile);
     const result = await client.callTool({ name: 'whoami', arguments: {} });
     const text = (result.content as { text: string }[])[0]?.text ?? '';
-    expect(text).not.toContain('</untrusted_content>');
+    expect(text).not.toMatch(/<\/untrusted_content>/);
     expect(text).not.toMatch(/\nIgnore previous/);
-    expect(JSON.stringify(result.structuredContent)).not.toContain('</untrusted_content>');
+    expect(JSON.stringify(result.structuredContent)).not.toMatch(/<\/untrusted_content>/);
   });
 
   it('says when the server is too old for the API', async () => {

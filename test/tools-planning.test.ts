@@ -11,6 +11,7 @@ import {
   HOSTILE,
   injectionIsInsideBlocks,
   type Connected,
+  stripIds,
 } from './support/harness.js';
 
 let api: FakeApi;
@@ -48,7 +49,7 @@ describe('list_sprints', () => {
     const sprints = r.structured.sprints as { number: number; state: string; goal: string }[];
     expect(sprints.map((s) => s.number)).toEqual([3]);
     expect(sprints[0]).toMatchObject({ state: 'active', item_count: 1, done_count: 0 });
-    expect(sprints[0]?.goal).toContain('<untrusted_content source="sprint_goal">');
+    expect(stripIds(sprints[0]?.goal ?? '')).toContain('<untrusted_content source="sprint_goal">');
     expect(r.text).toContain('#3 Sprint 3 · active · 2026-10-01 to 2026-10-14 · done 0 of 1');
     expect(r.text).toContain('This is the last page.');
   });
@@ -309,7 +310,9 @@ describe('write_release_notes', () => {
       needs_confirmation: false,
       page_version: 1,
     });
-    expect(first.structured.markdown).toContain('<untrusted_content source="release_notes">');
+    expect(stripIds(String(first.structured.markdown))).toContain(
+      '<untrusted_content source="release_notes">',
+    );
     expect(first.text).toContain('- DEMO-44 Crash on start');
     const pageId = first.structured.page_id as string;
     const notes = api.store.pages.find((p) => p.id === pageId)!;

@@ -17,6 +17,7 @@ import {
   connect,
   HOSTILE,
   injectionIsInsideBlocks,
+  stripIds,
   type Connected,
 } from './support/harness.js';
 
@@ -88,7 +89,7 @@ describe('read_channel', () => {
     const messages = r.structured.messages as { id: string; reply_count: number; body: string }[];
     expect(messages.map((m) => m.id)).toEqual([MESSAGES.other, MESSAGES.root]);
     expect(messages[1]?.reply_count).toBe(1);
-    expect(messages[1]?.body).toContain(
+    expect(stripIds(messages[1]?.body ?? '')).toContain(
       '<untrusted_content source="message" author="Sam Example">',
     );
     expect(r.text).toContain('1 replies (read_thread)');
