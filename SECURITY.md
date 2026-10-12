@@ -4,8 +4,6 @@
 
 Please report security problems privately, by email to **security@buildit.social**, not in a public issue or pull request.
 
-<!-- TODO(maintainers): confirm that security@buildit.social exists and is monitored before publishing. -->
-
 Include what you can of:
 
 - what the problem is and what an attacker could do with it;
