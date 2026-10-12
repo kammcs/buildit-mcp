@@ -17,9 +17,10 @@
  * security boundary; the boundaries are the token's scopes and limits, the
  * API's permission checks, and preview-then-confirm for destructive changes.
  *
- * So that the content can't end the block early, or fake a new one, the
- * block's name is also defused wherever it appears inside, look-alikes
- * included (see neutralize).
+ * So that the content can't seem to end the block early, or fake a new one,
+ * the block's name is also defused wherever it could form a tag inside,
+ * look-alikes included; text that only mentions the name is left exactly as
+ * written (see neutralize).
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
@@ -125,7 +126,53 @@ const NAME_IN_SHADOW = /untrusted[\p{P}\p{Z}\p{Cc}\s]*content/gu;
 const GAP = /[\s\p{Cc}\p{Default_Ignorable_Code_Point}\p{M}]/u;
 /** Slashes and their look-alikes. */
 const SLASH = /[/\\\u{2044}\u{2215}\u{29F8}\u{2571}\u{FF0F}\u{FF3C}\u{27CB}]/u;
-const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+/**
+ * Opening angle brackets and their look-alikes. Compatibility forms (＜, ﹤,
+ * 〈, ...) are found through their shadow (NFKD, marks dropped).
+ */
+const OPENERS = new Set([
+  '<',
+  '\u{2C2}', // ˂ modifier letter left arrowhead
+  '\u{2039}', // ‹ single left-pointing angle quotation mark
+  '\u{3008}', // 〈 CJK left angle bracket (and U+2329 through NFKD)
+  '\u{27E8}', // ⟨ mathematical left angle bracket
+  '\u{27EA}', // ⟪ mathematical left double angle bracket
+  '\u{276C}', // ❬ medium left-pointing angle bracket ornament
+  '\u{276E}', // ❮ heavy left-pointing angle quotation mark ornament
+  '\u{2770}', // ❰ heavy left-pointing angle bracket ornament
+  '\u{29FC}', // ⧼ left-pointing curved angle bracket
+  '\u{2991}', // ⦑ left angle bracket with dot
+  '\u{2993}', // ⦓ left arc less-than bracket
+  '\u{227A}', // ≺ precedes
+  '\u{1438}', // ᐸ Canadian syllabics pa
+]);
+/** Closing angle brackets and their look-alikes, as OPENERS. */
+const CLOSERS = new Set([
+  '>',
+  '\u{2C3}', // ˃
+  '\u{203A}', // ›
+  '\u{3009}', // 〉 (and U+232A through NFKD)
+  '\u{27E9}', // ⟩
+  '\u{27EB}', // ⟫
+  '\u{276D}', // ❭
+  '\u{276F}', // ❯
+  '\u{2771}', // ❱
+  '\u{29FD}', // ⧽
+  '\u{2992}', // ⦒
+  '\u{2994}', // ⦔
+  '\u{227B}', // ≻ succeeds
+  '\u{1433}', // ᐳ Canadian syllabics po
+]);
+/** `&lt;` as an HTML entity, ending at the end of the string. */
+const OPEN_ENTITY = /&(?:lt|#0*60|#x0*3c);$/i;
+/** `&gt;` as an HTML entity, at the start of the string. */
+const CLOSE_ENTITY = /^&(?:gt|#0*62|#x0*3e);/i;
+/** How far back or ahead an entity can reach, in UTF-16 units. */
+const ENTITY_REACH = 16;
+/** What the name can be glued to as the end of a word, path, URL or anchor (not a tag). */
+const WORDLIKE = /[\p{L}\p{N}#/.\-_~%+=?&@:]/u;
+/** Characters an attribute name or an unquoted value can't contain (besides gaps and brackets). */
+const NOT_IN_ATTRIBUTE = /["'`=<>]/;
 // eslint-disable-next-line no-control-regex -- ASCII is the fast path
 const ASCII_ONLY = /^[\u0000-\u007F]*$/;
 
@@ -145,7 +192,7 @@ function shadowOf(ch: string, cache: Map<string, string>): string {
 }
 
 /** Where the name appears in `text`, as [start, end) spans of `text`, in order. */
-function nameSpans(text: string): [number, number][] {
+function nameSpans(text: string, cache: Map<string, string>): [number, number][] {
   const spans: [number, number][] = [];
   if (ASCII_ONLY.test(text)) {
     // One shadow character per character: the indexes are the same.
@@ -160,7 +207,6 @@ function nameSpans(text: string): [number, number][] {
   let shadow = '';
   const from: number[] = [];
   const size: number[] = [];
-  const cache = new Map<string, string>();
   for (let i = 0; i < text.length;) {
     const cp = text.codePointAt(i) ?? 0;
     const len = cp > 0xffff ? 2 : 1;
@@ -191,41 +237,155 @@ function before(text: string, index: number): { ch: string; len: number } | unde
   return { ch: text.charAt(index - 1), len: 1 };
 }
 
+/** The code point that starts at `index`. */
+function at(text: string, index: number): string {
+  const cp = text.codePointAt(index);
+  return cp === undefined ? '' : String.fromCodePoint(cp);
+}
+
+function isBracket(ch: string, set: Set<string>, cache: Map<string, string>): boolean {
+  return set.has(ch) || (ch.charCodeAt(0) > 0x7f && set.has(shadowOf(ch, cache)));
+}
+
+/** Skips gap characters from `index`; the index after them. */
+function skipGap(text: string, index: number): number {
+  let i = index;
+  while (i < text.length) {
+    const ch = at(text, i);
+    if (!GAP.test(ch)) break;
+    i += ch.length;
+  }
+  return i;
+}
+
+/** Skips a run of characters that may make up an attribute name or an unquoted value. */
+function skipAttributeRun(
+  text: string,
+  index: number,
+  cache: Map<string, string>,
+  slashes: boolean,
+): number {
+  let i = index;
+  while (i < text.length) {
+    const ch = at(text, i);
+    if (GAP.test(ch) || NOT_IN_ATTRIBUTE.test(ch)) break;
+    if (!slashes && SLASH.test(ch)) break;
+    if (isBracket(ch, CLOSERS, cache) || isBracket(ch, OPENERS, cache)) break;
+    i += ch.length;
+  }
+  return i;
+}
+
 /**
- * Defuses anything in `text` that could open or close an untrusted_content
- * block, wherever the name appears: in any case, with any punctuation or
- * spaces between its two words, in full-width, mathematical or other
- * compatibility forms, with Cyrillic or Greek look-alike letters, and with
- * invisible characters, combining marks or variation selectors anywhere in
- * it.
+ * Whether the name that ends at `end` is followed by the rest of a tag: a
+ * closing bracket (or `&gt;`), right after it or after attributes
+ * (`key="value"`, `key='value'` or `key=value`, each after a space), with an
+ * optional slash before the bracket. A space and a bracket with no attribute
+ * between, as in "Settings > untrusted_content > Ids", is prose. `memo`
+ * keeps the answer for each state the scan passes (a position, and whether
+ * an attribute came before it), so that scans from many names share their
+ * work and the whole is linear.
+ */
+function closesTag(
+  text: string,
+  end: number,
+  cache: Map<string, string>,
+  memo: Map<number, boolean>,
+): boolean {
+  const isCloserAt = (i: number): boolean =>
+    i < text.length &&
+    (isBracket(at(text, i), CLOSERS, cache) || CLOSE_ENTITY.test(text.slice(i, i + ENTITY_REACH)));
+  const path: number[] = [];
+  let answer = false;
+  let i = end;
+  let attributes = false;
+  for (;;) {
+    const state = 2 * i + (attributes ? 1 : 0);
+    const known = memo.get(state);
+    if (known !== undefined) {
+      answer = known;
+      break;
+    }
+    path.push(state);
+    let k = skipGap(text, i);
+    if (k >= text.length) break;
+    const spaced = /\s/.test(text.slice(i, k));
+    const ch = at(text, k);
+    if (attributes || !spaced) {
+      if (isCloserAt(k)) {
+        answer = true;
+        break;
+      }
+      if (SLASH.test(ch)) {
+        answer = isCloserAt(skipGap(text, k + ch.length));
+        break;
+      }
+    }
+    // An attribute, after at least one space.
+    if (k === i) break;
+    const nameEnd = skipAttributeRun(text, k, cache, false);
+    if (nameEnd === k) break;
+    k = skipGap(text, nameEnd);
+    if (text.charAt(k) !== '=') break;
+    k = skipGap(text, k + 1);
+    const quote = text.charAt(k);
+    if (quote === '"' || quote === "'") {
+      const close = text.indexOf(quote, k + 1);
+      if (close < 0) break;
+      i = close + 1;
+    } else {
+      const valueEnd = skipAttributeRun(text, k, cache, true);
+      if (valueEnd === k) break;
+      i = valueEnd;
+    }
+    attributes = true;
+  }
+  for (const state of path) memo.set(state, answer);
+  return answer;
+}
+
+/**
+ * Defuses every place in `text` where the block's name could form a tag that
+ * opens or closes an untrusted_content block, and leaves all other text as
+ * it is, so that prose and Markdown that mention the name (in backticks,
+ * bold, headings, links, quotes, paths and so on) come back byte for byte.
  *
- * The name is found in a shadow copy of the text (NFKD, lower case, those
- * characters dropped, look-alikes folded to Latin) and mapped back. Then
- * whatever stands before it as a bracket (after spaces and an optional
- * slash) becomes `[`, so `</untrusted_content>` reads as
- * `[/untrusted_content>`: still legible, no longer a tag. A bracket is `<`
- * or any character outside ASCII that is not a letter or digit (˂, 〈, ‹,
- * ＜, ...). When a letter or another character is glued to it instead, `[`
- * is put just before the name. A name after a space and a word, as in "the
- * untrusted content", is left as it is.
+ * The name is found in any case, with any punctuation or spaces between its
+ * two words, in full-width, mathematical or other compatibility forms, with
+ * Cyrillic or Greek look-alike letters, and with invisible characters,
+ * combining marks or variation selectors anywhere in it: in a shadow copy of
+ * the text (NFKD, lower case, those characters dropped, look-alikes folded
+ * to Latin), mapped back.
  *
- * Linear in the length of the text.
+ * It could form a tag when, after optional spaces, invisible characters and
+ * one optional slash (or look-alike), an opening angle bracket stands before
+ * it: `<`, a look-alike (˂, 〈, ‹, ⟨, ...) or a compatibility form of one
+ * (＜, ﹤, ...). That bracket becomes `[`, so `</untrusted_content>` reads as
+ * `[/untrusted_content>`: still legible, no longer a tag. When `&lt;` stands
+ * there instead, or the name (not glued to a word, path, URL or anchor) is
+ * followed by the rest of a tag (`>`, a look-alike or `&gt;`, right after it
+ * or after attributes; see closesTag), `[` goes just before the name. A
+ * name right after `[` is already
+ * defused and stays as it is, so running this again changes nothing.
+ *
+ * This is a second line of defence: the first is the block id, which text
+ * written before the call can't know. Linear in the length of the text.
  */
 export function neutralize(text: string): string {
   if (text.length < 'untrustedcontent'.length) return text;
-  const spans = nameSpans(text);
+  const cache = new Map<string, string>();
+  const spans = nameSpans(text, cache);
   if (spans.length === 0) return text;
+  const memo = new Map<number, boolean>();
   // Edits by position: replace the character there (of this width) with "[", or insert "[".
   const edits = new Map<number, number>();
-  for (const [start] of spans) {
+  for (const [start, end] of spans) {
     let j = start;
     let slash = false;
-    let space = false;
     for (;;) {
       const prev = before(text, j);
       if (prev === undefined) break;
       if (GAP.test(prev.ch)) {
-        if (/\s/.test(prev.ch)) space = true;
         j -= prev.len;
       } else if (!slash && SLASH.test(prev.ch)) {
         slash = true;
@@ -235,14 +395,20 @@ export function neutralize(text: string): string {
       }
     }
     const opener = before(text, j);
-    if (opener === undefined || opener.ch === '[') continue;
-    const bracket =
-      opener.ch === '<' || (opener.ch.charCodeAt(0) > 0x7f && !LETTER_OR_DIGIT.test(opener.ch));
-    if (bracket) {
+    if (opener?.ch === '[') continue;
+    if (opener !== undefined && isBracket(opener.ch, OPENERS, cache)) {
       edits.set(j - opener.len, opener.len);
-    } else if (!space && !edits.has(start)) {
-      edits.set(start, 0);
+      continue;
     }
+    if (OPEN_ENTITY.test(text.slice(Math.max(0, j - ENTITY_REACH), j))) {
+      edits.set(start, 0);
+      continue;
+    }
+    // Glued (no space) to the end of a word, path, URL or anchor: not a tag of the name.
+    let glued = before(text, start);
+    if (glued !== undefined && SLASH.test(glued.ch)) glued = before(text, start - glued.len);
+    if (glued !== undefined && WORDLIKE.test(glued.ch)) continue;
+    if (closesTag(text, end, cache, memo)) edits.set(start, 0);
   }
   let out = '';
   let last = 0;
