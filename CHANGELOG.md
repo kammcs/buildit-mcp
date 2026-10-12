@@ -26,6 +26,7 @@ Also in this release:
 - People-written content (titles, descriptions, comments, pages, messages) comes back inside `<untrusted_content>` blocks.
 - Read-only mode (`BUILDIT_READ_ONLY`) and a list of tools to hide (`BUILDIT_EXCLUDE_TOOLS`).
 - JSON logs on stderr that never contain tokens or content.
+- Image layouts in page bodies and item descriptions: an image's title sets its width (10% to 100%), placement (left, center, right, wrap-left, wrap-right) and gap (`![alt](file:<id> "40% wrap-left gap-m")`); tools that rewrite Markdown keep the titles as read, and a malformed one is refused (`image_layout_invalid`).
 
 ### Transports
 
