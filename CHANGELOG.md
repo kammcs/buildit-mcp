@@ -23,15 +23,27 @@ Deleting, moving and bulk-editing items, archiving a status, and changing workfl
 Also in this release:
 
 - Resources `buildit://items/{key}` and `buildit://pages/{id}`, and the prompts `plan_epic`, `triage` and `standup`.
-- People-written content (titles, descriptions, comments, pages, messages) comes back inside `<untrusted_content>` blocks.
+- People-written content (titles, descriptions, comments, pages, messages, and the names of people, projects, channels and the like) comes back inside `<untrusted_content>` blocks, each with a random id that its closing tag repeats.
 - Read-only mode (`BUILDIT_READ_ONLY`) and a list of tools to hide (`BUILDIT_EXCLUDE_TOOLS`).
 - JSON logs on stderr that never contain tokens or content.
 - Image layouts in page bodies and item descriptions: an image's title sets its width (10% to 100%), placement (left, center, right, wrap-left, wrap-right) and gap (`![alt](file:<id> "40% wrap-left gap-m")`); tools that rewrite Markdown keep the titles as read, and a malformed one is refused (`image_layout_invalid`).
 
+### Hardening
+
+- Hardening: untrusted-content blocks carry a random id per result, and the closing tag repeats it; the agent is told a block ends only at its own closing tag.
+- Hardening: untrusted-content marking is stronger against look-alike tags.
+- Hardening: names that people write (people, the org, tokens, projects, channels, sprints, releases, statuses, types, labels, fields) are inside untrusted blocks in every tool's text, and capped at 64 characters for people and 60 for other names.
+- Hardening: in HTTP mode, the configured toolsets are a ceiling; `X-Buildit-Toolsets` can only narrow them.
+- Hardening: binding off loopback without `BUILDIT_ALLOWED_HOSTS` is refused unless `BUILDIT_ALLOW_ANY_HOST=true` (or `--allow-any-host`) is set.
+- Hardening: path parameters that would change the API route are refused as `invalid_arguments` before any request is sent.
+- Hardening: API error text is scrubbed of token-shaped strings, and error details come back inside an untrusted block.
+- Hardening: a malformed resource URI is an invalid-params error rather than an internal error.
+- Hardening: the API call log records the operation and its path template instead of the filled-in path.
+
 ### Transports
 
 - **stdio** (the default): one person, with the token in `BUILDIT_TOKEN`.
-- **Streamable HTTP** (`--http`): stateless; every request carries its own `Authorization: Bearer` token and nothing is kept afterwards. It binds to `127.0.0.1` by default, checks the `Host` and `Origin` headers, takes the toolsets per request from `X-Buildit-Toolsets`, and answers `GET /healthz`.
+- **Streamable HTTP** (`--http`): stateless; every request carries its own `Authorization: Bearer` token and nothing is kept afterwards. It binds to `127.0.0.1` by default, checks the `Host` and `Origin` headers (off loopback, `BUILDIT_ALLOWED_HOSTS` is required unless `BUILDIT_ALLOW_ANY_HOST` is set), lets `X-Buildit-Toolsets` narrow the configured toolsets per request, and answers `GET /healthz`.
 
 ### Protocol versions
 
