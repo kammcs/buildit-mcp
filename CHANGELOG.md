@@ -31,7 +31,7 @@ Also in this release:
 ### Hardening
 
 - Hardening: untrusted-content blocks carry a random id per result, and the closing tag repeats it; the agent is told a block ends only at its own closing tag.
-- Hardening: untrusted-content marking is stronger against look-alike tags.
+- Hardening: untrusted-content marking is stronger against look-alike tags, and changes only text that could form a tag: Markdown that mentions the block's name comes back as written.
 - Hardening: names that people write (people, the org, tokens, projects, channels, sprints, releases, statuses, types, labels, fields) are inside untrusted blocks in every tool's text, and capped at 64 characters for people and 60 for other names.
 - Hardening: in HTTP mode, the configured toolsets are a ceiling; `X-Buildit-Toolsets` can only narrow them.
 - Hardening: binding off loopback without `BUILDIT_ALLOWED_HOSTS` is refused unless `BUILDIT_ALLOW_ANY_HOST=true` (or `--allow-any-host`) is set.
