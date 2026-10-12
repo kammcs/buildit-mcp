@@ -84,6 +84,16 @@ export const UserRefInput = z
     'A person: "me", an email, or an exact display name, among the project\'s members (find_users lists them).',
   );
 
+/**
+ * How images and their layout are written in descriptions and pages (the
+ * contract's MarkdownDescription and PageBody), for the input fields.
+ */
+export const IMAGE_LAYOUT_NOTE =
+  'Images: ![alt](file:<id> "40% wrap-left gap-m"); an optional title sets the layout: width 10%-100% in steps of 5, left|center|right|wrap-left|wrap-right, gap-s|gap-m|gap-l.';
+
+/** The reminder for fields that rewrite Markdown. */
+export const KEEP_IMAGE_TITLES = 'Keep image titles (layouts) as read.';
+
 export const IdempotencyKeyInput = z
   .uuid()
   .describe(

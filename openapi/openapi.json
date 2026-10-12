@@ -1441,6 +1441,7 @@
           "idempotency_conflict",
           "body_too_large",
           "validation",
+          "image_layout_invalid",
           "ambiguous",
           "transition_not_allowed",
           "field_required",
@@ -1974,6 +1975,7 @@
           "conflict",
           "body_too_large",
           "validation",
+          "image_layout_invalid",
           "ambiguous",
           "transition_not_allowed",
           "field_required",
@@ -5350,6 +5352,7 @@
           "idempotency_conflict",
           "body_too_large",
           "validation",
+          "image_layout_invalid",
           "ambiguous",
           "rate_limited",
           "internal",
@@ -5639,6 +5642,7 @@
           "conflict",
           "body_too_large",
           "validation",
+          "image_layout_invalid",
           "rate_limited",
           "internal",
           "unavailable"
@@ -6062,6 +6066,7 @@
                       "code": null,
                       "code_language": null,
                       "file": null,
+                      "photos": [],
                       "mentions": [],
                       "reply_count": 1,
                       "last_reply_at": "2026-10-07T14:03:00Z",
@@ -6213,6 +6218,7 @@
                     "code": null,
                     "code_language": null,
                     "file": null,
+                    "photos": [],
                     "mentions": [],
                     "reply_count": 1,
                     "last_reply_at": "2026-10-07T14:03:00Z",
@@ -6235,6 +6241,7 @@
                       "code": null,
                       "code_language": null,
                       "file": null,
+                      "photos": [],
                       "mentions": [],
                       "reply_count": 0,
                       "last_reply_at": null,
@@ -7347,7 +7354,7 @@
         }
       },
       "Error422": {
-        "description": "An error: validation, ambiguous, transition_not_allowed, field_required, bulk_too_large, limit_reached. The operation's x-buildit-errors lists the codes it can answer.",
+        "description": "An error: validation, image_layout_invalid, ambiguous, transition_not_allowed, field_required, bulk_too_large, limit_reached. The operation's x-buildit-errors lists the codes it can answer.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"
@@ -7881,7 +7888,7 @@
           },
           "body": {
             "type": "string",
-            "description": "Plain text."
+            "description": "As written: plain text, with any Discord-style formatting markers kept (**bold**, ||spoiler||, [text](link)); spoilers are not masked."
           },
           "mentions": {
             "type": "array",
@@ -7924,7 +7931,7 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 20000,
-        "description": "Plain text, 1–20,000 characters. Mentions: @email or @[Display Name], saved as the literal \"@Display Name\" with the person in the comment's mentions.",
+        "description": "Plain text, 1–20,000 characters, saved as written. People see Discord-style formatting (**bold**, *italic*, __underline__, ~~strike~~, ||spoiler||, `code`, > quotes, [text](link)). Mentions: @email or @[Display Name], saved as the literal \"@Display Name\" with the person in the comment's mentions.",
         "examples": [
           "Fixed in the latest build. @[Sam Lee] can you check on Windows?"
         ]
@@ -9698,6 +9705,57 @@
                             "message": {
                               "type": "string",
                               "description": "What is wrong and what is allowed."
+                            }
+                          },
+                          "required": [
+                            "path",
+                            "message"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "fields"
+                    ]
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "details"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "const": "image_layout_invalid"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "hint": {
+                    "description": "The code's stable one-line hint: what to do next.",
+                    "type": "string"
+                  },
+                  "details": {
+                    "type": "object",
+                    "properties": {
+                      "fields": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "description": "The field, as a dotted path (\"body\", \"description.text\")."
+                            },
+                            "message": {
+                              "type": "string",
+                              "description": "The title that was refused, and what is allowed."
                             }
                           },
                           "required": [
@@ -11759,7 +11817,7 @@
       "MarkdownDescription": {
         "type": "string",
         "maxLength": 262144,
-        "description": "GitHub-flavored Markdown, at most 256 KB. No images by URL (http, https, data, ftp), inline or by reference. Mentions: @email or @[Display Name], saved and read back as [@Name](mention:<uuid>)."
+        "description": "GitHub-flavored Markdown, at most 256 KB. No images by URL (http, https, data, ftp), inline or by reference. Mentions: @email or @[Display Name], saved and read back as [@Name](mention:<uuid>). Images are ![alt](file:<id>); an optional title sets the image's layout: up to three words separated by spaces, each at most once, in any order: a width from 10% to 100% in steps of 5, one of left, center, right, wrap-left or wrap-right, and one of gap-s, gap-m or gap-l, for example ![Site plan](file:<id> \"40% wrap-left gap-m\"). No title is the default layout (the image's own size, left, gap-m). A title that looks like a layout but isn't one (40% wrap-up, 33%, gap-xl, two widths) is refused with 422 image_layout_invalid; other titles are captions, kept as written. An image's title is at most 200 characters. When rewriting text, keep each image's title exactly as you read it."
       },
       "MeResponse": {
         "type": "object",
@@ -11906,7 +11964,8 @@
             "$ref": "#/components/schemas/MessageKind"
           },
           "body": {
-            "type": "string"
+            "type": "string",
+            "description": "As written: plain text, with any Discord-style formatting markers kept (**bold**, ||spoiler||, [text](link)); spoilers are not masked."
           },
           "code": {
             "type": [
@@ -11930,18 +11989,70 @@
                   },
                   "name": {
                     "type": "string"
+                  },
+                  "duration_ms": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "A video's length in milliseconds, when the uploader's app measured it; null for any other file, or a video without one."
                   }
                 },
                 "required": [
                   "id",
-                  "name"
+                  "name",
+                  "duration_ms"
                 ]
               },
               {
                 "type": "null"
               }
             ],
-            "description": "An attachment's name; files can't be fetched."
+            "description": "An attachment's name; files can't be fetched. For a set of photos, the first."
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/Uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "alt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "duration_ms": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "A video's length in milliseconds, when the uploader's app measured it; null for any other file, or a video without one."
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "alt",
+                "duration_ms"
+              ]
+            },
+            "description": "The photos the message carries, in order (up to 10), each with its description for screen readers; empty for none. Files can't be fetched."
           },
           "mentions": {
             "type": "array",
@@ -11995,6 +12106,7 @@
           "code",
           "code_language",
           "file",
+          "photos",
           "mentions",
           "reply_count",
           "last_reply_at",
@@ -12202,7 +12314,7 @@
       "PageBody": {
         "type": "string",
         "maxLength": 1048576,
-        "description": "GitHub-flavored Markdown, at most 1 MiB. No images by URL, inline or by reference. Mentions as in descriptions."
+        "description": "GitHub-flavored Markdown, at most 1 MiB. No images by URL, inline or by reference. Mentions as in descriptions. Images are ![alt](file:<id>); an optional title sets the image's layout: up to three words separated by spaces, each at most once, in any order: a width from 10% to 100% in steps of 5, one of left, center, right, wrap-left or wrap-right, and one of gap-s, gap-m or gap-l, for example ![Site plan](file:<id> \"40% wrap-left gap-m\"). No title is the default layout (the image's own size, left, gap-m). A title that looks like a layout but isn't one (40% wrap-up, 33%, gap-xl, two widths) is refused with 422 image_layout_invalid; other titles are captions, kept as written. An image's title is at most 200 characters. When rewriting text, keep each image's title exactly as you read it."
       },
       "PageResponse": {
         "type": "object",
@@ -14450,6 +14562,12 @@
       "when": "The body or query doesn't match the schema, or a value breaks a rule of the data (a date order, a duplicate name).",
       "message": "Some fields are invalid. Fix each field listed in details.fields.",
       "hint": "Fix each field in details.fields, then retry."
+    },
+    "image_layout_invalid": {
+      "status": 422,
+      "when": "A description or page holds an image whose title looks like a layout but isn't one (a width out of range or off the steps of 5, an unknown layout or gap word, a word twice).",
+      "message": "An image title looks like a layout but isn't one. A layout title is up to three words separated by spaces, each at most once: a width from 10% to 100% in steps of 5, one of left, center, right, wrap-left or wrap-right, and one of gap-s, gap-m or gap-l (for example \"40% wrap-left gap-m\"). Leave the title out for the default layout.",
+      "hint": "Fix the image titles in details.fields: use the layout words exactly, or leave the title out."
     },
     "ambiguous": {
       "status": 422,

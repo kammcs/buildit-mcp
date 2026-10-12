@@ -539,6 +539,14 @@ export const ErrorSchema = z.looseObject({
       }),
     }),
     z.looseObject({
+      code: z.literal('image_layout_invalid'),
+      message: z.string(),
+      hint: z.string().optional(),
+      details: z.looseObject({
+        fields: z.array(z.looseObject({ path: z.string(), message: z.string() })),
+      }),
+    }),
+    z.looseObject({
       code: z.literal('ambiguous'),
       message: z.string(),
       hint: z.string().optional(),
@@ -1177,7 +1185,17 @@ export const MessageSchema = z.looseObject({
   body: z.string(),
   code: z.string().nullable(),
   code_language: z.string().nullable(),
-  file: z.looseObject({ id: UuidSchema, name: z.string() }).nullable(),
+  file: z
+    .looseObject({ id: UuidSchema, name: z.string(), duration_ms: z.number().nullable() })
+    .nullable(),
+  photos: z.array(
+    z.looseObject({
+      id: UuidSchema,
+      name: z.string(),
+      alt: z.string().nullable(),
+      duration_ms: z.number().nullable(),
+    }),
+  ),
   mentions: z.array(UserSchema),
   reply_count: z.number(),
   last_reply_at: TimestampSchema.nullable(),

@@ -17,11 +17,13 @@ import {
   CommentOutSchema,
   commentText,
   IdempotencyKeyInput,
+  IMAGE_LAYOUT_NOTE,
   itemLine,
   itemOut,
   ItemOutSchema,
   itemRef,
   ItemRefInput,
+  KEEP_IMAGE_TITLES,
   ProjectKeyInput,
   scopesOf,
   UserRefInput,
@@ -54,7 +56,7 @@ const DescriptionInput = z
   .string()
   .max(262_144)
   .describe(
-    'GitHub-flavored Markdown. Mention people as @email or @[Display Name]. Images by URL are refused.',
+    `GitHub-flavored Markdown. Mention people as @email or @[Display Name]. Images by URL are refused. ${IMAGE_LAYOUT_NOTE}`,
   );
 
 /** A short text block for an item that just changed: facts, then the line (with its title) wrapped. */
@@ -186,10 +188,10 @@ const UpdateInput = z.object({
     .describe("The item's version you read; the update is refused if someone changed it since."),
   title: TitleInput.optional(),
   description_append: DescriptionInput.optional().describe(
-    'Markdown added at the end of the description after a blank line. Safe: it never overwrites anyone.',
+    'Markdown added at the end of the description after a blank line; never overwrites anyone. Images as in create_item.',
   ),
   description_replace: DescriptionInput.optional().describe(
-    'Markdown that replaces the whole description. Needs description_version.',
+    `Markdown that replaces the whole description. Needs description_version. ${KEEP_IMAGE_TITLES}`,
   ),
   description_version: z
     .number()
@@ -273,9 +275,9 @@ export const updateItemTool = defineTool({
   name: 'update_item',
   toolset: 'items',
   title: 'Update an item',
-  description: `Changes fields of one item: title, description, type, parent, assignee, priority, labels, estimate, dates, sprint, fix release, initiative and custom fields. Only the fields you give change; null clears a field.
+  description: `Changes fields of one item. Only the fields you give change; null clears a field.
 - Description: description_append adds Markdown at the end and never overwrites anyone's edit (prefer it); description_replace replaces it all and needs the description_version from get_item.
-- if_version (from get_item or search_items) makes the update fail with a conflict if someone changed the item since you read it.
+- if_version (from get_item or search_items) refuses the update if someone changed the item since you read it.
 - Labels: labels replaces all; add_labels and remove_labels change some.
 - To change the status use transition_item; to only assign, assign_item is simpler.
 Returns the item with its new versions.`,
