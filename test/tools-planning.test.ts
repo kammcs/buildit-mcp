@@ -93,11 +93,9 @@ describe('plan_sprint', () => {
     // The sprint's own counts no longer include the carried item: they are not shown.
     expect(r.structured.sprint).toMatchObject({ item_count: 2, done_count: 1 });
     const lines = r.text.split('\n');
-    expect(lines[0]).toBe(
-      'Completed sprint #3 Sprint 3: done 1 of 3 item(s) committed (3 of 6 points).',
-    );
+    expect(lines[0]).toBe('Completed sprint #3: done 1 of 3 item(s) committed (3 of 6 points).');
     expect(r.text).toContain(
-      '1 open item(s) were carried to #4 Sprint 4; they count there now, no longer in this sprint.',
+      '1 open item(s) were carried to sprint #4; they count there now, no longer in this sprint.',
     );
     expect(r.text).toContain('1 canceled item(s) stay in this sprint, not done.');
     expect(r.text.match(/done \d+ of \d+/g)).toEqual(['done 1 of 3']);

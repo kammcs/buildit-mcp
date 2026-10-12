@@ -55,7 +55,8 @@ describe('list_comments', () => {
       '<untrusted_content source="comment" author="Sam Example">\nReproduced on Windows 11.\n</untrusted_content>',
     );
     expect(r.text).toContain('2 comment(s) on DEMO-42, oldest first:');
-    expect(r.text).toContain('via agent Test token');
+    expect(r.text).toContain('written through an agent');
+    expect(r.text).toMatch(/author="Test User" via_agent="Test token">/);
   });
 
   it('pages newest first with a cursor', async () => {
@@ -139,7 +140,10 @@ describe('add_comment', () => {
     expect((r.structured.comment as { body: string }).body).toContain(
       'Ready: @Sam Example and @Test User please check.',
     );
-    expect(r.text).toContain('Comment posted on DEMO-42, mentioning Sam Example, Test User.');
+    expect(r.text).toContain('Comment posted on DEMO-42, mentioning 2 person(s).');
+    expect(stripIds(r.text)).toContain(
+      'Mentioned:\n<untrusted_content source="mentions">\n- Sam Example\n- Test User\n</untrusted_content>',
+    );
     const req = api.requests.at(-1);
     expect(req?.headers['x-buildit-tool']).toBe('add_comment');
     expect(req?.headers['x-buildit-client']).toMatch(/^test-client\/1\.2\.3 buildit-mcp\/\d/);

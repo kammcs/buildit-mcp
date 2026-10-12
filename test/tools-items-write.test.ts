@@ -233,7 +233,8 @@ describe('assign_item', () => {
     const c = await client();
     const r = await c.call('assign_item', { item: 'DEMO-43', assignee: 'sam@example.com' });
     expect(r.structured).toMatchObject({ item: { assignee: { name: 'Sam Example' } } });
-    expect(r.text).toContain('DEMO-43 is assigned to Sam Example.');
+    expect(r.text).toContain('DEMO-43 is assigned; the item now:');
+    expect(r.text).toContain('@Sam Example');
     const none = await c.call('assign_item', { item: 'DEMO-43', assignee: 'none' });
     expect(none.structured).toMatchObject({ item: { assignee: null } });
     expect(lastBody('/v1/items/DEMO-43')).toEqual({ assignee: null });
@@ -265,7 +266,8 @@ describe('transition_item', () => {
       item: { status: 'Done', status_category: 'done', assignee: { id: USERS.me.id } },
       comment: { mentions: ['Sam Example'] },
     });
-    expect(r.text).toContain('Moved DEMO-44 to Done (done).');
+    expect(r.text).toContain('Moved DEMO-44; its status is now done:');
+    expect(r.text).toContain('DEMO-44 · Bug · Done (done)');
     expect(r.text).toContain('Comment posted:');
   });
 

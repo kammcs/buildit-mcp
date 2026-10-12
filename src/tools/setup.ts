@@ -19,7 +19,14 @@ import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
 import { ChannelOut, channelOut } from './chat.js';
 import { ChannelRefInput } from './pages.js';
 import { ProjectOut, projectOut } from './projects.js';
-import { IdempotencyKeyInput, PersonSchema, person, personText, scopesOf } from './shared.js';
+import {
+  IdempotencyKeyInput,
+  NAME_CHARS,
+  PersonSchema,
+  person,
+  personText,
+  scopesOf,
+} from './shared.js';
 
 /** The note for a token with limits: these tools need one without. */
 const LIMITS_NOTE =
@@ -303,7 +310,7 @@ Needs the org's Projects feature and a token without project or channel limits. 
     const project = {
       ...projectOut(p),
       template: sanitizeLabel(p.template_key, 60),
-      channel: { id: p.channel.id, name: sanitizeLabel(p.channel.name, 100) },
+      channel: { id: p.channel.id, name: sanitizeLabel(p.channel.name, NAME_CHARS) },
     };
     const headline = r.created
       ? `Created project ${project.key} from the ${project.template} template, in channel ${project.channel.id}; the person is its project admin.`

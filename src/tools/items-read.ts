@@ -13,6 +13,7 @@ import {
   CommentOutSchema,
   commentText,
   CursorInput,
+  customLine,
   historyOut,
   HistoryOutSchema,
   ItemFullSchema,
@@ -171,9 +172,11 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
           if (i.description !== undefined) parts.push(i.description);
         }
       } else {
-        const lines = items.map((i) =>
-          i.match?.snippet ? `${itemLine(i)}\n  match: ${stripWrap(i.match.snippet)}` : itemLine(i),
-        );
+        // The snippet goes into the list's one block as a flattened line.
+        const lines = items.map((i, n) => {
+          const snippet = page.items[n]?.match?.snippet;
+          return snippet ? `${itemLine(i)}\n  match: ${sanitizeLabel(snippet, 300)}` : itemLine(i);
+        });
         parts.push(wrapLines(lines, 'item_list'));
       }
     }
@@ -188,16 +191,6 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
     };
   },
 });
-
-/** The body of a wrapped snippet, for one line inside an already wrapped list. */
-function stripWrap(wrapped: string): string {
-  return sanitizeLabel(
-    wrapped
-      .replace(/^<untrusted_content[^>]*>\n/, '')
-      .replace(/\n<\/untrusted_content>[\s\S]*$/, ''),
-    300,
-  );
-}
 
 // ---------------------------------------------------------------------------
 // get_item
@@ -442,33 +435,38 @@ The result carries version and description_version: pass them to update_item (if
     const history = r.history?.map(historyOut);
 
     const i = item;
+    // The server's facts, then the fields that carry names people wrote
+    // (type, status, people, labels, sprint, release) in their own block.
     const facts = [
-      `${i.key} · ${i.type} (${i.level}) · ${i.status} (${i.status_category}) · priority ${i.priority}`,
-      `Project ${i.project}${i.parent ? ` · parent ${i.parent}` : ''}${i.initiative ? ` · initiative ${i.initiative}` : ''} · assignee ${personText(i.assignee)} · reporter ${personText(i.reporter)}`,
       [
-        `labels ${i.labels.join(', ') || 'none'}`,
+        `${i.key} · project ${i.project}`,
+        ...(i.parent ? [`parent ${i.parent}`] : []),
+        ...(i.initiative ? [`initiative ${i.initiative}`] : []),
         `estimate ${i.estimate ?? 'none'}`,
-        `sprint ${i.sprint ?? 'none'}`,
-        `fix release ${i.fix_release ?? 'none'}`,
         `start ${i.start_date ?? 'none'}`,
         `due ${i.due_date ?? 'none'}`,
       ].join(' · '),
       `version ${i.version} · description_version ${i.description_version} · created ${i.created_at} · updated ${i.updated_at}`,
     ];
+    const fields = [
+      `${i.key} · ${i.type} (${i.level}) · ${i.status} (${i.status_category}) · priority ${i.priority}`,
+      `assignee ${personText(i.assignee)} · reporter ${personText(i.reporter)}`,
+      [
+        `labels ${i.labels.join(', ') || 'none'}`,
+        `sprint ${i.sprint ?? 'none'}`,
+        `fix release ${i.fix_release ?? 'none'}`,
+      ].join(' · '),
+    ];
     const parts = [
       facts.join('\n'),
+      wrapLines(fields, 'item_fields'),
       wrapUntrusted(r.item.title, { source: 'title', maxChars: 300 }),
       i.description === '' ? '(no description)' : i.description,
     ];
-    if (i.custom.length > 0) {
+    if (r.item.custom.length > 0) {
       parts.push(
-        'Custom fields:\n' +
-          i.custom
-            .map(
-              (c) =>
-                `- ${c.field} (${c.kind}): ${typeof c.value === 'string' ? c.value : JSON.stringify(c.value)}`,
-            )
-            .join('\n'),
+        `Custom fields (${r.item.custom.length}):\n` +
+          wrapLines(r.item.custom.map(customLine), 'custom_fields'),
       );
     }
     if (children.length > 0) {

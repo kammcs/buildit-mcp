@@ -4,13 +4,15 @@
  * Every tool returns structured content (matching its outputSchema) and a
  * short markdown summary. People-written text is never passed through as is:
  *
- * - short labels (names of people, projects, statuses, types, labels,
- *   fields, sprints, releases, and item titles in structured content) go
- *   through sanitizeLabel: one line, defused, capped;
+ * - short labels (names of people, the org, tokens, projects, channels,
+ *   statuses, types, labels, fields, sprints, releases, and item titles in
+ *   structured content) go through sanitizeLabel: one line, defused, capped
+ *   (PERSON_NAME_CHARS for people, NAME_CHARS for other names);
  * - free text (descriptions, comments, search snippets, history values) goes
  *   through wrapUntrusted, in structured content and in the text;
- * - in the text, a list of items is one <untrusted_content> block, since its
- *   lines carry titles.
+ * - in the text, every label is inside an <untrusted_content> block too: a
+ *   list is one block (wrapLines), and the names of one thing are a block of
+ *   their own, so the server's own words are all that stands outside.
  */
 import { z } from 'zod';
 
@@ -118,9 +120,18 @@ export function itemRef(ref: string): string {
 // Output shapes
 // ---------------------------------------------------------------------------
 
+/** The longest a person's display name is shown, in characters. */
+export const PERSON_NAME_CHARS = 64;
+/** The longest any other name is shown: the org, a token, project, channel, sprint, release, status, type, field or option. */
+export const NAME_CHARS = 60;
+
 const label = (value: string, max = 200): string => sanitizeLabel(value, max);
 const nullableLabel = (value: string | null | undefined, max = 200): string | null =>
   value === null || value === undefined || value === '' ? null : sanitizeLabel(value, max);
+
+/** A person-written name other than a person's, flattened and capped (null stays null). */
+export const nameLabel = (value: string | null | undefined): string | null =>
+  nullableLabel(value, NAME_CHARS);
 
 export const PersonSchema = z.object({
   id: z.string(),
@@ -130,7 +141,11 @@ export const PersonSchema = z.object({
 export type Person = z.infer<typeof PersonSchema>;
 
 export function person(u: User): Person {
-  return { id: u.id, name: label(u.display_name, 100), email: nullableLabel(u.email, 320) };
+  return {
+    id: u.id,
+    name: label(u.display_name, PERSON_NAME_CHARS),
+    email: nullableLabel(u.email, 320),
+  };
 }
 
 export function personText(p: Person | null): string {
@@ -177,8 +192,8 @@ export function itemOut(i: ItemSummary): ItemOut {
     parent: i.parent?.key ?? null,
     labels: i.labels.map((l) => label(l.name, 40)),
     estimate: i.estimate,
-    sprint: nullableLabel(i.sprint?.name, 80),
-    fix_release: nullableLabel(i.fix_release?.name, 80),
+    sprint: nameLabel(i.sprint?.name),
+    fix_release: nameLabel(i.fix_release?.name),
     start_date: i.start_date,
     due_date: i.due_date,
     updated_at: i.updated_at,
@@ -198,17 +213,42 @@ function customValue(c: CustomFieldValue): unknown {
   if (typeof v === 'string') {
     return c.kind === 'text' || c.kind === 'url'
       ? wrapUntrusted(v, { source: 'field', maxChars: 2000 })
-      : label(v, 200);
+      : label(v, NAME_CHARS);
   }
   if (Array.isArray(v)) {
-    return v.map((x) => (typeof x === 'string' ? label(x, 200) : person(x)));
+    return v.map((x) => (typeof x === 'string' ? label(x, NAME_CHARS) : person(x)));
   }
   if (typeof v === 'object') return person(v);
   return v;
 }
 
 export function customOut(c: CustomFieldValue) {
-  return { field: label(c.field, 60), kind: c.kind, value: customValue(c) };
+  return { field: label(c.field, NAME_CHARS), kind: c.kind, value: customValue(c) };
+}
+
+/**
+ * A custom field as one line for the text output, to go inside a block
+ * with the item's other fields: text values flattened and cut (the
+ * structured content has them whole, wrapped).
+ */
+export function customLine(c: CustomFieldValue): string {
+  const v = c.value;
+  let value: string;
+  if (typeof v === 'string') {
+    value = label(v, c.kind === 'text' || c.kind === 'url' ? 500 : NAME_CHARS);
+  } else if (Array.isArray(v)) {
+    value =
+      v
+        .map((x) =>
+          typeof x === 'string' ? label(x, NAME_CHARS) : label(x.display_name, PERSON_NAME_CHARS),
+        )
+        .join(', ') || 'none';
+  } else if (typeof v === 'object') {
+    value = label(v.display_name, PERSON_NAME_CHARS);
+  } else {
+    value = String(v);
+  }
+  return `- ${label(c.field, NAME_CHARS)} (${c.kind}): ${value}`;
 }
 
 export const ItemFullSchema = ItemOutSchema.extend({
@@ -310,28 +350,35 @@ export type CommentOut = z.infer<typeof CommentOutSchema>;
 
 export function commentOut(c: Comment, maxChars: number, moreHint?: string): CommentOut {
   const author = c.author ? person(c.author) : null;
+  const viaAgent = nameLabel(c.via_agent);
   return {
     id: c.id,
     author,
+    // The author and the agent's token name are people-written too: they
+    // are attributes of the block, not words of the server.
     body: wrapUntrusted(c.body, {
       source: 'comment',
       author: author?.name,
+      attributes: { via_agent: viaAgent },
       maxChars,
       ...(moreHint ? { moreHint } : {}),
     }),
-    mentions: c.mentions.map((m) => label(m.display_name, 100)),
+    mentions: c.mentions.map((m) => label(m.display_name, PERSON_NAME_CHARS)),
     created_at: c.created_at,
     edited_at: c.edited_at,
-    via_agent: nullableLabel(c.via_agent, 100),
+    via_agent: viaAgent,
   };
 }
 
-/** A comment for the text output: a line of facts, then the wrapped body. */
+/**
+ * A comment for the text output: a line of facts, then the wrapped body,
+ * whose tag names the author (and the agent, when one wrote it).
+ */
 export function commentText(c: CommentOut): string {
   const facts = [
     c.created_at,
-    c.author ? c.author.name : 'unknown author',
-    ...(c.via_agent ? [`via agent ${c.via_agent}`] : []),
+    ...(c.author ? [] : ['unknown author']),
+    ...(c.via_agent ? ['written through an agent'] : []),
     ...(c.edited_at ? [`edited ${c.edited_at}`] : []),
     `id ${c.id}`,
   ];
@@ -353,7 +400,7 @@ export function linkOut(l: Link): LinkOut {
     kind: l.kind,
     key: l.item?.key ?? null,
     title: l.item ? label(l.item.title, 300) : null,
-    status: l.item ? label(l.item.status.name, 60) : null,
+    status: l.item ? label(l.item.status.name, NAME_CHARS) : null,
   };
 }
 
@@ -391,10 +438,10 @@ function historyValue(v: unknown): string | null {
 export function historyOut(h: HistoryEvent): HistoryOut {
   return {
     at: h.at,
-    actor: h.actor ? label(h.actor.display_name, 100) : null,
-    via_agent: nullableLabel(h.via_agent, 100),
+    actor: h.actor ? label(h.actor.display_name, PERSON_NAME_CHARS) : null,
+    via_agent: nameLabel(h.via_agent),
     kind: h.kind,
-    field: nullableLabel(h.field, 60),
+    field: nameLabel(h.field),
     old: historyValue(h.old),
     new: historyValue(h.new),
     old_label: nullableLabel(h.old_label, 300),
@@ -423,7 +470,11 @@ export function itemLine(i: ItemOut): string {
   return `${parts.join(' · ')} — ${i.title}`;
 }
 
-/** A list of lines inside one untrusted block (they carry people-written titles). */
+/**
+ * Lines inside one untrusted block, for text that carries people-written
+ * titles or names (a list, or the names of one thing). The lines must not
+ * hold blocks themselves: flatten free text into them instead.
+ */
 export function wrapLines(lines: string[], source: string): string {
   return wrapUntrusted(lines.join('\n'), { source, maxChars: 100_000 });
 }

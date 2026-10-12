@@ -343,8 +343,9 @@ export const assignItemTool = defineTool({
       },
     });
     const item = itemOut(r.item);
+    // The assignee's name is people-written: the item's line (in a block) shows it.
     const headline = item.assignee
-      ? `${item.key} is assigned to ${item.assignee.name}.`
+      ? `${item.key} is assigned; the item now:`
       : `${item.key} is unassigned.`;
     return { structured: { item }, text: changedText(headline, item) };
   },
@@ -480,7 +481,8 @@ describe_project shows every workflow's statuses and allowed moves. Returns the 
     const item = itemOut(r.item);
     const comment = r.comment ? commentOut(r.comment, 2000) : null;
     const parts = [
-      changedText(`Moved ${item.key} to ${item.status} (${item.status_category}).`, item),
+      // The status's name is people-written: the item's line (in a block) shows it.
+      changedText(`Moved ${item.key}; its status is now ${item.status_category}:`, item),
     ];
     if (comment) parts.push('Comment posted:', commentText(comment));
     return { structured: { item, comment }, text: parts.join('\n') };

@@ -11,9 +11,18 @@ import type {
 } from '../api/generated/schemas.js';
 import { defineTool, type ToolContext } from '../toolsets/registry.js';
 import { sanitizeLabel } from '../untrusted.js';
-import { CursorInput, limitInput, nextPageHint, ProjectKeyInput, scopesOf } from './shared.js';
+import {
+  CursorInput,
+  limitInput,
+  NAME_CHARS,
+  nextPageHint,
+  PERSON_NAME_CHARS,
+  ProjectKeyInput,
+  scopesOf,
+  wrapLines,
+} from './shared.js';
 
-const label = (v: string, max = 200): string => sanitizeLabel(v, max);
+const label = (v: string, max = NAME_CHARS): string => sanitizeLabel(v, max);
 
 // ---------------------------------------------------------------------------
 // list_projects
@@ -92,7 +101,7 @@ export const listProjectsTool = defineTool({
     });
     const text = [
       projects.length === 0 ? 'No projects in reach.' : `${projects.length} project(s):`,
-      ...lines,
+      ...(lines.length > 0 ? [wrapLines(lines, 'project_list')] : []),
       nextPageHint('list_projects', page.next_cursor),
     ].join('\n');
     return { structured: { projects, next_cursor: page.next_cursor }, text };
@@ -115,7 +124,7 @@ type MemberOut = z.infer<typeof MemberOut>;
 function memberOut(m: ProjectMember): MemberOut {
   return {
     id: m.id,
-    name: label(m.display_name, 100),
+    name: label(m.display_name, PERSON_NAME_CHARS),
     email: m.email === null ? null : label(m.email, 320),
     role: m.role,
     is_project_admin: m.is_project_admin,
@@ -230,7 +239,7 @@ function describeOut(r: DescribeProjectResponse): DescribeOut {
     fields: r.fields.map((f) => ({
       name: label(f.name, 60),
       kind: f.kind,
-      options: f.options.map((o) => label(o.label, 100)),
+      options: f.options.map((o) => label(o.label)),
       types: f.types === null ? null : f.types.map((t) => label(t, 60)),
       required_on_create: f.required_on_create,
     })),
@@ -292,7 +301,7 @@ function describeText(d: DescribeOut): string {
       ? 'no estimates'
       : `estimates in ${p.estimate_scale}${p.estimate_values.length > 0 ? ` (${p.estimate_values.join(', ')})` : ''}`;
   const lines = [
-    `Project ${p.key}: ${p.name}${p.archived ? ' (archived)' : ''}`,
+    `Name: ${p.name}`,
     `Settings: ${estimates}; sprints ${p.sprints_enabled ? 'on' : 'off'}; releases ${p.releases_enabled ? 'on' : 'off'}; default type ${p.default_type ?? 'none'}; time zone ${p.time_zone}.`,
     `Types: ${d.types.map((t) => `${t.name} (${t.level}, workflow ${t.workflow})`).join('; ') || 'none'}.`,
   ];
@@ -322,7 +331,11 @@ function describeText(d: DescribeOut): string {
       ? `; and ${d.members.length - MAX_MEMBERS_IN_TEXT} more (use find_users)`
       : '';
   lines.push(`Members (${d.members.length}): ${shown.join('; ')}${more}.`);
-  return lines.join('\n');
+  // Every name here (statuses, types, labels, fields, people) was written by people.
+  return [
+    `Project ${p.key}${p.archived ? ' (archived)' : ''}: its configuration, with the names people gave it:`,
+    wrapLines(lines, 'project_config'),
+  ].join('\n');
 }
 
 async function readProject(ctx: ToolContext, key: string): Promise<DescribeProjectResponse> {
@@ -440,7 +453,17 @@ export const findUsersTool = defineTool({
       users.length === 0
         ? `No member of ${key} matches${query ? ` "${sanitizeLabel(query, 100)}"` : ''}${args.cursor ? ' in this page' : ''}.`
         : `${users.length} member(s) of ${key}${query ? ` matching "${sanitizeLabel(query, 100)}"` : ''}:`;
-    const lines = [header, ...users.map((u) => `- ${memberText(u)}`)];
+    const lines = [
+      header,
+      ...(users.length > 0
+        ? [
+            wrapLines(
+              users.map((u) => `- ${memberText(u)}`),
+              'user_list',
+            ),
+          ]
+        : []),
+    ];
     if (fallback && members.length > users.length) {
       lines.push(`Showing ${users.length} of ${members.length}; narrow the query or raise limit.`);
     } else {

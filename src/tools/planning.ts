@@ -18,9 +18,11 @@ import {
   itemRef,
   ItemRefInput,
   limitInput,
+  NAME_CHARS,
   nextPageHint,
   ProjectKeyInput,
   scopesOf,
+  wrapLines,
 } from './shared.js';
 
 const label = (v: string, max = 200): string => sanitizeLabel(v, max);
@@ -54,7 +56,7 @@ function sprintOut(s: Sprint): SprintOut {
   return {
     id: s.id,
     number: s.number,
-    name: label(s.name, 80),
+    name: label(s.name, NAME_CHARS),
     goal: s.goal === null ? null : wrapUntrusted(s.goal, { source: 'sprint_goal', maxChars: 500 }),
     state: s.state,
     starts_on: s.starts_on,
@@ -72,10 +74,14 @@ function sprintLine(s: SprintOut, counts = true): string {
   return `- #${s.number} ${s.name} · ${s.state}${dates}${counts ? ` · done ${s.done_count} of ${s.item_count}` : ''}`;
 }
 
-/** A sprint's line, then its goal (people-written) in its own block. */
-function sprintText(s: SprintOut, counts = true): string {
-  const line = sprintLine(s, counts);
-  return s.goal ? `${line}\n${s.goal}` : line;
+/** A sprint's line, then its goal (people-written) flattened, for a block. */
+function sprintLines(s: SprintOut, goal: string | null, counts = true): string[] {
+  return [sprintLine(s, counts), ...(goal ? [`  goal: ${label(goal, 500)}`] : [])];
+}
+
+/** One sprint, in its own block: its name and goal are people-written. */
+function sprintText(s: SprintOut, goal: string | null, counts = true): string {
+  return wrapLines(sprintLines(s, goal, counts), 'sprint');
 }
 
 /**
@@ -86,28 +92,30 @@ function sprintText(s: SprintOut, counts = true): string {
  */
 function completionText(
   s: SprintOut,
+  goal: string | null,
   r: {
     committed_count: number;
     committed_points: number;
     completed_count: number;
     completed_points: number;
     carried_count: number;
+    carried_to?: { number: number } | null | undefined;
   },
-  carriedTo: string | null,
 ): string {
   const lines = [
-    `Completed sprint #${s.number} ${s.name}: done ${r.completed_count} of ${r.committed_count} item(s) committed (${r.completed_points} of ${r.committed_points} points).`,
+    `Completed sprint #${s.number}: done ${r.completed_count} of ${r.committed_count} item(s) committed (${r.completed_points} of ${r.committed_points} points).`,
   ];
   if (r.carried_count > 0) {
+    const to = r.carried_to ? `sprint #${r.carried_to.number}` : 'the backlog (no sprint)';
     lines.push(
-      `${r.carried_count} open item(s) were carried to ${carriedTo ?? 'the backlog (no sprint)'}; they count there now, no longer in this sprint.`,
+      `${r.carried_count} open item(s) were carried to ${to}; they count there now, no longer in this sprint.`,
     );
   } else {
     lines.push('No open items were left to carry.');
   }
   const rest = r.committed_count - r.completed_count - r.carried_count;
   if (rest > 0) lines.push(`${rest} canceled item(s) stay in this sprint, not done.`);
-  lines.push(sprintText(s, false));
+  lines.push(sprintText(s, goal, false));
   return lines.join('\n');
 }
 
@@ -153,7 +161,15 @@ export const listSprintsTool = defineTool({
     const key = args.project.toUpperCase();
     const text = [
       sprints.length === 0 ? `No sprints in ${key}.` : `${sprints.length} sprint(s) in ${key}:`,
-      ...sprints.map((s) => sprintText(s)),
+      // One block for the list: names and goals are people-written.
+      ...(sprints.length > 0
+        ? [
+            wrapLines(
+              sprints.flatMap((s, n) => sprintLines(s, page.items[n]?.goal ?? null)),
+              'sprint_list',
+            ),
+          ]
+        : []),
       nextPageHint('list_sprints', page.next_cursor),
     ].join('\n');
     return { structured: { project: key, sprints, next_cursor: page.next_cursor }, text };
@@ -256,7 +272,7 @@ sprint names the sprint for every action but create: its number, name, or "activ
         const sprint = sprintOut(r.sprint);
         return {
           structured: { action: args.action, sprint },
-          text: `Created sprint #${sprint.number} in ${key.toUpperCase()}:\n${sprintText(sprint)}`,
+          text: `Created sprint #${sprint.number} in ${key.toUpperCase()}:\n${sprintText(sprint, r.sprint.goal)}`,
         };
       }
       case 'start': {
@@ -271,7 +287,7 @@ sprint names the sprint for every action but create: its number, name, or "activ
         const sprint = sprintOut(r.sprint);
         return {
           structured: { action: args.action, sprint },
-          text: `Started sprint #${sprint.number}:\n${sprintText(sprint)}`,
+          text: `Started sprint #${sprint.number}:\n${sprintText(sprint, r.sprint.goal)}`,
         };
       }
       case 'complete': {
@@ -281,7 +297,7 @@ sprint names the sprint for every action but create: its number, name, or "activ
         });
         const sprint = sprintOut(r.sprint);
         const carriedTo = r.carried_to
-          ? `#${r.carried_to.number} ${label(r.carried_to.name, 80)}`
+          ? `#${r.carried_to.number} ${label(r.carried_to.name, NAME_CHARS)}`
           : null;
         const summary = {
           committed_count: r.committed_count,
@@ -293,7 +309,7 @@ sprint names the sprint for every action but create: its number, name, or "activ
         };
         return {
           structured: { action: args.action, sprint, summary },
-          text: completionText(sprint, r, carriedTo),
+          text: completionText(sprint, r.sprint.goal, r),
         };
       }
       case 'add_items':
@@ -311,7 +327,7 @@ sprint names the sprint for every action but create: its number, name, or "activ
             changed.length === 0
               ? 'Nothing changed: the items were already where they should be.'
               : `${add ? 'Added to' : 'Removed from'} sprint #${sprint.number}: ${changed.join(', ')}.`,
-            sprintLine(sprint),
+            wrapLines([sprintLine(sprint)], 'sprint'),
           ].join('\n'),
         };
       }
@@ -340,7 +356,7 @@ type ReleaseOut = z.infer<typeof ReleaseOut>;
 function releaseOut(r: Release): ReleaseOut {
   return {
     id: r.id,
-    name: label(r.name, 80),
+    name: label(r.name, NAME_CHARS),
     description:
       r.description === null
         ? null
@@ -359,8 +375,14 @@ function releaseLine(r: ReleaseOut): string {
   return `- ${r.name} · ${r.status}${r.target_date ? ` · target ${r.target_date}` : ''}${r.released_at ? ` · released ${r.released_at}` : ''} · ${r.done_count}/${r.item_count} done`;
 }
 
-function releaseText(r: ReleaseOut): string {
-  return r.description ? `${releaseLine(r)}\n${r.description}` : releaseLine(r);
+/** A release's line, then its description (people-written) flattened, for a block. */
+function releaseLines(r: ReleaseOut, description: string | null): string[] {
+  return [releaseLine(r), ...(description ? [`  ${label(description, 500)}`] : [])];
+}
+
+/** One release, in its own block: its name and description are people-written. */
+function releaseText(r: ReleaseOut, description: string | null): string {
+  return wrapLines(releaseLines(r, description), 'release');
 }
 
 export const listReleasesTool = defineTool({
@@ -405,7 +427,15 @@ export const listReleasesTool = defineTool({
     const key = args.project.toUpperCase();
     const text = [
       releases.length === 0 ? `No releases in ${key}.` : `${releases.length} release(s) in ${key}:`,
-      ...releases.map(releaseText),
+      // One block for the list: names and descriptions are people-written.
+      ...(releases.length > 0
+        ? [
+            wrapLines(
+              releases.flatMap((r, n) => releaseLines(r, page.items[n]?.description ?? null)),
+              'release_list',
+            ),
+          ]
+        : []),
       nextPageHint('list_releases', page.next_cursor),
     ].join('\n');
     return { structured: { project: key, releases, next_cursor: page.next_cursor }, text };
@@ -491,7 +521,7 @@ release names the release (by name) for every action but create. To write its no
         const release = releaseOut(r.release);
         return {
           structured: { action: args.action, release },
-          text: `Created release ${release.name} in ${key.toUpperCase()}:\n${releaseText(release)}`,
+          text: `Created a release in ${key.toUpperCase()}:\n${releaseText(release, r.release.description)}`,
         };
       }
       case 'release': {
@@ -505,7 +535,7 @@ release names the release (by name) for every action but create. To write its no
         const release = releaseOut(r.release);
         return {
           structured: { action: args.action, release },
-          text: `Release ${release.name} is ${release.status}:\n${releaseLine(release)}`,
+          text: `The release is ${release.status}:\n${wrapLines([releaseLine(release)], 'release')}`,
         };
       }
       case 'add_items':
@@ -524,8 +554,8 @@ release names the release (by name) for every action but create. To write its no
           text: [
             changed.length === 0
               ? 'Nothing changed: the items were already as asked.'
-              : `${add ? 'Added to' : 'Removed from'} release ${release.name}: ${changed.join(', ')}.`,
-            releaseLine(release),
+              : `${add ? 'Added to' : 'Removed from'} the release: ${changed.join(', ')}.`,
+            wrapLines([releaseLine(release)], 'release'),
           ].join('\n'),
         };
       }
@@ -606,10 +636,10 @@ Needs pages:write as well, since the notes are a page. Returns the notes as writ
               moreHint: `Call get_page with page="${r.page_id ?? ''}" to read the whole page.`,
             }),
     };
-    const release = sanitizeLabel(args.release, 80);
+    // The release is named by what the agent sent, not repeated here: people wrote its name.
     const text = r.needs_confirmation
-      ? `Nothing written: people edited the notes page of ${release} (page ${r.page_id ?? '?'}, version ${r.page_version ?? '?'}) since it was last written. Ask the person; only if they want their edits replaced, call write_release_notes again with page_version=${r.page_version ?? '?'}.`
-      : `${r.created ? 'Created' : 'Rewrote'} the notes page of ${release} (page ${r.page_id ?? '?'}, version ${r.page_version ?? '?'})${r.overwrote_edits ? ', replacing edits as confirmed' : ''}.`;
+      ? `Nothing written: people edited the release notes page (page ${r.page_id ?? '?'}, version ${r.page_version ?? '?'}) since it was last written. Ask the person; only if they want their edits replaced, call write_release_notes again with page_version=${r.page_version ?? '?'}.`
+      : `${r.created ? 'Created' : 'Rewrote'} the release notes page (page ${r.page_id ?? '?'}, version ${r.page_version ?? '?'})${r.overwrote_edits ? ', replacing edits as confirmed' : ''}.`;
     return {
       structured,
       text: structured.markdown ? `${text}\n${structured.markdown}` : text,

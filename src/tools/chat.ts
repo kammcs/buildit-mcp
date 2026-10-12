@@ -13,7 +13,17 @@ import type { Channel, Message } from '../api/generated/schemas.js';
 import { defineTool } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
 import { ChannelRefInput } from './pages.js';
-import { CursorInput, limitInput, nextPageHint, PersonSchema, person, scopesOf } from './shared.js';
+import {
+  CursorInput,
+  limitInput,
+  NAME_CHARS,
+  nextPageHint,
+  PERSON_NAME_CHARS,
+  PersonSchema,
+  person,
+  scopesOf,
+  wrapLines,
+} from './shared.js';
 
 /** The text budget of one page of messages, shared by its messages. */
 const PAGE_BUDGET_CHARS = 30_000;
@@ -35,7 +45,7 @@ export type ChannelOut = z.infer<typeof ChannelOut>;
 export function channelOut(c: Channel): ChannelOut {
   return {
     id: c.id,
-    name: sanitizeLabel(c.name, 100),
+    name: sanitizeLabel(c.name, NAME_CHARS),
     description:
       c.description === null
         ? null
@@ -67,37 +77,51 @@ type MessageOut = z.infer<typeof MessageOut>;
 
 function messageOut(m: Message, maxChars: number, moreHint: string): MessageOut {
   const author = m.author ? person(m.author) : null;
+  const file = m.file === null ? null : sanitizeLabel(m.file.name, 200);
+  const viaAgent = m.via_agent === null ? null : sanitizeLabel(m.via_agent, NAME_CHARS);
+  // The author, the agent's token name and the file name are people-written:
+  // they are attributes of the message's block, not words of the server.
+  const attributes = { via_agent: viaAgent, file };
   return {
     id: m.id,
     author,
     kind: m.kind,
-    body: wrapUntrusted(m.body, { source: 'message', author: author?.name, maxChars, moreHint }),
+    body: wrapUntrusted(m.body, {
+      source: 'message',
+      author: author?.name,
+      attributes,
+      maxChars,
+      moreHint,
+    }),
     code:
       m.code === null
         ? null
         : wrapUntrusted(m.code, { source: 'code', author: author?.name, maxChars, moreHint }),
-    file: m.file === null ? null : sanitizeLabel(m.file.name, 200),
-    mentions: m.mentions.map((u) => sanitizeLabel(u.display_name, 100)),
+    file,
+    mentions: m.mentions.map((u) => sanitizeLabel(u.display_name, PERSON_NAME_CHARS)),
     reply_count: m.reply_count,
     last_reply_at: m.last_reply_at,
     created_at: m.created_at,
     edited_at: m.edited_at,
     deleted: m.deleted,
-    via_agent: m.via_agent === null ? null : sanitizeLabel(m.via_agent, 100),
+    via_agent: viaAgent,
   };
 }
 
-/** A message for the text output: a line of facts, then the wrapped body. */
+/**
+ * A message for the text output: a line of facts, then the wrapped body,
+ * whose tag names the author (and the agent and the attached file, if any).
+ */
 function messageText(m: MessageOut): string {
   const facts = [
     m.created_at,
-    m.author ? m.author.name : 'unknown author',
+    ...(m.author ? [] : ['unknown author']),
     ...(m.kind !== 'text' ? [m.kind] : []),
-    ...(m.via_agent ? [`via agent ${m.via_agent}`] : []),
+    ...(m.via_agent ? ['written through an agent'] : []),
     ...(m.edited_at ? [`edited ${m.edited_at}`] : []),
     ...(m.deleted ? ['deleted'] : []),
     ...(m.reply_count > 0 ? [`${m.reply_count} replies (read_thread)`] : []),
-    ...(m.file ? [`file ${m.file}`] : []),
+    ...(m.file ? ['with a file'] : []),
     `id ${m.id}`,
   ];
   return [`- ${facts.join(' · ')}`, m.body, ...(m.code ? [m.code] : [])].join('\n');
@@ -146,7 +170,8 @@ export const listChannelsTool = defineTool({
       },
     });
     const channels = page.items.map(channelOut);
-    const lines = channels.map((c) => {
+    // One block for the list: the names and descriptions (flattened) are people-written.
+    const lines = channels.map((c, n) => {
       const facts = [
         c.visibility,
         ...(c.is_org_wide ? ['org-wide'] : []),
@@ -156,11 +181,12 @@ export const listChannelsTool = defineTool({
         `id ${c.id}`,
       ];
       const line = `- ${c.name} · ${facts.join(' · ')}`;
-      return c.description ? `${line}\n${c.description}` : line;
+      const description = page.items[n]?.description;
+      return description ? `${line}\n  ${sanitizeLabel(description, 300)}` : line;
     });
     const text = [
       channels.length === 0 ? 'No channels in reach.' : `${channels.length} channel(s):`,
-      ...lines,
+      ...(lines.length > 0 ? [wrapLines(lines, 'channel_list')] : []),
       nextPageHint('list_channels', page.next_cursor),
     ].join('\n');
     return { structured: { channels, next_cursor: page.next_cursor }, text };
@@ -211,11 +237,11 @@ export const readChannelTool = defineTool({
     const hint =
       'Call read_channel with a smaller limit, or read_thread with its id, to read it whole.';
     const messages = page.items.map((m) => messageOut(m, max, hint));
-    const channel = sanitizeLabel(args.channel, 100);
+    // The channel is named by what the agent sent, not repeated here: it may be a name people wrote.
     const text = [
       messages.length === 0
-        ? `No messages in ${channel}${args.since ? ' since then' : ''}${args.cursor ? ' in this page' : ''}.`
-        : `${messages.length} message(s) in ${channel}, newest first:`,
+        ? `No messages in the channel${args.since ? ' since then' : ''}${args.cursor ? ' in this page' : ''}.`
+        : `${messages.length} message(s) in the channel, newest first:`,
       ...messages.map(messageText),
       nextPageHint('read_channel', page.next_cursor),
     ].join('\n');

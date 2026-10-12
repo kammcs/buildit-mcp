@@ -93,7 +93,7 @@ describe('read_channel', () => {
       '<untrusted_content source="message" author="Sam Example">',
     );
     expect(r.text).toContain('1 replies (read_thread)');
-    expect(r.text).toContain('2 message(s) in general, newest first:');
+    expect(r.text).toContain('2 message(s) in the channel, newest first:');
   });
 
   it('reads only what came after since, and pages with a cursor', async () => {

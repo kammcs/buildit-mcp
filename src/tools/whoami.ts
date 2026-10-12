@@ -7,6 +7,7 @@ import type { MetaResponse } from '../api/generated/schemas.js';
 import { defineTool } from '../toolsets/registry.js';
 import { sanitizeLabel } from '../untrusted.js';
 import { compareVersions, SERVER_NAME, SERVER_VERSION } from '../version.js';
+import { NAME_CHARS, PERSON_NAME_CHARS, wrapLines } from './shared.js';
 
 const MAX_PROJECTS_IN_TEXT = 50;
 
@@ -64,8 +65,8 @@ const OutputSchema = z.object({
   }),
 });
 
-const nullableLabel = (v: string | null | undefined): string | null =>
-  v === undefined || v === null || v === '' ? null : sanitizeLabel(v);
+const nullableLabel = (v: string | null | undefined, max: number): string | null =>
+  v === undefined || v === null || v === '' ? null : sanitizeLabel(v, max);
 
 export const whoamiTool = defineTool({
   name: 'whoami',
@@ -99,22 +100,22 @@ export const whoamiTool = defineTool({
     const structured: z.infer<typeof OutputSchema> = {
       user: {
         id: me.user.id,
-        name: nullableLabel(me.user.display_name),
-        email: nullableLabel(me.user.email),
+        name: nullableLabel(me.user.display_name, PERSON_NAME_CHARS),
+        email: nullableLabel(me.user.email, 320),
       },
-      org: { id: me.org.id, name: nullableLabel(me.org.name) },
+      org: { id: me.org.id, name: nullableLabel(me.org.name, NAME_CHARS) },
       token: {
-        name: nullableLabel(me.token.name),
+        name: nullableLabel(me.token.name, NAME_CHARS),
         expires_at: me.token.expires_at,
       },
       scopes: [...me.token.scopes].sort(),
       limits: {
         projects: me.token.limits.projects?.map((p) => sanitizeLabel(p.key, 40)) ?? null,
-        channels: me.token.limits.channels?.map((c) => sanitizeLabel(c.name, 100)) ?? null,
+        channels: me.token.limits.channels?.map((c) => sanitizeLabel(c.name, NAME_CHARS)) ?? null,
       },
       projects: me.projects.map((p) => ({
         key: sanitizeLabel(p.key, 40),
-        name: nullableLabel(p.name),
+        name: nullableLabel(p.name, NAME_CHARS),
         id: p.id,
       })),
       features: { projects: me.features.projects },
@@ -134,12 +135,25 @@ export const whoamiTool = defineTool({
     };
 
     const s = structured;
-    const who = s.user.name ?? s.user.id;
+    // The names of the user, the org, the token, the projects and the
+    // channels were written by people: one block holds them all.
+    const names = [
+      `User: ${s.user.name ?? s.user.id}${s.user.email ? ` (${s.user.email})` : ''}`,
+      `Org: ${s.org.name ?? s.org.id}`,
+      ...(s.token.name ? [`Token: ${s.token.name}`] : []),
+    ];
+    if (s.projects.length > 0) {
+      const shown = s.projects
+        .slice(0, MAX_PROJECTS_IN_TEXT)
+        .map((p) => (p.name ? `${p.key} (${p.name})` : p.key));
+      names.push(`Projects in reach: ${shown.join(', ')}`);
+    }
+    if (s.limits.channels !== null && s.limits.channels.length > 0) {
+      names.push(`Channels the token is limited to: ${s.limits.channels.join(', ')}`);
+    }
     const lines = [
-      `Signed in as ${who}${s.user.email ? ` (${s.user.email})` : ''} in the org ${s.org.name ?? s.org.id}` +
-        (s.token.name ? `, through the token "${s.token.name}"` : '') +
-        (s.token.expires_at ? ` (expires ${s.token.expires_at})` : '') +
-        '.',
+      `Signed in to buildIt.Social with a personal access token${s.token.expires_at ? ` (expires ${s.token.expires_at})` : ''}. Who and where, as people named them:`,
+      wrapLines(names, 'names'),
       `Scopes: ${s.scopes.length > 0 ? s.scopes.join(', ') : 'none'}.`,
       `Limits: ${
         s.limits.projects === null
@@ -147,9 +161,11 @@ export const whoamiTool = defineTool({
           : `only the projects ${s.limits.projects.join(', ') || '(none)'}`
       }; ${
         s.limits.channels === null
-          ? 'all channels'
-          : `only the channels ${s.limits.channels.join(', ') || '(none)'}`
-      } the user can see.`,
+          ? 'all channels the user can see'
+          : s.limits.channels.length === 0
+            ? 'no channels'
+            : `only the ${s.limits.channels.length} channel(s) listed above, among those the user can see`
+      }.`,
     ];
     if (!s.features.projects) {
       lines.push('Projects is not enabled for this org: project and item tools will not work.');
@@ -157,14 +173,11 @@ export const whoamiTool = defineTool({
     if (s.projects.length === 0) {
       lines.push('Projects in reach: none.');
     } else {
-      const shown = s.projects
-        .slice(0, MAX_PROJECTS_IN_TEXT)
-        .map((p) => (p.name ? `${p.key} (${p.name})` : p.key));
       const more =
         s.projects.length > MAX_PROJECTS_IN_TEXT
-          ? `, and ${s.projects.length - MAX_PROJECTS_IN_TEXT} more in the structured result`
-          : '';
-      lines.push(`Projects in reach (${s.projects.length}): ${shown.join(', ')}${more}.`);
+          ? ` (the first ${MAX_PROJECTS_IN_TEXT} listed above; the rest in the structured result)`
+          : ' (listed above)';
+      lines.push(`Projects in reach: ${s.projects.length}${more}.`);
     }
     const r = s.rate_limits;
     lines.push(
