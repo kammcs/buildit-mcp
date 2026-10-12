@@ -18,7 +18,8 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import { ApiError, LOCAL_ERROR_CODES } from './api/client.js';
 import { ERROR_HINTS } from './api/generated/operations.js';
 import type { Error as ApiErrorBody } from './api/generated/strict.js';
-import { neutralize, sanitizeLabel } from './untrusted.js';
+import { scrubString } from './log.js';
+import { neutralize, sanitizeLabel, wrapUntrusted } from './untrusted.js';
 
 const MAX_DETAILS_CHARS = 4000;
 
@@ -269,7 +270,11 @@ function formatKnownDetails(code: string, d: Record<string, unknown>): string[] 
   }
 }
 
-/** Renders the details object as lines, defused and capped. */
+/**
+ * Renders the details object as lines, scrubbed of anything token-shaped,
+ * inside one untrusted block: details can echo people-written names
+ * (statuses, the candidates of an ambiguous name, refs).
+ */
 function formatDetails(code: string, details: unknown): string | undefined {
   if (details === undefined || details === null) return undefined;
   const obj = record(details);
@@ -284,10 +289,18 @@ function formatDetails(code: string, details: unknown): string | undefined {
   } else {
     text = formatValue(details);
   }
-  // Details can echo people-written names (for example candidate users).
   // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-  text = neutralize(text.replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, ' '));
-  return text.length > MAX_DETAILS_CHARS ? text.slice(0, MAX_DETAILS_CHARS) + ' …' : text;
+  text = scrubString(text.replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, ' '));
+  return wrapUntrusted(text, {
+    source: 'error_details',
+    maxChars: MAX_DETAILS_CHARS,
+    moreHint: 'The rest of the details is left out.',
+  });
+}
+
+/** Text from the API or a tool, made safe to show: nothing token-shaped, no block tags. */
+function clean(text: string): string {
+  return neutralize(scrubString(text));
 }
 
 /** The actionable text for an ApiError. */
@@ -297,7 +310,7 @@ export function describeApiError(err: ApiError): string {
   // With the wait in seconds on its own line, the message's and the hint's
   // pointers to details.retry_after (which isn't shown) would repeat it.
   const waitShown = rateLimited && err.retryAfterSeconds !== undefined;
-  const message = neutralize(waitShown ? withoutRetryAdvice(err.message) : err.message);
+  const message = clean(waitShown ? withoutRetryAdvice(err.message) : err.message);
   const lines = [
     `buildIt.Social API error: ${err.code}${err.status ? ` (HTTP ${err.status})` : ''}`,
     message,
@@ -311,13 +324,13 @@ export function describeApiError(err: ApiError): string {
       : undefined;
   const hint = kindHint ?? hintFor(err.code, err.hint);
   if (hint && !(waitShown && RETRY_ADVICE.test(hint))) {
-    const text = neutralize(inServerTerms(hint));
+    const text = clean(inServerTerms(hint));
     if (!alreadySaid(text, said)) {
       lines.push(`What to do: ${text}`);
       said.push(text);
     }
   }
-  const note = err.note ? neutralize(err.note) : undefined;
+  const note = err.note ? clean(err.note) : undefined;
   // A tool's own note is more precise than the general one.
   const toolNote = note === undefined ? TOOL_NOTES[err.code]?.(details) : undefined;
   if (toolNote && !alreadySaid(toolNote, said)) {
@@ -351,7 +364,7 @@ export function toolErrorResult(err: unknown, requestId?: string): CallToolResul
           type: 'text',
           text: [
             `buildit-mcp error: ${err.code} (nothing was sent to buildIt.Social)`,
-            neutralize(err.message),
+            clean(err.message),
             `What to do: ${LOCAL_HINTS.invalid_arguments ?? ''}`,
           ].join('\n'),
         },
