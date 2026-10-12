@@ -5,6 +5,10 @@
  * addresses, private hostnames, the product team's own project key).
  *
  *   npm run privacy        scan every file git knows (tracked or new, not ignored)
+ *   npm run privacy:pack   pack the npm package (to a temporary folder) and scan
+ *                          every file in the tarball, and check that it holds
+ *                          only the files a release may ship (npm run check
+ *                          and prepublishOnly run this)
  *
  * test/privacy.test.ts runs the same scan, and checks every rule against
  * its own examples. To extend the guard, add a rule to RULES (with an
@@ -13,9 +17,11 @@
  * (for example `K[e]lly`), and the examples are assembled from pieces.
  */
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 
 export interface Rule {
   id: string;
@@ -147,6 +153,25 @@ export const RULES: Rule[] = [
     },
   },
   {
+    id: 'local-path',
+    why: "paths on a maintainer's machine (for example in a source map or a stack trace)",
+    pattern:
+      /(?:\b[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s"'`]+|(?:^|[\s"'`(=]|file:\/\/)\/(?:Users|home)\/[A-Za-z][\w.-]*\/)/gim,
+    examples: {
+      hit: [
+        j('C', ':', '\\', 'Users', '\\', 'ana', '\\', 'src'),
+        j('"sources": ["D', ':', '\\\\', 'Users', '\\\\', 'ana', '\\\\', 'x.ts"]'),
+        j('at file://', '/Users/', 'ana/buildit-mcp/dist/index.js'),
+        j('cd ', '/home/', 'ana/buildit-mcp'),
+      ],
+      miss: [
+        'node /path/to/buildit-mcp/dist/index.js',
+        'https://example.com/home/ana/page',
+        'Users can create a token',
+      ],
+    },
+  },
+  {
     id: 'private-host',
     why: 'private hostnames (only the public API host may appear)',
     pattern: /\b((?:[a-z0-9-]+\.)+buildit\.social)\b/gi,
@@ -255,19 +280,150 @@ export function selfTest(rules: readonly Rule[] = RULES): string[] {
   return problems;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const problems = selfTest();
-  const findings = scanRepo();
-  for (const p of problems) console.error(`self-test: ${p}`);
+// The published package.
+
+/** The only files a release may ship (paths inside the tarball, without its `package/` folder). */
+export const PACKED_ALLOWED: RegExp[] = [
+  /^dist\/[\w./-]+\.js$/,
+  /^(README|CHANGELOG|SECURITY)\.md$/,
+  /^LICENSE$/,
+  /^package\.json$/,
+];
+
+/** Files every release must ship. */
+export const PACKED_REQUIRED: string[] = [
+  'dist/index.js',
+  'README.md',
+  'LICENSE',
+  'SECURITY.md',
+  'package.json',
+];
+
+const PACK_RULE = { id: 'pack-contents', why: 'only the built server and its documents ship' };
+
+export interface TarEntry {
+  path: string;
+  data: Buffer;
+}
+
+/** The regular files in a tar archive (ustar, with pax or GNU long names), in order. */
+export function readTar(tar: Buffer): TarEntry[] {
+  const out: TarEntry[] = [];
+  const field = (block: Buffer, start: number, length: number): string => {
+    const raw = block.subarray(start, start + length);
+    const end = raw.indexOf(0);
+    return raw.subarray(0, end === -1 ? raw.length : end).toString('utf8');
+  };
+  let longPath: string | undefined;
+  for (let offset = 0; offset + 512 <= tar.length;) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((b) => b === 0)) break;
+    const size = Number.parseInt(field(header, 124, 12).trim() || '0', 8);
+    if (!Number.isFinite(size) || size < 0) throw new Error(`bad tar header at ${offset}`);
+    const type = String.fromCharCode(header[156] ?? 0);
+    const data = tar.subarray(offset + 512, offset + 512 + size);
+    offset += 512 + Math.ceil(size / 512) * 512;
+    if (type === 'x') {
+      // pax extended header: "<length> <key>=<value>\n" records; "path" names the next entry.
+      const match = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(data.toString('utf8'));
+      if (match) longPath = match[1];
+      continue;
+    }
+    if (type === 'L') {
+      longPath = data.toString('utf8').replace(/\0+$/, '');
+      continue;
+    }
+    if (type === 'g') continue;
+    const prefix = field(header, 257, 6).startsWith('ustar') ? field(header, 345, 155) : '';
+    const path =
+      longPath ?? (prefix ? `${prefix}/${field(header, 0, 100)}` : field(header, 0, 100));
+    longPath = undefined;
+    if (type === '0' || type === '\0' || type === '7') out.push({ path, data: Buffer.from(data) });
+  }
+  return out;
+}
+
+/** The findings in a packed package (an npm .tgz): the rules over every file, and its file list. */
+export function scanPackage(tgz: Buffer): { files: string[]; findings: Finding[] } {
+  const entries = readTar(gunzipSync(tgz)).map((e) => ({
+    ...e,
+    path: e.path.replace(/^package\//, ''),
+  }));
+  const files = entries.map((e) => e.path).sort();
+  const findings: Finding[] = [];
+  for (const file of files) {
+    if (!PACKED_ALLOWED.some((p) => p.test(file))) {
+      findings.push({ file, line: 0, rule: PACK_RULE.id, match: 'not a file a release ships' });
+    }
+  }
+  for (const file of PACKED_REQUIRED) {
+    if (!files.includes(file)) {
+      findings.push({ file, line: 0, rule: PACK_RULE.id, match: 'missing (run npm run build)' });
+    }
+  }
+  for (const entry of entries) {
+    if (entry.data.includes(0)) continue; // binary
+    findings.push(...scanText(entry.path, entry.data.toString('utf8')));
+  }
+  return { files, findings };
+}
+
+/** Runs `npm pack` into a temporary folder and scans the tarball; the folder is removed after. */
+export function packAndScan(root: string = ROOT): { files: string[]; findings: Finding[] } {
+  const dest = mkdtempSync(join(tmpdir(), 'buildit-mcp-pack-'));
+  try {
+    const args = ['pack', '--json', '--ignore-scripts', '--pack-destination'];
+    // Under `npm run`, npm_execpath is npm's own script; run it with this Node (no shell needed).
+    // Otherwise run npm itself, through a shell on Windows (npm.cmd), with the folder quoted.
+    const npmCli = process.env.npm_execpath;
+    const viaShell = process.platform === 'win32';
+    const stdout =
+      npmCli && /\.c?js$/.test(npmCli)
+        ? execFileSync(process.execPath, [npmCli, ...args, dest], { cwd: root, encoding: 'utf8' })
+        : execFileSync('npm', [...args, viaShell ? `"${dest}"` : dest], {
+            cwd: root,
+            encoding: 'utf8',
+            shell: viaShell,
+          });
+    if (!Array.isArray(JSON.parse(stdout))) throw new Error('npm pack gave no file list');
+    const tarballs = readdirSync(dest).filter((f) => f.endsWith('.tgz'));
+    if (tarballs.length !== 1) throw new Error(`npm pack made ${tarballs.length} tarballs`);
+    return scanPackage(readFileSync(join(dest, tarballs[0]!)));
+  } finally {
+    rmSync(dest, { recursive: true, force: true });
+  }
+}
+
+function report(findings: readonly Finding[]): void {
   for (const f of findings) {
-    const why = RULES.find((r) => r.id === f.rule)?.why ?? '';
+    const why =
+      RULES.find((r) => r.id === f.rule)?.why ?? (f.rule === PACK_RULE.id ? PACK_RULE.why : '');
     console.error(`${f.file}:${f.line}: ${f.rule} (${why}): ${f.match}`);
   }
-  if (problems.length + findings.length > 0) {
-    console.error(
-      `Privacy guard: ${findings.length} finding(s), ${problems.length} self-test problem(s).`,
-    );
-    process.exit(1);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const problems = selfTest();
+  for (const p of problems) console.error(`self-test: ${p}`);
+  if (process.argv.includes('--pack')) {
+    const { files, findings } = packAndScan();
+    report(findings);
+    if (problems.length + findings.length > 0) {
+      console.error(
+        `Privacy guard (package): ${findings.length} finding(s), ${problems.length} self-test problem(s).`,
+      );
+      process.exit(1);
+    }
+    console.log(`Privacy guard: the package's ${files.length} files are clean.`);
+  } else {
+    const findings = scanRepo();
+    report(findings);
+    if (problems.length + findings.length > 0) {
+      console.error(
+        `Privacy guard: ${findings.length} finding(s), ${problems.length} self-test problem(s).`,
+      );
+      process.exit(1);
+    }
+    console.log(`Privacy guard: ${repoFiles().length} files clean.`);
   }
-  console.log(`Privacy guard: ${repoFiles().length} files clean.`);
 }

@@ -254,7 +254,7 @@ For an HTTP server that anyone other than you can reach:
 
 ```sh
 npm ci
-npm run check         # lint, format check, build, tests
+npm run check         # lint, format check, build, tests, the privacy guard over the packed package
 npm run inspect       # MCP Inspector smoke test against a fake API
 npm run conformance   # official MCP conformance suite, offline
 npm run generate      # regenerate src/api/generated/ from openapi/openapi.json

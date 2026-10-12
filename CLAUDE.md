@@ -81,7 +81,8 @@ test/
 scripts/
   codegen.ts, generate.ts  the generator (npm run generate)
   inspect.ts            MCP Inspector CLI smoke test (stdio and HTTP, both protocol eras)
-  privacy.ts            the privacy guard (npm run privacy; test/privacy.test.ts runs it too)
+  privacy.ts            the privacy guard (npm run privacy, and privacy:pack over the packed
+                        package; test/privacy.test.ts runs it too)
   conformance.ts        official conformance suite against HTTP mode, offline
 evals/                  realistic tasks a maintainer runs by hand against a test org
 ```
@@ -124,11 +125,12 @@ Resources and prompts are gated like tools, by toolset and scope (`selectGated`)
 
 ```sh
 npm ci
-npm run check         # lint (tsc + eslint), format:check, build, test
+npm run check         # lint (tsc + eslint), format:check, build, test, privacy:pack
 npm run inspect       # MCP Inspector CLI smoke test against the fake API
 npm run conformance   # official conformance suite against HTTP mode, offline
 npm run generate      # after a contract change; the tests fail if the output is stale
 npm run privacy       # the privacy guard (the tests run it too)
+npm run privacy:pack  # pack the npm package to a temp folder; the guard over its files, and only dist/ and the documents ship
 ```
 
 `npm run check` must pass before every commit; run `inspect` and `conformance` when you touch transports or the server setup. All of them use only the in-process fake API and local ports, and clean up after themselves.
