@@ -296,6 +296,7 @@ export const PACKED_REQUIRED: string[] = [
   'README.md',
   'LICENSE',
   'SECURITY.md',
+  'CHANGELOG.md',
   'package.json',
 ];
 

@@ -26,7 +26,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    "SECURITY.md"
+    "SECURITY.md",
+    "CHANGELOG.md"
   ],
   "publishConfig": {
     "access": "public"

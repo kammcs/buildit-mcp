@@ -8,6 +8,7 @@ It runs on your own machine (stdio) or as a stateless HTTP server for a team. It
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
+- [Changelog](CHANGELOG.md)
 - [Contributing (for people and agents)](CLAUDE.md)
 
 ## What you need
@@ -248,7 +249,17 @@ For an HTTP server that anyone other than you can reach:
 - terminate TLS in front of it (a reverse proxy such as Caddy or nginx);
 - set `BUILDIT_ALLOWED_HOSTS` to the hostnames clients use, and `BUILDIT_ALLOWED_ORIGINS` only if a browser-based client needs it;
 - optionally restrict client IP addresses at the proxy;
-- keep it updated: the server warns in its log when the API needs a newer version.
+- keep it updated: `whoami` says when the API needs a newer version ([Versions](#versions)).
+
+## Versions
+
+buildit-mcp follows [semantic versioning](https://semver.org), and every release is listed in [CHANGELOG.md](CHANGELOG.md). Before 1.0, a breaking change raises the minor version (0.1 to 0.2); from 1.0, the major.
+
+- **Tool names are stable.** A released tool keeps its name, and changes to tools are additive: new tools, new optional arguments, new fields in results. Removing or renaming a tool, an argument or a result field is a breaking change.
+- **Deprecation comes first.** A tool that is going away is kept for at least one minor version after it is deprecated, still working, with a note at the start of its description that says so and what to use instead, and an entry in the changelog.
+- **The API says when to update.** buildIt.Social's agent API publishes the oldest buildit-mcp release it supports (`min_mcp_version`, from `GET /v1/meta`). When this server is older, `whoami` reports `update_required: true` and asks the agent to tell you to update, and in stdio mode the server also logs a warning when it starts. It doesn't stop working by itself: calls go on as far as the API accepts them.
+
+To update, install the newer release, or pull and rebuild your clone.
 
 ## Development
 
