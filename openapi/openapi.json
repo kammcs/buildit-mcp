@@ -11817,7 +11817,7 @@
       "MarkdownDescription": {
         "type": "string",
         "maxLength": 262144,
-        "description": "GitHub-flavored Markdown, at most 256 KB. No images by URL (http, https, data, ftp), inline or by reference. Mentions: @email or @[Display Name], saved and read back as [@Name](mention:<uuid>). Images are ![alt](file:<id>); an optional title sets the image's layout: up to three words separated by spaces, each at most once, in any order: a width from 10% to 100% in steps of 5, one of left, center, right, wrap-left or wrap-right, and one of gap-s, gap-m or gap-l, for example ![Site plan](file:<id> \"40% wrap-left gap-m\"). No title is the default layout (the image's own size, left, gap-m). A title that looks like a layout but isn't one (40% wrap-up, 33%, gap-xl, two widths) is refused with 422 image_layout_invalid; other titles are captions, kept as written. An image's title is at most 200 characters. When rewriting text, keep each image's title exactly as you read it."
+        "description": "GitHub-flavored Markdown, at most 256 KB. Images only of uploaded files (![alt](file:<uuid>)): any other image, inline or by reference, is refused. Mentions: @email or @[Display Name], saved and read back as [@Name](mention:<uuid>). Images are ![alt](file:<id>); an optional title sets the image's layout: up to three words separated by spaces, each at most once, in any order: a width from 10% to 100% in steps of 5, one of left, center, right, wrap-left or wrap-right, and one of gap-s, gap-m or gap-l, for example ![Site plan](file:<id> \"40% wrap-left gap-m\"). No title is the default layout (the image's own size, left, gap-m). A title that looks like a layout but isn't one (40% wrap-up, 33%, gap-xl, two widths) is refused with 422 image_layout_invalid; other titles are captions, kept as written. An image's title is at most 200 characters. When rewriting text, keep each image's title exactly as you read it."
       },
       "MeResponse": {
         "type": "object",
@@ -11990,6 +11990,10 @@
                   "name": {
                     "type": "string"
                   },
+                  "type": {
+                    "type": "string",
+                    "description": "The file's declared type, lower case: image/jpeg, video/mp4 and so on."
+                  },
                   "duration_ms": {
                     "anyOf": [
                       {
@@ -12006,6 +12010,7 @@
                 "required": [
                   "id",
                   "name",
+                  "type",
                   "duration_ms"
                 ]
               },
@@ -12013,7 +12018,7 @@
                 "type": "null"
               }
             ],
-            "description": "An attachment's name; files can't be fetched. For a set of photos, the first."
+            "description": "An attachment's name and type; files can't be fetched. For a set of photos and videos, the first."
           },
           "photos": {
             "type": "array",
@@ -12025,6 +12030,10 @@
                 },
                 "name": {
                   "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "description": "The file's declared type, lower case: image/jpeg, video/mp4 and so on."
                 },
                 "alt": {
                   "type": [
@@ -12048,11 +12057,12 @@
               "required": [
                 "id",
                 "name",
+                "type",
                 "alt",
                 "duration_ms"
               ]
             },
-            "description": "The photos the message carries, in order (up to 10), each with its description for screen readers; empty for none. Files can't be fetched."
+            "description": "The photos and videos the message carries, in order (up to 10), each with its type (image/* or video/*), a video's length, and its description for screen readers; empty for none. Files can't be fetched."
           },
           "mentions": {
             "type": "array",
@@ -12314,7 +12324,7 @@
       "PageBody": {
         "type": "string",
         "maxLength": 1048576,
-        "description": "GitHub-flavored Markdown, at most 1 MiB. No images by URL, inline or by reference. Mentions as in descriptions. Images are ![alt](file:<id>); an optional title sets the image's layout: up to three words separated by spaces, each at most once, in any order: a width from 10% to 100% in steps of 5, one of left, center, right, wrap-left or wrap-right, and one of gap-s, gap-m or gap-l, for example ![Site plan](file:<id> \"40% wrap-left gap-m\"). No title is the default layout (the image's own size, left, gap-m). A title that looks like a layout but isn't one (40% wrap-up, 33%, gap-xl, two widths) is refused with 422 image_layout_invalid; other titles are captions, kept as written. An image's title is at most 200 characters. When rewriting text, keep each image's title exactly as you read it."
+        "description": "GitHub-flavored Markdown, at most 1 MiB. Images only of uploaded files (file:<uuid>), inline or by reference. Mentions as in descriptions. Images are ![alt](file:<id>); an optional title sets the image's layout: up to three words separated by spaces, each at most once, in any order: a width from 10% to 100% in steps of 5, one of left, center, right, wrap-left or wrap-right, and one of gap-s, gap-m or gap-l, for example ![Site plan](file:<id> \"40% wrap-left gap-m\"). No title is the default layout (the image's own size, left, gap-m). A title that looks like a layout but isn't one (40% wrap-up, 33%, gap-xl, two widths) is refused with 422 image_layout_invalid; other titles are captions, kept as written. An image's title is at most 200 characters. When rewriting text, keep each image's title exactly as you read it."
       },
       "PageResponse": {
         "type": "object",
