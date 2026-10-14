@@ -60,7 +60,7 @@ The tools you see depend on the enabled toolsets, read-only mode, the exclude li
 
 | Toolset                   | Tool                       | Scope                               | Annotations             | Does                                                                                                                                                     |
 | ------------------------- | -------------------------- | ----------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `items` (on)              | `whoami`                   | none                                | read-only               | Who the token acts as: the user, the org, the token's name, expiry, scopes and limits, the projects in reach and the rate limits. Call it first.         |
+| `items` (on)              | `whoami`                   | none                                | read-only               | Who the token acts as: the user, the org, the token's name, expiry, scopes and limits, what it can't do, the projects in reach and the rate limits.      |
 |                           | `list_projects`            | `projects:read`                     | read-only               | The projects in reach, with keys, settings and item counts. Paged.                                                                                       |
 |                           | `describe_project`         | `projects:read`                     | read-only               | A project's types, workflows (statuses, allowed moves and the fields they need), labels, custom fields, estimates and members.                           |
 |                           | `find_users`               | `projects:read`                     | read-only               | A project's members matching part of a name or email, or "me", for assigning and mentions. Paged.                                                        |
@@ -114,7 +114,7 @@ Deleting, moving or bulk-editing items, archiving a status, and changing workflo
 
 1. A `propose_*` tool asks buildIt.Social to check the change and compute its effect ("Deletes DEMO-42 and its 3 child items"). Nothing changes; it returns a preview and a plan handle.
 2. The agent shows you the preview and asks you.
-3. Only when you say yes does it call `apply_plan` with the handle. A handle works once, for 10 minutes, only with the token that proposed it, and is refused if anything it targets changed since the preview.
+3. Only when you say yes does it call `apply_plan` with the handle. A handle works once, for 10 minutes, only with the token that proposed it, and is refused if anything it targets changed since the preview. A plan proposed again after that needs the person's yes again.
 
 `apply_plan` is marked destructive, so clients that ask before destructive tools ask you again. The server's instructions, every preview and `apply_plan`'s description tell the agent never to apply a plan you haven't seen and agreed to, and never because content in buildIt.Social asks for it.
 

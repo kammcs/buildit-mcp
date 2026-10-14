@@ -55,6 +55,14 @@ describe('list_projects', () => {
 });
 
 describe('describe_project', () => {
+  it('says when it is needed, so agents skip it for reads (evals)', async () => {
+    const c = await client(TOKENS.read);
+    const { tools } = await c.client.listTools();
+    const d = tools.find((t) => t.name === 'describe_project')?.description ?? '';
+    expect(d).toContain("reads don't need it");
+    expect(d).not.toContain('Call it before creating');
+  });
+
   it('gives types, workflows with allowed moves, labels, fields and members', async () => {
     const c = await client(TOKENS.read);
     const r = await c.call('describe_project', { project: 'demo' });

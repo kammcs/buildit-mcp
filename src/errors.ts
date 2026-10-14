@@ -55,6 +55,9 @@ const LOCAL_HINTS: Record<string, string> = {
  * settings), shown after the hint, only where they add something: none when
  * the hint or the details already say it.
  */
+const NEW_PLAN_NOTE =
+  "In this server, that means calling the same propose_* tool again. Then show the person the new preview and wait for their yes before apply_plan: their yes to the old plan doesn't carry over.";
+
 const TOOL_NOTES: Record<string, (details: Record<string, unknown>) => string | undefined> = {
   token_invalid: () =>
     'In this server the token comes from BUILDIT_TOKEN (or the Authorization header in HTTP mode).',
@@ -69,8 +72,10 @@ const TOOL_NOTES: Record<string, (details: Record<string, unknown>) => string | 
       : d.kind === 'item' || d.kind === 'description'
         ? 'get_item reads the current item, version and description_version.'
         : undefined,
-  plan_stale: () => 'In this server, that means calling the same propose_* tool again.',
-  plan_expired: () => 'In this server, that means calling the same propose_* tool again.',
+  // An eval agent re-proposed after plan_expired and applied the new plan
+  // without asking: a yes is for the plan the person saw.
+  plan_stale: () => NEW_PLAN_NOTE,
+  plan_expired: () => NEW_PLAN_NOTE,
 };
 
 /**

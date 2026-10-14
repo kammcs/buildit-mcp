@@ -347,7 +347,7 @@ export const describeProjectTool = defineTool({
   toolset: 'items',
   title: 'Describe a project',
   description:
-    "Describes one project: its types (epic, standard, subtask levels) and the workflow each follows; each workflow's statuses with the moves allowed from each status and the fields those moves require; labels; custom fields with their options; the estimate scale and allowed values; and the members (people who can be assigned or mentioned). Call it before creating, transitioning or labelling items, so you use names that exist. Statuses, types, labels and fields are then given by name, case-insensitive.",
+    "Describes one project: its types and levels and the workflow each follows; each workflow's statuses with the moves allowed from each status and the fields those moves require; labels; custom fields with their options; the estimate scale and allowed values; and the members, who can be assigned or mentioned. Call it for names you don't know before writing (reads don't need it; a refused move or unknown name lists what is allowed). Names ignore case.",
   scopes: scopesOf('describe_project'),
   annotations: {
     title: 'Describe a project',
