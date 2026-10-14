@@ -1270,12 +1270,18 @@ export const MessageSchema = z.strictObject({
   code: z.string().nullable(),
   code_language: z.string().nullable(),
   file: z
-    .strictObject({ id: UuidSchema, name: z.string(), duration_ms: z.int().min(1).nullable() })
+    .strictObject({
+      id: UuidSchema,
+      name: z.string(),
+      type: z.string(),
+      duration_ms: z.int().min(1).nullable(),
+    })
     .nullable(),
   photos: z.array(
     z.strictObject({
       id: UuidSchema,
       name: z.string(),
+      type: z.string(),
       alt: z.string().nullable(),
       duration_ms: z.int().min(1).nullable(),
     }),

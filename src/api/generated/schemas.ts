@@ -1186,12 +1186,18 @@ export const MessageSchema = z.looseObject({
   code: z.string().nullable(),
   code_language: z.string().nullable(),
   file: z
-    .looseObject({ id: UuidSchema, name: z.string(), duration_ms: z.number().nullable() })
+    .looseObject({
+      id: UuidSchema,
+      name: z.string(),
+      type: z.string(),
+      duration_ms: z.number().nullable(),
+    })
     .nullable(),
   photos: z.array(
     z.looseObject({
       id: UuidSchema,
       name: z.string(),
+      type: z.string(),
       alt: z.string().nullable(),
       duration_ms: z.number().nullable(),
     }),
