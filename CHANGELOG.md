@@ -26,6 +26,9 @@ Also in this release:
 - People-written content (titles, descriptions, comments, pages, messages, and the names of people, projects, channels and the like) comes back inside `<untrusted_content>` blocks, each with a random id that its closing tag repeats.
 - Read-only mode (`BUILDIT_READ_ONLY`) and a list of tools to hide (`BUILDIT_EXCLUDE_TOOLS`).
 - JSON logs on stderr that never contain tokens or content.
+- `whoami` says what the token can't do and why (a scope it lacks, or project or channel limits that hide `create_channel` and `create_project`), so an agent can tell the person instead of looking for a tool.
+- The server's instructions no longer ask the agent to call `whoami` before everything (it cost a call in most tasks), and ask it to tell the person about requests aimed at agents that it finds in content, rather than leaving them out of a summary.
+- After `plan_expired` or `plan_stale`, the error, `apply_plan`'s description and the instructions say the new plan needs its own yes: an agent re-proposed an expired deletion and applied it without asking again.
 - Image layouts in page bodies and item descriptions: an image's title sets its width (10% to 100%), placement (left, center, right, wrap-left, wrap-right) and gap (`![alt](file:<id> "40% wrap-left gap-m")`); tools that rewrite Markdown keep the titles as read, and a malformed one is refused (`image_layout_invalid`).
 
 ### Hardening

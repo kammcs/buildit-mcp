@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import type { MetaResponse } from '../api/generated/schemas.js';
 import { defineTool } from '../toolsets/registry.js';
+import { expandScopes } from '../toolsets/toolsets.js';
 import { sanitizeLabel } from '../untrusted.js';
 import { compareVersions, SERVER_NAME, SERVER_VERSION } from '../version.js';
 import { NAME_CHARS, PERSON_NAME_CHARS, wrapLines } from './shared.js';
@@ -43,6 +44,7 @@ const OutputSchema = z.object({
       id: z.string().nullable(),
     }),
   ),
+  cannot: z.array(z.string()).describe("What the token can't do."),
   features: z.object({
     projects: z.boolean().describe('Whether Projects is enabled for the org.'),
   }),
@@ -65,6 +67,40 @@ const OutputSchema = z.object({
   }),
 });
 
+/**
+ * What a token can't do, in words, from its scopes (with the ones they imply)
+ * and its limits. The API is the authority; this only tells the agent why a
+ * tool isn't listed, so it can tell the person instead of looking for one.
+ */
+export function cannotDo(
+  scopes: readonly string[],
+  limits: { projects?: readonly unknown[] | null; channels?: readonly unknown[] | null },
+): string[] {
+  const has = expandScopes(scopes);
+  const out: string[] = [];
+  if (!has.has('projects:read')) out.push('read projects or items (needs projects:read)');
+  if (!has.has('projects:write')) {
+    out.push(
+      `change items, comments, sprints or releases (${has.has('projects:read') ? 'it can only read; ' : ''}needs projects:write)`,
+    );
+  }
+  if (!has.has('projects:delete'))
+    out.push('delete, move or bulk-edit items (needs projects:delete)');
+  if (!has.has('projects:admin')) {
+    out.push(
+      'create channels or projects, or change workflows, work types, fields or labels (needs projects:admin)',
+    );
+  } else if ((limits.projects ?? null) !== null || (limits.channels ?? null) !== null) {
+    out.push(
+      'create channels or projects (the token is limited to some projects or channels; that needs a token without limits)',
+    );
+  }
+  if (!has.has('pages:read')) out.push('read pages (needs pages:read)');
+  else if (!has.has('pages:write')) out.push('create or edit pages (needs pages:write)');
+  if (!has.has('chat:read')) out.push('read channel messages (needs chat:read)');
+  return out;
+}
+
 const nullableLabel = (v: string | null | undefined, max: number): string | null =>
   v === undefined || v === null || v === '' ? null : sanitizeLabel(v, max);
 
@@ -73,7 +109,7 @@ export const whoamiTool = defineTool({
   toolset: 'items',
   title: 'Who am I',
   description:
-    'Shows who the buildIt.Social token acts as: the user, the org, the token name and expiry, its scopes, any limits to chosen projects or channels, and the projects in reach (keys and names). Call it first to learn which project keys exist, or when a call fails with an authorization error.',
+    "Who the token acts as: the user, the org, the token's name, expiry, scopes and limits, what it can't do, and the projects in reach. Call it when you don't know the project keys, when no tool fits a task, or after an authorization error.",
   scopes: [],
   annotations: {
     title: 'Who am I',
@@ -113,6 +149,7 @@ export const whoamiTool = defineTool({
         projects: me.token.limits.projects?.map((p) => sanitizeLabel(p.key, 40)) ?? null,
         channels: me.token.limits.channels?.map((c) => sanitizeLabel(c.name, NAME_CHARS)) ?? null,
       },
+      cannot: cannotDo(me.token.scopes, me.token.limits),
       projects: me.projects.map((p) => ({
         key: sanitizeLabel(p.key, 40),
         name: nullableLabel(p.name, NAME_CHARS),
@@ -167,6 +204,9 @@ export const whoamiTool = defineTool({
             : `only the ${s.limits.channels.length} channel(s) listed above, among those the user can see`
       }.`,
     ];
+    if (s.cannot.length > 0) {
+      lines.push(`This token can't: ${s.cannot.join('; ')}.`);
+    }
     if (!s.features.projects) {
       lines.push('Projects is not enabled for this org: project and item tools will not work.');
     }

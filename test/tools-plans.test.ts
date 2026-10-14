@@ -142,6 +142,7 @@ describe('the plan rules', () => {
     expect(r.text).toContain('changed since the preview: item DEMO-43');
     expect(r.text).toContain('show the human the new preview');
     expect(r.text).toContain('calling the same propose_* tool again');
+    expect(r.text).toContain("their yes to the old plan doesn't carry over");
     expect(item('DEMO-43')).toBeDefined();
   });
 
@@ -153,6 +154,10 @@ describe('the plan rules', () => {
     expect(r.isError).toBe(true);
     expect(r.text).toContain('plan_expired (HTTP 410)');
     expect(r.text).toContain('What to do: Create the plan again, show the new preview');
+    // A yes was for the expired plan: the new one must be shown and agreed again.
+    expect(r.text).toContain(
+      "wait for their yes before apply_plan: their yes to the old plan doesn't carry over",
+    );
     expect(item('DEMO-43')).toBeDefined();
   });
 
@@ -452,6 +457,13 @@ describe('scope gating', () => {
     expect(names).toContain('propose_label_change');
     expect(names).not.toContain('propose_delete_item');
     expect(a.client.getInstructions()).toContain('call apply_plan only after they confirm');
+    expect(a.client.getInstructions()).toContain(
+      'A plan made again (after plan_expired or plan_stale) needs its own yes.',
+    );
+    const apply = (await a.client.listTools()).tools.find((t) => t.name === 'apply_plan');
+    expect(apply?.description).toContain(
+      "show the new preview and ask again: the person's yes was for the old plan",
+    );
     // An admin token can't propose a destructive action, even through another path.
     api.enqueue('/v1/plans', {
       status: 403,

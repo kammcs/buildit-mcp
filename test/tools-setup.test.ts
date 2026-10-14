@@ -421,6 +421,10 @@ describe('listing', () => {
     expect(project?.description).toContain("The project's name is the channel's name");
     expect(project?.description).toContain("can't easily be changed later");
     expect(project?.description).toContain('describe_project');
+    // An agent named a member "Sam" and was refused: say a first name isn't enough.
+    const channel = tools.find((t) => t.name === 'create_channel');
+    expect(channel?.description).toContain('A first name alone ("Sam") is not enough');
+    expect(JSON.stringify(channel?.inputSchema)).toContain('not \\"Sam\\"');
   });
 
   it('hides both from a token with project or channel limits, or without projects:admin', async () => {

@@ -102,7 +102,7 @@ export const createChannelTool = defineTool({
   description: `Creates a channel in the org, as the person, who becomes its first member.
 - visibility: "public" (the org's members, not guests, can find and join it) or "private" (only its members see it).
 - name: 1 to 100 characters, unique in the org (ignoring case). description is optional.
-- members: other people to add, by email (best), exact display name or id; active people of the org, guests included; at most 50. An unknown person fails the call and nothing is created.
+- members: other people to add, by email (best), exact display name or id; active people of the org, guests included; at most 50. A first name alone ("Sam") is not enough: find_users in a project they share with the person gives their email. An unknown person fails the call and nothing is created.
 - idempotency_key: retrying with the same key returns the first channel instead of creating a second, and adds listed people still missing; one is generated and returned if you leave it out.
 To start a project, create the channel here, then call create_project with it. Needs a token without project or channel limits.
 Returns the channel with its id, and its members.`,
@@ -128,7 +128,9 @@ Returns the channel with its id, and its members.`,
       .array(z.string().min(1).max(320))
       .max(50)
       .optional()
-      .describe('People to add besides the person: emails, exact display names or ids.'),
+      .describe(
+        'People to add besides the person: emails (best), exact display names ("Sam Example", not "Sam") or ids.',
+      ),
     idempotency_key: IdempotencyKeyInput.optional(),
   }),
   outputSchema: z.object({
