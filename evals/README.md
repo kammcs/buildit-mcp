@@ -22,6 +22,19 @@ They are run by hand by a maintainer, with a real MCP client against a **test or
 | ---- | ------------------ | ------- | ---------- | ------ | ----- |
 | 1    |                    |         |            |        |       |
 
+### Headless runs with Claude Code
+
+Each task can run in a fresh non-interactive session with only this server, so the counts are comparable between runs:
+
+```sh
+claude -p "<the task's prompt>"   --mcp-config evals-mcp.json --strict-mcp-config   --tools "" --allowedTools mcp__buildit --permission-mode bypassPermissions   --output-format stream-json --verbose
+```
+
+- `evals-mcp.json` lists only the `buildit` server, with `BUILDIT_API_URL`, `BUILDIT_TOOLSETS` and `"BUILDIT_TOKEN": "${BUILDIT_TOKEN}"`, so the token stays in the environment. Run it from an empty folder, so no project instructions are loaded; `--tools ""` leaves only this server's tools.
+- The stream's `init` line names the model and the server's tools; each `tool_use` is a call; the `result` line has the token usage and the session id.
+- To answer the agent's question, run `claude -p "<your answer>" --resume <session id>` with the same flags.
+- For the protocol version, wrap the server in a small stdio proxy that records `initialize`'s `protocolVersion`.
+
 ## Using the results
 
 - A task that fails or takes far more calls than the good run usually points at a tool description, an argument name or an error message. Change the text, rerun the task, and compare.
