@@ -1719,6 +1719,22 @@
                       "branches": 1,
                       "commits": 3
                     }
+                  },
+                  "feedback": {
+                    "reporter_name": "Ana Ruiz",
+                    "org_name": "Acme Dental",
+                    "org_label": "org:acme-dental",
+                    "kind": "bug",
+                    "severity": "annoying",
+                    "device": {
+                      "app": "1.0.0",
+                      "build": "125",
+                      "platform": "windows",
+                      "os": "Windows 11 Pro 10.0.26200",
+                      "form": "desktop"
+                    },
+                    "plus_ones": 3,
+                    "state": "open"
                   }
                 }
               }
@@ -3499,7 +3515,7 @@
           "planning"
         ],
         "summary": "Start a sprint",
-        "description": "Starts a planned sprint (project admins). Only one sprint is active at a time: while another is, the call fails with `validation` on `sprint`.",
+        "description": "Starts a planned sprint (project admins). Only one sprint is active at a time: while another is, the call fails with `validation` on `sprint`. The sprint's items still in a backlog status (not started, not on the board) move to their workflow's first not-started status on the board (To do), so the board shows them; `moved_to_board` lists them, and `not_moved` the ones whose workflow has no such status or doesn't allow the move.",
         "parameters": [
           {
             "name": "key",
@@ -3560,7 +3576,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SprintResponse"
+                  "$ref": "#/components/schemas/StartSprintResponse"
                 },
                 "example": {
                   "sprint": {
@@ -3575,7 +3591,28 @@
                     "completed_at": null,
                     "item_count": 12,
                     "done_count": 4
-                  }
+                  },
+                  "moved_to_board": [
+                    {
+                      "id": "00000000-0000-4000-8000-000000000032",
+                      "key": "DEMO-42",
+                      "title": "Fix login redirect",
+                      "from": "Backlog",
+                      "to": "To do"
+                    }
+                  ],
+                  "not_moved": [
+                    {
+                      "id": "00000000-0000-4000-8000-000000000033",
+                      "key": "DEMO-43",
+                      "title": "Fix the date picker",
+                      "status": "Backlog",
+                      "reason": "required_fields",
+                      "required_fields": [
+                        "estimate"
+                      ]
+                    }
+                  ]
                 }
               }
             }
@@ -6059,7 +6096,8 @@
                       "author": {
                         "id": "00000000-0000-4000-8000-000000000001",
                         "display_name": "Ana Ruiz",
-                        "email": "ana@example.com"
+                        "email": "ana@example.com",
+                        "type": "user"
                       },
                       "kind": "text",
                       "body": "Merged DEMO-42.",
@@ -6211,7 +6249,8 @@
                     "author": {
                       "id": "00000000-0000-4000-8000-000000000001",
                       "display_name": "Ana Ruiz",
-                      "email": "ana@example.com"
+                      "email": "ana@example.com",
+                      "type": "user"
                     },
                     "kind": "text",
                     "body": "Merged DEMO-42.",
@@ -6234,7 +6273,8 @@
                       "author": {
                         "id": "00000000-0000-4000-8000-000000000002",
                         "display_name": "Sam Lee",
-                        "email": "sam@example.com"
+                        "email": "sam@example.com",
+                        "type": "user"
                       },
                       "kind": "text",
                       "body": "Thanks!",
@@ -10147,6 +10187,153 @@
         ],
         "description": "How a project estimates. T-shirt sizes are sent and returned as points: XS=1, S=2, M=3, L=5, XL=8."
       },
+      "Feedback": {
+        "type": "object",
+        "properties": {
+          "reporter_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reporter's display name in their organization when they filed it; null once their account or their organization is deleted. Never an email or an id. Written in another organization: untrusted text, shown as plain text."
+          },
+          "org_name": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "The reporter's organization's name. Written in another organization: untrusted text, shown as plain text."
+          },
+          "org_label": {
+            "type": "string",
+            "description": "The label the item carries for that organization, like \"org:acme-dental\"."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bug",
+              "feature"
+            ],
+            "description": "A bug report or a feature request."
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "annoying",
+              "minor"
+            ],
+            "description": "How bad the reporter said it is (for a feature: must have, would help, nice to have)."
+          },
+          "device": {
+            "$ref": "#/components/schemas/FeedbackDevice"
+          },
+          "plus_ones": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many of the reporter's colleagues said \"me too\" (never who)."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "org_off",
+              "org_deleted",
+              "reporter_gone",
+              "blocked",
+              "ended"
+            ],
+            "description": "open: updates and questions reach the reporter. org_off: their organization turned Feedback off; org_deleted: it was deleted; reporter_gone: their account was deleted; blocked: reports from them are stopped; ended: the report is no longer followed. v1 may add states."
+          }
+        },
+        "required": [
+          "reporter_name",
+          "org_name",
+          "org_label",
+          "kind",
+          "severity",
+          "device",
+          "plus_ones",
+          "state"
+        ],
+        "description": "The report behind an item another organization filed through the Feedback app. Read-only. Only for staff (not guests) who can see the item. A comment of yours is never sent to the reporter, even one starting with @reporter: only a person asks a customer."
+      },
+      "FeedbackDevice": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The app's version, like 1.0.0. Written in another organization: untrusted text, shown as plain text."
+          },
+          "build": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The build number, like 125. Written in another organization: untrusted text, shown as plain text."
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "android, ios, macos, windows or web. Written in another organization: untrusted text, shown as plain text."
+          },
+          "os": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The operating system's version, like \"Windows 11 Pro 10.0.26200\" or \"Chrome 141 on macOS\". Written in another organization: untrusted text, shown as plain text."
+          },
+          "form": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "phone, tablet or desktop. Written in another organization: untrusted text, shown as plain text."
+          }
+        },
+        "required": [
+          "app",
+          "build",
+          "platform",
+          "os",
+          "form"
+        ],
+        "description": "The reporter's device as they filed it: the app's version and build, the platform, the operating system and the form factor. Null where it wasn't sent. Never logs, a device name, a locale or an address."
+      },
       "FieldChangeArgs": {
         "oneOf": [
           {
@@ -10486,6 +10673,10 @@
           "development": {
             "description": "With include_development=true.",
             "$ref": "#/components/schemas/Development"
+          },
+          "feedback": {
+            "description": "Only on an item another organization filed through the Feedback app, for staff who can see it.",
+            "$ref": "#/components/schemas/Feedback"
           }
         },
         "required": [
@@ -11953,7 +12144,7 @@
           "author": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/User"
+                "$ref": "#/components/schemas/MessageAuthor"
               },
               {
                 "type": "null"
@@ -12125,6 +12316,41 @@
           "deleted",
           "via_agent"
         ]
+      },
+      "MessageAuthor": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The person's id, or the app's.",
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Their name in this org, or the app's name."
+          },
+          "email": {
+            "description": "Null when the user can't see it, and always for an app.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "user",
+              "app"
+            ],
+            "description": "user: a person; app: a bot of the org (shown with an APP badge). v1 may add types."
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "email",
+          "type"
+        ],
+        "description": "Who sent a message: a person (the fields of User) or a bot of the org. Null for lines without a sender and for a deleted account."
       },
       "MessageKind": {
         "type": "string",
@@ -13310,6 +13536,35 @@
           "done_count"
         ]
       },
+      "SprintBoardMove": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "key": {
+            "$ref": "#/components/schemas/ItemKey"
+          },
+          "title": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "description": "The backlog status it left (not started, on no board column)."
+          },
+          "to": {
+            "type": "string",
+            "description": "The status it moved to: its workflow's first not-started status on the board."
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "title",
+          "from",
+          "to"
+        ]
+      },
       "SprintBrief": {
         "type": "object",
         "properties": {
@@ -13350,6 +13605,49 @@
         "required": [
           "sprint",
           "changed"
+        ]
+      },
+      "SprintNotMoved": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "key": {
+            "$ref": "#/components/schemas/ItemKey"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "Its status, which it keeps."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "no_board_status",
+              "transition_not_allowed",
+              "required_fields",
+              "admins_only"
+            ],
+            "description": "no_board_status: its workflow has no not-started status on the board; transition_not_allowed: the workflow doesn't allow that move; required_fields: the move needs fields the item leaves empty."
+          },
+          "required_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For required_fields: the empty fields the move needs."
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "title",
+          "status",
+          "reason",
+          "required_fields"
         ]
       },
       "SprintRef": {
@@ -13398,6 +13696,33 @@
             "maxLength": 500
           }
         }
+      },
+      "StartSprintResponse": {
+        "type": "object",
+        "properties": {
+          "sprint": {
+            "$ref": "#/components/schemas/Sprint"
+          },
+          "moved_to_board": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SprintBoardMove"
+            },
+            "description": "The sprint's items that were in a backlog status (not started, not on the board), moved to their workflow's first not-started status on the board (To do) so the board shows them."
+          },
+          "not_moved": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SprintNotMoved"
+            },
+            "description": "Backlog items of the sprint that stay where they are, and why."
+          }
+        },
+        "required": [
+          "sprint",
+          "moved_to_board",
+          "not_moved"
+        ]
       },
       "StatusBrief": {
         "type": "object",

@@ -44,6 +44,7 @@ import {
   type CustomFieldValue,
   type DescribeProjectResponse,
   type Development,
+  type Feedback,
   type HistoryEvent,
   type ItemDetail,
   type ItemSearchResult,
@@ -157,6 +158,8 @@ interface FakeStatus {
   name: string;
   category: 'not_started' | 'started' | 'done' | 'canceled';
   initial?: boolean;
+  /** A backlog status: not started and on no board column (start_sprint moves items out of it). */
+  backlog?: boolean;
   /** Moves allowed from here: the status name and the fields the move requires. */
   allowed: { to: string; required_fields: string[] }[];
 }
@@ -243,6 +246,8 @@ export interface FakeMessage {
   createdAt: string;
   deleted: boolean;
   viaAgent: string | null;
+  /** Set when a bot of the org sent it: authorId is then the app's id. */
+  app?: { name: string };
 }
 
 export interface FakePage {
@@ -330,6 +335,8 @@ export interface FakeStore {
   plans: FakePlan[];
   /** GitHub refs by item id; an item without an entry has none (as for a guest). */
   development: Record<string, Development>;
+  /** Feedback-app reports by item id; an item without an entry wasn't filed through it. */
+  feedback: Record<string, Feedback>;
 }
 
 let idCounter = 1000;
@@ -719,6 +726,7 @@ export function seedStore(): FakeStore {
       },
     ],
     plans: [],
+    feedback: {},
     development: {
       [story.id]: {
         pull_requests: [
@@ -1613,7 +1621,7 @@ export class FakeApi {
       color: null,
       position,
       is_initial: s.initial === true,
-      board_column: s.name,
+      board_column: s.backlog ? null : s.name,
       allowed: this.movesFrom(p, s).map((a) => ({ ...a, admins_only: false })),
     }));
     const body: DescribeProjectResponse = {
@@ -1813,6 +1821,9 @@ export class FakeApi {
         comments: latest.map((c) => this.comment(c)),
         comments_next_cursor: older > 0 ? encodeCursor(latest.length) : null,
         ...(query.include_history === 'true' ? { history } : {}),
+        ...(this.store.feedback[item.id]
+          ? { feedback: structuredClone(this.store.feedback[item.id]) }
+          : {}),
         ...(query.include_development === 'true'
           ? {
               development: structuredClone(
@@ -2390,7 +2401,43 @@ export class FakeApi {
     if (b.starts_on) sprint.startsOn = b.starts_on;
     if (b.ends_on) sprint.endsOn = b.ends_on;
     if (b.goal !== undefined) sprint.goal = b.goal;
-    return { status: 200, body: { sprint: this.sprintOut(p, sprint) } };
+    // Backlog items of the sprint go to the first not-started status on the board.
+    const moved: { id: string; key: string; title: string; from: string; to: string }[] = [];
+    const notMoved: {
+      id: string;
+      key: string;
+      title: string;
+      status: string;
+      reason: 'no_board_status' | 'transition_not_allowed' | 'required_fields';
+      required_fields: string[];
+    }[] = [];
+    const board = p.statuses.find((s) => s.category === 'not_started' && !s.backlog);
+    for (const item of this.ordered(
+      this.store.items.filter((i) => i.project === p.key && i.sprintId === sprint.id),
+    )) {
+      const from = this.statusOf(item);
+      if (!from.backlog) continue;
+      const ref = { id: item.id, key: `${p.key}-${item.number}`, title: item.title };
+      const move = board && this.movesFrom(p, from).find((a) => lower(a.to) === lower(board.name));
+      const missing =
+        move?.required_fields.filter((f) => f === 'assignee' && item.assigneeId === null) ?? [];
+      if (!board || !move || missing.length > 0) {
+        notMoved.push({
+          ...ref,
+          status: from.name,
+          reason: !board ? 'no_board_status' : !move ? 'transition_not_allowed' : 'required_fields',
+          required_fields: missing,
+        });
+        continue;
+      }
+      item.statusId = board.id;
+      this.recordWrite(item, identity, [['status', from.name, board.name]]);
+      moved.push({ ...ref, from: from.name, to: board.name });
+    }
+    return {
+      status: 200,
+      body: { sprint: this.sprintOut(p, sprint), moved_to_board: moved, not_moved: notMoved },
+    };
   }
 
   private completeSprint({ identity, params, body }: Call): Handled {
@@ -2670,7 +2717,9 @@ export class FakeApi {
     return {
       id: m.id,
       channel_id: m.channelId,
-      author: this.user(m.authorId),
+      author: m.app
+        ? { id: m.authorId, display_name: m.app.name, email: null, type: 'app' }
+        : { ...this.user(m.authorId), type: 'user' },
       kind: 'text',
       body: m.deleted ? '' : m.body,
       code: null,

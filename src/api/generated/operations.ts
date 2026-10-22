@@ -1325,7 +1325,7 @@ export const OPERATIONS = {
     hasBody: true,
     statuses: [200],
     discovery: false,
-    response: S.SprintResponseSchema,
+    response: S.StartSprintResponseSchema,
   },
   transition_item: {
     method: 'POST',

@@ -173,6 +173,64 @@ describe('plan_sprint', () => {
     expect(item(43).sprintId).toBeNull();
   });
 
+  it('says which backlog items starting a sprint moved onto the board, and which stay', async () => {
+    const c = await client();
+    await c.call('plan_sprint', {
+      project: 'DEMO',
+      action: 'complete',
+      sprint: 'active',
+      carry_to: 'backlog',
+    });
+    await c.call('plan_sprint', { project: 'DEMO', action: 'create', name: 'Sprint 4' });
+    await c.call('plan_sprint', {
+      project: 'DEMO',
+      action: 'add_items',
+      sprint: '4',
+      items: ['DEMO-42', 'DEMO-43'],
+    });
+    demo().statuses.push(
+      {
+        id: 'status-backlog',
+        name: 'Backlog',
+        category: 'not_started',
+        backlog: true,
+        allowed: [{ to: 'To do', required_fields: [] }],
+      },
+      { id: 'status-icebox', name: 'Icebox', category: 'not_started', backlog: true, allowed: [] },
+    );
+    item(42).statusId = 'status-backlog';
+    item(42).title = HOSTILE.slice(0, 255);
+    item(43).statusId = 'status-icebox';
+
+    const r = await c.call('plan_sprint', { project: 'DEMO', action: 'start', sprint: '4' });
+    expect(r.isError).toBe(false);
+    expect(r.structured).toMatchObject({
+      sprint: { state: 'active' },
+      moved_to_board: [{ key: 'DEMO-42', from: 'Backlog', to: 'To do' }],
+      not_moved: [
+        { key: 'DEMO-43', status: 'Icebox', reason: 'transition_not_allowed', required_fields: [] },
+      ],
+    });
+    expect(item(42).statusId).toBe(demo().statuses.find((s) => s.name === 'To do')!.id);
+    expect(item(43).statusId).toBe('status-icebox');
+    expect(r.text).toContain(
+      '1 backlog item(s) moved onto the board; 1 stay in the backlog (move them with transition_item):',
+    );
+    expect(r.text).toContain('- moved DEMO-42: Backlog -> To do — ');
+    expect(r.text).toContain('- stays DEMO-43 in Icebox (transition_not_allowed) — ');
+    assertDefused(r.text);
+    expect(injectionIsInsideBlocks(r.text)).toBe(true);
+    assertDefused(JSON.stringify(r.structured));
+  });
+
+  it('lists no moves when the sprint has no backlog items', async () => {
+    const c = await client();
+    await c.call('plan_sprint', { project: 'DEMO', action: 'complete', sprint: 'active' });
+    const r = await c.call('plan_sprint', { project: 'DEMO', action: 'start', sprint: '4' });
+    expect(r.structured).toMatchObject({ moved_to_board: [], not_moved: [] });
+    expect(r.text).not.toContain('backlog item');
+  });
+
   it('checks its own arguments before calling the API', async () => {
     const c = await client();
     const before = api.requests.length;

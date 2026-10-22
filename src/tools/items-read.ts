@@ -3,7 +3,7 @@
  */
 import { z } from 'zod';
 
-import type { Development } from '../api/generated/schemas.js';
+import type { Development, Feedback } from '../api/generated/schemas.js';
 import type { SearchItemsQuery } from '../api/generated/strict.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool } from '../toolsets/registry.js';
@@ -226,15 +226,18 @@ const DEVELOPMENT_MAX = 20;
 /** A GitHub login: letters, digits and single hyphens, at most 39 characters. */
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 
-/** One line of GitHub text, cut with an ellipsis (the link has the rest), in its own git block. */
-function gitText(value: string, maxChars: number): string {
+/** One line of outside text, cut with an ellipsis, in its own block. */
+function wrappedLine(value: string, maxChars: number, source: string): string {
   const flat = value.replace(/\s+/g, ' ').trim();
   let end = maxChars - 1;
   const code = flat.charCodeAt(end - 1);
   if (code >= 0xd800 && code <= 0xdbff) end -= 1; // don't split a surrogate pair
   const short = flat.length > maxChars ? `${flat.slice(0, end)}…` : flat;
-  return wrapUntrusted(short, { source: GIT_SOURCE, maxChars: maxChars + 1 });
+  return wrapUntrusted(short, { source, maxChars: maxChars + 1 });
 }
+/** One line of GitHub text (the link has the rest), in its own git block. */
+const gitText = (value: string, maxChars: number): string =>
+  wrappedLine(value, maxChars, GIT_SOURCE);
 const gitNullable = (value: string | null | undefined, maxChars: number): string | null =>
   value === null || value === undefined || value === '' ? null : gitText(value, maxChars);
 /** An author: a GitHub login is a plain label; anything else (a name from git) is free text, wrapped. */
@@ -313,6 +316,87 @@ function developmentOut(d: Development): DevelopmentOut {
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
+// The feedback block: the report behind an item that another organization
+// filed through the Feedback app. The reporter's name, their organization's
+// name and label, and the device values were written in that organization,
+// so each is wrapped (source "feedback"); the text output lists them in one
+// block. kind, severity and state are the API's words.
+
+const FEEDBACK_SOURCE = 'feedback';
+const FEEDBACK_NAME_CHARS = 100;
+const FEEDBACK_DEVICE_CHARS = 80;
+const FEEDBACK_NOTE = 'Your comments never reach the reporter: only a person can ask the customer.';
+
+const FeedbackOutSchema = z
+  .object({
+    reporter_name: z.string().nullable(),
+    org_name: z.string(),
+    org_label: z.string(),
+    kind: z.string(),
+    severity: z.string(),
+    device: z.object({
+      app: z.string().nullable(),
+      build: z.string().nullable(),
+      platform: z.string().nullable(),
+      os: z.string().nullable(),
+      form: z.string().nullable(),
+    }),
+    plus_ones: z.number(),
+    state: z.string().describe('open: updates reach the reporter.'),
+  })
+  .describe('Names, label and device values: untrusted content (source "feedback").');
+type FeedbackOut = z.infer<typeof FeedbackOutSchema>;
+
+const feedbackNullable = (value: string | null | undefined, maxChars: number): string | null =>
+  value === null || value === undefined || value === ''
+    ? null
+    : wrappedLine(value, maxChars, FEEDBACK_SOURCE);
+
+function feedbackOut(f: Feedback): FeedbackOut {
+  return {
+    reporter_name: feedbackNullable(f.reporter_name, FEEDBACK_NAME_CHARS),
+    org_name: wrappedLine(f.org_name, FEEDBACK_NAME_CHARS, FEEDBACK_SOURCE),
+    org_label: wrappedLine(f.org_label, FEEDBACK_NAME_CHARS, FEEDBACK_SOURCE),
+    kind: sanitizeLabel(f.kind, 30),
+    severity: sanitizeLabel(f.severity, 30),
+    device: {
+      app: feedbackNullable(f.device.app, FEEDBACK_DEVICE_CHARS),
+      build: feedbackNullable(f.device.build, FEEDBACK_DEVICE_CHARS),
+      platform: feedbackNullable(f.device.platform, FEEDBACK_DEVICE_CHARS),
+      os: feedbackNullable(f.device.os, FEEDBACK_DEVICE_CHARS),
+      form: feedbackNullable(f.device.form, FEEDBACK_DEVICE_CHARS),
+    },
+    plus_ones: f.plus_ones,
+    state: sanitizeLabel(f.state, 30),
+  };
+}
+
+/** The feedback block for the text output: the API's facts, then the reporter's words in one block. */
+function feedbackText(f: Feedback): string {
+  const one = (v: string | null | undefined, max: number): string =>
+    v === null || v === undefined || v === '' ? 'unknown' : sanitizeLabel(v, max);
+  const d = f.device;
+  const device = [
+    `app ${one(d.app, FEEDBACK_DEVICE_CHARS)}`,
+    `build ${one(d.build, FEEDBACK_DEVICE_CHARS)}`,
+    `platform ${one(d.platform, FEEDBACK_DEVICE_CHARS)}`,
+    `os ${one(d.os, FEEDBACK_DEVICE_CHARS)}`,
+    `form ${one(d.form, FEEDBACK_DEVICE_CHARS)}`,
+  ].join(' · ');
+  return [
+    `Feedback report, filed through the Feedback app by another organization: ${sanitizeLabel(f.kind, 30)} · severity ${sanitizeLabel(f.severity, 30)} · ${plural(f.plus_ones, 'plus-one', 'plus-ones')} · state ${sanitizeLabel(f.state, 30)}`,
+    wrapLines(
+      [
+        `reporter: ${f.reporter_name === null ? 'gone (account or organization deleted)' : one(f.reporter_name, FEEDBACK_NAME_CHARS)}`,
+        `organization: ${one(f.org_name, FEEDBACK_NAME_CHARS)} (label ${one(f.org_label, FEEDBACK_NAME_CHARS)})`,
+        `device: ${device}`,
+      ],
+      FEEDBACK_SOURCE,
+    ),
+    FEEDBACK_NOTE,
+  ].join('\n');
+}
+
 /** The development block for the text output: a line of counts, then every ref in one git block. */
 function developmentText(key: string, d: Development): string {
   const { counts } = d;
@@ -368,6 +452,7 @@ export const getItemTool = defineTool({
 - detail="full": the description up to 20,000 characters and the 20 latest comments (each cut at ${COMMENT_CHARS.full} characters).
 - include_history=true adds the 50 latest history events.
 - include_development=true adds the GitHub pull requests, branches and commits that name the item's key (at most 20 of each, newest first, with totals); their text comes from GitHub, wrapped as untrusted content (source "git").
+- An item filed through the Feedback app by another organization adds feedback: the report, with the reporter, organization and device as untrusted content. Your comments never reach the reporter.
 The result carries version and description_version: pass them to update_item (if_version, and description_version to replace the description) and transition_item. For older comments use list_comments.`,
   scopes: scopesOf('get_item'),
   annotations: {
@@ -396,6 +481,7 @@ The result carries version and description_version: pass them to update_item (if
       .describe('For list_comments with order="desc", to read older comments.'),
     history: z.array(HistoryOutSchema).optional(),
     development: DevelopmentOutSchema.optional(),
+    feedback: FeedbackOutSchema.optional(),
   }),
   async run(args, ctx) {
     const detail = args.detail ?? 'concise';
@@ -530,6 +616,8 @@ The result carries version and description_version: pass them to update_item (if
           ),
       );
     }
+    const feedback = r.feedback ? feedbackOut(r.feedback) : undefined;
+    if (r.feedback) parts.push(feedbackText(r.feedback));
     const development = r.development ? developmentOut(r.development) : undefined;
     if (r.development) parts.push(developmentText(r.item.key, r.development));
     return {
@@ -541,6 +629,7 @@ The result carries version and description_version: pass them to update_item (if
         comments_next_cursor: r.comments_next_cursor,
         ...(history ? { history } : {}),
         ...(development ? { development } : {}),
+        ...(feedback ? { feedback } : {}),
       },
       text: parts.join('\n\n'),
     };

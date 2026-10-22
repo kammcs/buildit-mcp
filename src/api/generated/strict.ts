@@ -98,6 +98,15 @@ export type Estimate = z.infer<typeof EstimateSchema>;
 export const EstimateScaleSchema = z.enum(['none', 'points', 'tshirt']);
 export type EstimateScale = z.infer<typeof EstimateScaleSchema>;
 
+export const FeedbackDeviceSchema = z.strictObject({
+  app: z.string().max(80).nullable(),
+  build: z.string().max(80).nullable(),
+  platform: z.string().max(80).nullable(),
+  os: z.string().max(80).nullable(),
+  form: z.string().max(80).nullable(),
+});
+export type FeedbackDevice = z.infer<typeof FeedbackDeviceSchema>;
+
 export const FieldKindSchema = z.enum([
   'text',
   'number',
@@ -702,6 +711,18 @@ export const ErrorSchema = z.strictObject({
 });
 export type Error = z.infer<typeof ErrorSchema>;
 
+export const FeedbackSchema = z.strictObject({
+  reporter_name: z.string().max(100).nullable(),
+  org_name: z.string().max(100),
+  org_label: z.string(),
+  kind: z.enum(['bug', 'feature']),
+  severity: z.enum(['blocker', 'annoying', 'minor']),
+  device: FeedbackDeviceSchema,
+  plus_ones: z.int().min(0),
+  state: z.enum(['open', 'org_off', 'org_deleted', 'reporter_gone', 'blocked', 'ended']),
+});
+export type Feedback = z.infer<typeof FeedbackSchema>;
+
 export const FieldChangeArgsSchema = z.union([
   z.strictObject({
     op: z.literal('create'),
@@ -791,6 +812,14 @@ export const LabelChangeArgsSchema = z.union([
   z.strictObject({ op: z.literal('delete'), project: ProjectRefSchema, label: LabelRefSchema }),
 ]);
 export type LabelChangeArgs = z.infer<typeof LabelChangeArgsSchema>;
+
+export const MessageAuthorSchema = z.strictObject({
+  id: UuidSchema,
+  display_name: z.string(),
+  email: z.string().nullable(),
+  type: z.enum(['user', 'app']),
+});
+export type MessageAuthor = z.infer<typeof MessageAuthorSchema>;
 
 export const MetaResponseSchema = z.strictObject({
   api_version: z.string(),
@@ -922,6 +951,15 @@ export const SprintSchema = z.strictObject({
 });
 export type Sprint = z.infer<typeof SprintSchema>;
 
+export const SprintBoardMoveSchema = z.strictObject({
+  id: UuidSchema,
+  key: ItemKeySchema,
+  title: z.string(),
+  from: z.string(),
+  to: z.string(),
+});
+export type SprintBoardMove = z.infer<typeof SprintBoardMoveSchema>;
+
 export const SprintBriefSchema = z.strictObject({
   id: UuidSchema,
   number: z.int(),
@@ -929,6 +967,16 @@ export const SprintBriefSchema = z.strictObject({
   state: SprintStateSchema,
 });
 export type SprintBrief = z.infer<typeof SprintBriefSchema>;
+
+export const SprintNotMovedSchema = z.strictObject({
+  id: UuidSchema,
+  key: ItemKeySchema,
+  title: z.string(),
+  status: z.string(),
+  reason: z.enum(['no_board_status', 'transition_not_allowed', 'required_fields', 'admins_only']),
+  required_fields: z.array(z.string()),
+});
+export type SprintNotMoved = z.infer<typeof SprintNotMovedSchema>;
 
 export const StartSprintRequestSchema = z.strictObject({
   starts_on: DateSchema.optional(),
@@ -1264,7 +1312,7 @@ export type MeResponse = z.infer<typeof MeResponseSchema>;
 export const MessageSchema = z.strictObject({
   id: UuidSchema,
   channel_id: UuidSchema,
-  author: UserSchema.nullable(),
+  author: MessageAuthorSchema.nullable(),
   kind: MessageKindSchema,
   body: z.string(),
   code: z.string().nullable(),
@@ -1368,6 +1416,13 @@ export type SprintItemsResponse = z.infer<typeof SprintItemsResponseSchema>;
 
 export const SprintResponseSchema = z.strictObject({ sprint: SprintSchema });
 export type SprintResponse = z.infer<typeof SprintResponseSchema>;
+
+export const StartSprintResponseSchema = z.strictObject({
+  sprint: SprintSchema,
+  moved_to_board: z.array(SprintBoardMoveSchema),
+  not_moved: z.array(SprintNotMovedSchema),
+});
+export type StartSprintResponse = z.infer<typeof StartSprintResponseSchema>;
 
 export const TransitionSetSchema = z.strictObject({
   assignee: UserRefSchema.nullable().optional(),
@@ -1720,6 +1775,7 @@ export const GetItemResponseSchema = z.strictObject({
   comments_next_cursor: z.string().nullable(),
   history: z.array(HistoryEventSchema).optional(),
   development: DevelopmentSchema.optional(),
+  feedback: FeedbackSchema.optional(),
 });
 export type GetItemResponse = z.infer<typeof GetItemResponseSchema>;
 
@@ -1934,7 +1990,7 @@ export const RESPONSE_SCHEMAS = {
   remove_release_items: ReleaseItemsResponseSchema,
   remove_sprint_items: SprintItemsResponseSchema,
   search_items: SearchItemsResponseSchema,
-  start_sprint: SprintResponseSchema,
+  start_sprint: StartSprintResponseSchema,
   transition_item: TransitionItemResponseSchema,
   update_item: ItemWriteResponseSchema,
   update_page: PageResponseSchema,

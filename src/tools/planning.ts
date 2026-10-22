@@ -84,6 +84,48 @@ function sprintText(s: SprintOut, goal: string | null, counts = true): string {
   return wrapLines(sprintLines(s, goal, counts), 'sprint');
 }
 
+const BoardMoveOut = z.object({
+  key: z.string(),
+  title: z.string(),
+  from: z.string().describe('The backlog status it left.'),
+  to: z.string().describe("Its workflow's first not-started status on the board."),
+});
+const NotMovedOut = z.object({
+  key: z.string(),
+  title: z.string(),
+  status: z.string().describe('Its status, which it keeps.'),
+  reason: z
+    .string()
+    .describe('no_board_status, transition_not_allowed, required_fields or admins_only.'),
+  required_fields: z.array(z.string()).describe('For required_fields: the empty fields.'),
+});
+
+/**
+ * What starting a sprint did to its backlog items: those moved onto the
+ * board, and those that stay, with why. Titles and status names are
+ * people-written, so both lists are one block.
+ */
+function boardMovesText(
+  moved: z.infer<typeof BoardMoveOut>[],
+  notMoved: z.infer<typeof NotMovedOut>[],
+): string[] {
+  const lines = [
+    ...moved.map((m) => `- moved ${m.key}: ${m.from} -> ${m.to} — ${m.title}`),
+    ...notMoved.map(
+      (n) =>
+        `- stays ${n.key} in ${n.status} (${n.reason}${n.required_fields.length > 0 ? `: needs ${n.required_fields.join(', ')}` : ''}) — ${n.title}`,
+    ),
+  ];
+  if (lines.length === 0) return [];
+  const head = [
+    ...(moved.length > 0 ? [`${moved.length} backlog item(s) moved onto the board`] : []),
+    ...(notMoved.length > 0
+      ? [`${notMoved.length} stay in the backlog (move them with transition_item)`]
+      : []),
+  ];
+  return [`${head.join('; ')}:`, wrapLines(lines, 'item_list')];
+}
+
 /**
  * What completing a sprint did, with one set of counts: the completion's
  * (committed, completed, carried), which agree with each other. The
@@ -184,7 +226,7 @@ export const planSprintTool = defineTool({
   title: 'Plan a sprint',
   description: `Creates, starts or completes a sprint, or moves items in or out of one. action:
 - "create": a planned sprint; needs name, optional goal, starts_on and ends_on (YYYY-MM-DD). The number is assigned.
-- "start": starts a planned sprint (project admins); optional starts_on, ends_on, goal. Only one sprint can be active.
+- "start": starts a planned sprint (project admins); optional starts_on, ends_on, goal. Only one sprint can be active. Its items in a backlog status move onto the board (To do); the result lists them, and those that stay and why.
 - "complete": completes the active sprint (project admins); its open items go to carry_to: "next" (the next planned sprint, created if there is none; the default), "new" (a new sprint) or "backlog" (no sprint). Returns the committed, completed and carried counts.
 - "add_items": puts up to 50 items of the project in the sprint (taking them out of any other).
 - "remove_items": takes up to 50 items out of the sprint, to the backlog.
@@ -241,6 +283,14 @@ sprint names the sprint for every action but create: its number, name, or "activ
       })
       .optional()
       .describe('complete: the sprint in numbers.'),
+    moved_to_board: z
+      .array(BoardMoveOut)
+      .optional()
+      .describe("start: the sprint's backlog items moved onto the board."),
+    not_moved: z
+      .array(NotMovedOut)
+      .optional()
+      .describe('start: backlog items that stay where they are, and why.'),
   }),
   async run(args, ctx) {
     const key = args.project;
@@ -285,9 +335,25 @@ sprint names the sprint for every action but create: its number, name, or "activ
           },
         });
         const sprint = sprintOut(r.sprint);
+        const moved = r.moved_to_board.map((m) => ({
+          key: m.key,
+          title: label(m.title, 300),
+          from: label(m.from, NAME_CHARS),
+          to: label(m.to, NAME_CHARS),
+        }));
+        const notMoved = r.not_moved.map((n) => ({
+          key: n.key,
+          title: label(n.title, 300),
+          status: label(n.status, NAME_CHARS),
+          reason: label(n.reason, 40),
+          required_fields: n.required_fields.map((f) => label(f, NAME_CHARS)),
+        }));
         return {
-          structured: { action: args.action, sprint },
-          text: `Started sprint #${sprint.number}:\n${sprintText(sprint, r.sprint.goal)}`,
+          structured: { action: args.action, sprint, moved_to_board: moved, not_moved: notMoved },
+          text: [
+            `Started sprint #${sprint.number}:\n${sprintText(sprint, r.sprint.goal)}`,
+            ...boardMovesText(moved, notMoved),
+          ].join('\n'),
         };
       }
       case 'complete': {

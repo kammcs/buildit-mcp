@@ -240,7 +240,8 @@ describe('the tool list', () => {
     const { tools } = await all.client.listTools();
     expect(JSON.stringify(tools).length).toBeLessThan(160_000);
     const defaults = await client(TOKENS.full, { toolsets: DEFAULT_TOOLSETS });
-    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(60_000);
+    // About 15,000 tokens; raised from 60,000 for get_item's feedback block.
+    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(62_000);
   });
 });
 
