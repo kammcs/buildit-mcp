@@ -1,0 +1,74 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/dist/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "buildit-mcp",
+  "display_name": "buildIt.Social",
+  "version": "0.0.0",
+  "description": "Work with your buildIt.Social projects, items, comments, pages and channels, as you, with a personal access token.",
+  "long_description": "An MCP server for buildIt.Social's agent API. It acts as the person who owns the token, with their permissions, and buildIt.Social labels every change as made through their agent. Text that people wrote comes back marked as untrusted content. Deleting, moving and bulk-editing items, and changes to workflows, types, fields and labels, are previewed first and applied only after you confirm. Create a personal access token in buildIt.Social (Settings, Agent tokens) with only the scopes you need.",
+  "author": {
+    "name": "kammcs",
+    "url": "https://github.com/kammcs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kammcs/buildit-mcp"
+  },
+  "homepage": "https://github.com/kammcs/buildit-mcp",
+  "documentation": "https://github.com/kammcs/buildit-mcp#readme",
+  "support": "https://github.com/kammcs/buildit-mcp/issues",
+  "license": "MIT",
+  "keywords": ["mcp", "model-context-protocol", "buildit", "agents"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "BUILDIT_TOKEN": "${user_config.token}",
+        "BUILDIT_TOOLSETS": "${user_config.toolsets}",
+        "BUILDIT_READ_ONLY": "${user_config.read_only}",
+        "BUILDIT_API_URL": "${user_config.api_url}"
+      }
+    }
+  },
+  "tools_generated": true,
+  "prompts_generated": true,
+  "compatibility": {
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "node": ">=20"
+    }
+  },
+  "user_config": {
+    "token": {
+      "type": "string",
+      "title": "Personal access token",
+      "description": "A buildIt.Social personal access token (it starts with buildit_pat_). Stored as a protected setting, never in a plain config file.",
+      "sensitive": true,
+      "required": true
+    },
+    "toolsets": {
+      "type": "string",
+      "title": "Toolsets",
+      "description": "Comma-separated: items, comments, planning, pages, chat, admin, destructive, or all. A tool is listed only when the token has its scopes.",
+      "default": "items,comments",
+      "required": false
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only",
+      "description": "Only list tools that change nothing.",
+      "default": false,
+      "required": false
+    },
+    "api_url": {
+      "type": "string",
+      "title": "Agent API URL",
+      "description": "Change only for another buildIt.Social deployment.",
+      "default": "https://api.buildit.social/functions/v1/agent-api",
+      "required": false
+    }
+  }
+}

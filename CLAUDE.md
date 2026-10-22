@@ -83,12 +83,15 @@ scripts/
   inspect.ts            MCP Inspector CLI smoke test (stdio and HTTP, both protocol eras;
                         --image adds the container)
   publish-image.ts      build the image for amd64 and arm64 and push it to GHCR (a maintainer runs it)
+  bundle.ts             build the Claude Desktop bundle (.mcpb) from dist/ and bundle/manifest.json,
+                        privacy-check it, and run it against the fake API
   privacy.ts            the privacy guard (npm run privacy, and privacy:pack over the packed
                         package; test/privacy.test.ts runs it too)
   conformance.ts        official conformance suite against HTTP mode, offline
 evals/                  realistic tasks a maintainer runs by hand against a test org
 Dockerfile              the container image (HTTP mode, non-root, no token); .dockerignore is an allowlist
 deploy/                 team self-hosting: Compose with Caddy, and a guide
+bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes from package.json)
 ```
 
 Key rules the code relies on:
