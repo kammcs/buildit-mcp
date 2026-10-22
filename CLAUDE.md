@@ -92,6 +92,8 @@ evals/                  realistic tasks a maintainer runs by hand against a test
 Dockerfile              the container image (HTTP mode, non-root, no token); .dockerignore is an allowlist
 deploy/                 team self-hosting: Compose with Caddy, and a guide
 bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes from package.json)
+server.json             the MCP Registry entry (its versions must match package.json; a test checks)
+docs/releasing.md       how a release ships through npm, GHCR, the bundle and the Registry
 ```
 
 Key rules the code relies on:

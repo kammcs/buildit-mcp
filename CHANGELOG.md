@@ -32,6 +32,7 @@ Also in this release:
 - `get_item` shows the report behind an item that another organization filed through the Feedback app: its kind, severity, plus-ones and state, and the reporter's name, organization and device, wrapped as untrusted content (`source="feedback"`). It says that the agent's comments never reach the reporter.
 - `plan_sprint` with `start` lists the sprint's backlog items that moved onto the board, and those that stay, with why.
 - `read_channel` and `read_thread` say which messages an app (a bot of the org) sent (`author_type`).
+- `server.json` lists the server in the MCP Registry as `io.github.kammcs/buildit-mcp`, with the npm package and the container image.
 - A Claude Desktop bundle (`buildit-mcp-<version>.mcpb`, attached to each GitHub release): Claude Desktop keeps the token as a protected setting, with optional settings for the toolsets, read-only mode and the API URL. `npm run bundle` builds it.
 - A container image, `ghcr.io/kammcs/buildit-mcp` (amd64 and arm64): HTTP mode on port 8765 by default, a non-root user, a health check on `/healthz`, and no token inside; stdio with `BUILDIT_HTTP=false`.
 - [deploy/](deploy/README.md): a Compose file that runs the image behind Caddy for TLS, with the allowed host set from one variable, a read-only filesystem and no capabilities; notes for Fly.io, Cloud Run and other proxies; a checklist.

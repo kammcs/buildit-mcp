@@ -299,7 +299,7 @@ npm run generate      # regenerate src/api/generated/ from openapi/openapi.json
 npm run privacy       # check that no file holds private details (the tests run it too)
 ```
 
-See [CLAUDE.md](CLAUDE.md) for the architecture and how to add a tool. Tests never call a real buildIt.Social server. [evals/](evals/README.md) has realistic tasks a maintainer runs by hand with a real client against a test org.
+See [CLAUDE.md](CLAUDE.md) for the architecture and how to add a tool, and [docs/releasing.md](docs/releasing.md) for how a release ships. Tests never call a real buildIt.Social server. [evals/](evals/README.md) has realistic tasks a maintainer runs by hand with a real client against a test org.
 
 ## License
 
