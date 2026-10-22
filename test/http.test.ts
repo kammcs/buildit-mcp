@@ -183,6 +183,18 @@ describe('HTTP mode: access checks', () => {
     const res = await raw('GET', {}, undefined, '/healthz');
     expect(res.status).toBe(200);
   });
+
+  it('serves the health check to a probe whatever its Host, but not /mcp', async () => {
+    const res = await raw('GET', { Host: '10.0.0.7:8765' }, undefined, '/healthz');
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ status: 'ok' });
+    const mcp = await raw(
+      'POST',
+      { Host: '10.0.0.7:8765' },
+      { jsonrpc: '2.0', id: 1, method: 'ping' },
+    );
+    expect(mcp.status).toBe(403);
+  });
 });
 
 describe('HTTP mode: tools per request', () => {

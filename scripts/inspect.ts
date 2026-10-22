@@ -7,12 +7,20 @@
  * It checks the built server three ways: over stdio, and over HTTP with a
  * 2025-11-25 client and a 2026-07-28 client. The Inspector's own files go to
  * a temporary folder, not the user's home.
+ *
+ *   npm run inspect:docker
+ *
+ * also runs the HTTP checks against the container image (built first),
+ * waiting for its health check. The container reaches the fake API on the
+ * host through a sidecar that shares its network and forwards its localhost
+ * to host.docker.internal (Docker Desktop), so the API URL stays on localhost.
  */
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 import { parseCli } from '../src/config.js';
 import { createLogger } from '../src/log.js';
@@ -151,6 +159,103 @@ const toolNames = (out: unknown): string[] =>
 const structured = (out: unknown): Record<string, unknown> | undefined =>
   (out as { structuredContent?: Record<string, unknown> } | undefined)?.structuredContent;
 
+/** The HTTP checks, against a server at this URL, in both protocol eras. */
+async function httpChecks(where: string, url: string): Promise<void> {
+  for (const era of ['legacy', 'modern']) {
+    const httpArgs = [
+      '--server-url',
+      url,
+      '--transport',
+      'http',
+      '--protocol-era',
+      era,
+      '--stored-auth-only',
+      '--header',
+      `Authorization: Bearer ${TOKENS.read}`,
+    ];
+    const list = await inspect(
+      `${where} (${era}) tools/list`,
+      [],
+      [...httpArgs, '--method', 'tools/list'],
+    );
+    check(
+      `${where} (${era}) lists the read tools only`,
+      toolNames(list).includes('search_items') && !toolNames(list).includes('create_item'),
+      list,
+    );
+    const call = await inspect(
+      `${where} (${era}) tools/call whoami`,
+      [],
+      [...httpArgs, '--method', 'tools/call', '--tool-name', 'whoami'],
+    );
+    check(
+      `${where} (${era}) whoami returns the scopes`,
+      JSON.stringify(structured(call)?.scopes) === '["projects:read"]',
+      call,
+    );
+  }
+}
+
+const exec = promisify(execFile);
+const docker = async (...args: string[]): Promise<string> =>
+  (await exec('docker', args, { timeout: 60_000 })).stdout.trim();
+
+/** The HTTP checks against the image, run as a container, once it reports healthy. */
+async function containerChecks(image: string, apiUrl: string): Promise<void> {
+  const apiPort = new URL(apiUrl).port;
+  const started: string[] = [];
+  try {
+    const server = await docker(
+      'run',
+      '-d',
+      '--rm',
+      '-p',
+      '127.0.0.1::8765',
+      '--health-interval',
+      '1s',
+      '-e',
+      'BUILDIT_ALLOWED_HOSTS=localhost,127.0.0.1',
+      '-e',
+      `BUILDIT_API_URL=${apiUrl}`,
+      image,
+    );
+    started.push(server);
+    // A forwarder in the server's network: its localhost:<port> is the host's fake API.
+    const forward = `const net = require('node:net'); net.createServer((c) => { const u = net.connect(${apiPort}, 'host.docker.internal'); c.pipe(u).pipe(c); u.on('error', () => c.destroy()); c.on('error', () => u.destroy()); }).listen(${apiPort}, '127.0.0.1');`;
+    started.push(
+      await docker(
+        'run',
+        '-d',
+        '--rm',
+        '--network',
+        `container:${server}`,
+        '--entrypoint',
+        'node',
+        image,
+        '-e',
+        forward,
+      ),
+    );
+    let health = '';
+    for (let n = 0; n < 30 && health !== 'healthy'; n++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      health = await docker('inspect', '--format', '{{.State.Health.Status}}', server);
+    }
+    check('container reports healthy', health === 'healthy', health);
+    const published = (await docker('port', server, '8765')).split('\n')[0] ?? '';
+    const port = /:(\d+)$/.exec(published)?.[1];
+    check('container publishes port 8765', port !== undefined, port);
+    if (health === 'healthy' && port !== undefined) {
+      await httpChecks('container', `http://127.0.0.1:${port}/mcp`);
+    }
+  } finally {
+    for (const id of started.reverse()) await docker('rm', '-f', id).catch(() => undefined);
+  }
+}
+
+const imageAt = process.argv.indexOf('--image');
+const image = imageAt === -1 ? undefined : process.argv[imageAt + 1];
+
 const api = await new FakeApi().start();
 try {
   // stdio: the built command, as a client would start it.
@@ -237,42 +342,12 @@ try {
   if (action.kind !== 'run') throw new Error('unexpected config');
   const server = await startHttp(action.config, createLogger({ sink: () => undefined }));
   try {
-    for (const era of ['legacy', 'modern']) {
-      const httpArgs = [
-        '--server-url',
-        server.url,
-        '--transport',
-        'http',
-        '--protocol-era',
-        era,
-        '--stored-auth-only',
-        '--header',
-        `Authorization: Bearer ${TOKENS.read}`,
-      ];
-      const list = await inspect(
-        `http (${era}) tools/list`,
-        [],
-        [...httpArgs, '--method', 'tools/list'],
-      );
-      check(
-        `http (${era}) lists the read tools only`,
-        toolNames(list).includes('search_items') && !toolNames(list).includes('create_item'),
-        list,
-      );
-      const call = await inspect(
-        `http (${era}) tools/call whoami`,
-        [],
-        [...httpArgs, '--method', 'tools/call', '--tool-name', 'whoami'],
-      );
-      check(
-        `http (${era}) whoami returns the scopes`,
-        JSON.stringify(structured(call)?.scopes) === '["projects:read"]',
-        call,
-      );
-    }
+    await httpChecks('http', server.url);
   } finally {
     await server.close();
   }
+
+  if (image !== undefined) await containerChecks(image, api.url);
 } finally {
   await api.close();
   rmSync(home, { recursive: true, force: true });

@@ -180,10 +180,12 @@ export function createHttpApp(
     });
   });
 
+  // Before the Host check: container and platform probes call it by
+  // localhost or the instance's address, and it says nothing but "ok".
+  app.get('/healthz', (c) => c.json({ status: 'ok' }));
+
   if (allowedHosts !== undefined) app.use('*', hostHeaderValidation(allowedHosts));
   app.use('*', originValidation(allowedOrigins));
-
-  app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
   const methodNotAllowed = (c: Context): Response => {
     c.header('Allow', 'POST');
