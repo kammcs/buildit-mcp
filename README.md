@@ -234,7 +234,23 @@ node dist/index.js --http --host 0.0.0.0 --port 8765
 
 Bound to anything but loopback, the server refuses to start without `BUILDIT_ALLOWED_HOSTS` (the hostnames clients use), so the `Host` header is always checked. If a proxy in front checks it instead, set `BUILDIT_ALLOW_ANY_HOST=true` (or pass `--allow-any-host`) to start anyway; the server then logs a warning.
 
-Deployment files (a container image, and a compose file with TLS) and a full guide will follow. Until then, the essentials are under [Hardening](#hardening).
+### Container image
+
+`ghcr.io/kammcs/buildit-mcp` runs the server in HTTP mode on port 8765, as a non-root user, with a health check on `/healthz`. Each release is tagged with its version (`0.1.0`) and its major version (`0`), for amd64 and arm64. No token is in the image: each request brings its own.
+
+```sh
+docker run -d -p 8765:8765 -e BUILDIT_ALLOWED_HOSTS=mcp.example.com ghcr.io/kammcs/buildit-mcp:0
+```
+
+Every setting under [Configuration](#configuration) works as an environment variable, for example `-e BUILDIT_TOOLSETS=items,comments,planning`. To build the image from a clone instead: `docker build -t buildit-mcp .`.
+
+A client that starts the server itself can run the image over stdio. `-e BUILDIT_TOKEN` without a value passes the token from your environment, so it never appears in the command or the client's config:
+
+```sh
+docker run -i --rm -e BUILDIT_HTTP=false -e BUILDIT_TOKEN ghcr.io/kammcs/buildit-mcp:0
+```
+
+The essentials of running it for others are under [Hardening](#hardening).
 
 ## Security notes
 
@@ -272,6 +288,7 @@ To update, install the newer release, or pull and rebuild your clone.
 npm ci
 npm run check         # lint, format check, build, tests, the privacy guard over the packed package
 npm run inspect       # MCP Inspector smoke test against a fake API
+npm run inspect:docker  # the same, also against the container image (Docker Desktop)
 npm run conformance   # official MCP conformance suite, offline
 npm run generate      # regenerate src/api/generated/ from openapi/openapi.json
 npm run privacy       # check that no file holds private details (the tests run it too)

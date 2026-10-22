@@ -1,0 +1,13 @@
+# Only what the image build needs; everything else stays out of the context.
+*
+!package.json
+!package-lock.json
+!.npmrc
+!tsconfig.json
+!tsconfig.build.json
+!scripts/clean.mjs
+!src/
+!LICENSE
+!README.md
+!SECURITY.md
+!CHANGELOG.md
