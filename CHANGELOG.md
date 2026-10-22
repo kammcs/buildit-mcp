@@ -2,6 +2,12 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [Unreleased]
+
+### Docs
+
+- Set clients up with `npx -y @kammcs/buildit-mcp@latest`, not `@0`: npx keeps the copy it first installed for a version range and never updates it, so `@0` stayed on 0.1.0 after 0.2.0 shipped.
+
 ## [0.2.0] - 2026-10-22
 
 Built on version 1.2.0 of the agent API's contract; each addition needs a buildIt.Social server that serves it, and is refused with a clear message on an older one.
