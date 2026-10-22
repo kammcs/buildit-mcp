@@ -253,6 +253,7 @@ For an HTTP server that anyone other than you can reach:
 - set `BUILDIT_ALLOWED_HOSTS` to the hostnames clients use (required off loopback, unless you set `BUILDIT_ALLOW_ANY_HOST` because the proxy checks the `Host` header), and `BUILDIT_ALLOWED_ORIGINS` only if a browser-based client needs it;
 - enable only the toolsets the team needs with `BUILDIT_TOOLSETS`: a request's `X-Buildit-Toolsets` header can narrow them, never add one;
 - optionally restrict client IP addresses at the proxy;
+- have the proxy pass the client's `Host` header through (Caddy and nginx's `proxy_set_header Host $host` do): the server checks `Host` itself and ignores `X-Forwarded-*` headers, since it never uses the client's address, so there is no trusted-proxies setting;
 - keep it updated: `whoami` says when the API needs a newer version ([Versions](#versions)).
 
 ## Versions
