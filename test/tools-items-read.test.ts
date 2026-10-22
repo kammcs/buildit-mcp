@@ -116,7 +116,7 @@ describe('search_items', () => {
     expect(keys(children.structured)).toEqual(['DEMO-42', 'DEMO-43']);
   });
 
-  it('searches text, best first, in one page', async () => {
+  it('searches text, best first', async () => {
     const c = await client();
     const r = await c.call('search_items', { query: 'notice' });
     expect(keys(r.structured)).toEqual(['DEMO-42', 'DEMO-46']);
@@ -125,17 +125,49 @@ describe('search_items', () => {
     expect(
       stripIds((r.structured.items as { match?: { snippet: string } }[])[0]?.match?.snippet ?? ''),
     ).toContain('<untrusted_content source="snippet">');
-    expect(r.text).toContain('Text search returns one page of at most 50');
+    expect(r.text).toContain('This is the last page.');
   });
 
-  it('refuses query with sort or cursor, without calling the API', async () => {
+  it('pages through a text search with the cursor', async () => {
     const c = await client();
+    const first = await c.call('search_items', { query: 'demo', limit: 5 });
+    expect(keys(first.structured)).toHaveLength(5);
+    const cursor = first.structured.next_cursor as string;
+    expect(cursor).toEqual(expect.any(String));
+    expect(first.text).toContain('More results: call search_items again');
+    const second = await c.call('search_items', { query: 'demo', limit: 5, cursor });
+    expect(second.isError).toBe(false);
+    expect(keys(second.structured)).toHaveLength(5);
+    expect(keys(second.structured).some((k) => keys(first.structured).includes(k))).toBe(false);
+  });
+
+  it('narrows by words in the sort order with query and sort', async () => {
+    const c = await client();
+    const r = await c.call('search_items', { query: 'notice', sort: ['-number'] });
+    expect(r.isError).toBe(false);
+    expect(keys(r.structured)).toEqual(['DEMO-46', 'DEMO-42']);
+    expect(r.structured.text_search).toBe(false);
+    expect((r.structured.items as { match?: unknown }[])[0]?.match).toBeUndefined();
+    expect(api.requests.at(-1)?.query).toContain('sort=-number');
+  });
+
+  it('refuses query with sort or cursor when the API is known to be older', async () => {
+    api.meta = { api_version: '1.0.0', min_mcp_version: '0.1.0', deprecations: [] };
+    api.compat.servedList = false;
+    api.compat.textPaging = false;
+    const c = await client();
+    await c.call('whoami');
     const before = api.requests.length;
     const r = await c.call('search_items', { query: 'notice', sort: ['-updated_at'] });
     expect(r.isError).toBe(true);
     expect(r.text).toContain('buildit-mcp error: invalid_arguments');
-    expect(r.text).toContain('query cannot be combined with sort or cursor');
+    expect(r.text).toContain(
+      "query with sort or cursor needs buildIt.Social's agent API 1.1.0 or newer, and this server runs 1.0.0",
+    );
     expect(api.requests.length).toBe(before);
+    // Without them it searches as before, in one page.
+    const plain = await c.call('search_items', { query: 'notice' });
+    expect(keys(plain.structured)).toEqual(['DEMO-42', 'DEMO-46']);
   });
 
   it('returns descriptions with detail="full", in smaller pages', async () => {
@@ -434,6 +466,67 @@ describe('get_item with include_development', () => {
   });
 });
 
+describe('get_item with description_offset', () => {
+  const story = () => api.store.items.find((i) => i.number === 42)!;
+
+  it('reads a long description in windows of 20,000 characters', async () => {
+    story().description = `${'a'.repeat(25_000)} END`;
+    const c = await client();
+    const first = await c.call('get_item', { item: 'DEMO-42', description_offset: 0 });
+    expect(first.isError).toBe(false);
+    expect(api.requests.at(-1)?.query).toContain('description_offset=0');
+    expect(first.structured.description_window).toEqual({
+      offset: 0,
+      next_offset: 20_000,
+      length: 25_004,
+    });
+    expect(first.text).toContain(
+      'Description, characters 0 to 20000 of 25004: the next window is description_offset=20000.',
+    );
+    expect(first.text).not.toContain('Cut at');
+    const second = await c.call('get_item', { item: 'DEMO-42', description_offset: 20_000 });
+    expect(second.structured.description_window).toEqual({
+      offset: 20_000,
+      next_offset: null,
+      length: 25_004,
+    });
+    expect(second.text).toContain(
+      'Description, characters 20000 to 25004 of 25004: the last window.',
+    );
+    expect(second.text).toContain(' END');
+  });
+
+  it('wraps and defuses a hostile window', async () => {
+    story().description = `${'b'.repeat(19_990)}${HOSTILE}`;
+    const c = await client();
+    const r = await c.call('get_item', { item: 'DEMO-42', description_offset: 19_000 });
+    assertDefused(r.text);
+    expect(injectionIsInsideBlocks(r.text)).toBe(true);
+    assertDefused(JSON.stringify(r.structured));
+  });
+
+  it('says when an older API ignores description_offset', async () => {
+    api.compat.textPaging = false;
+    const c = await client();
+    const r = await c.call('get_item', { item: 'DEMO-42', description_offset: 0 });
+    expect(r.isError).toBe(false);
+    expect(r.structured).not.toHaveProperty('description_window');
+    expect(r.text).toContain('This buildIt.Social server ignored description_offset');
+  });
+
+  it('refuses description_offset when the API is known to be older', async () => {
+    api.meta = { api_version: '1.0.0', min_mcp_version: '0.1.0', deprecations: [] };
+    api.compat.servedList = false;
+    const c = await client();
+    await c.call('whoami');
+    const before = api.requests.length;
+    const r = await c.call('get_item', { item: 'DEMO-42', description_offset: 0 });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("description_offset needs buildIt.Social's agent API 1.1.0 or newer");
+    expect(api.requests.length).toBe(before);
+  });
+});
+
 describe('get_item with a Feedback report', () => {
   const bug = () => api.store.items.find((i) => i.number === 43)!;
   const report = (): Feedback => ({
@@ -552,7 +645,7 @@ describe('response size', () => {
     const size = r.text.length + JSON.stringify(r.structured).length;
     // About 4 characters a token: well under 25k tokens, text and structured content together.
     expect(size).toBeLessThan(90_000);
-    expect(r.text).toContain('the person can read it in buildIt.Social');
+    expect(r.text).toContain('description_offset=0 to read all of it in windows');
     expect((r.structured.item as { description_truncated: boolean }).description_truncated).toBe(
       true,
     );

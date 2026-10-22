@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "buildIt.Social agent API",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "summary": "The versioned API that AI agents (through buildit-mcp) use to work with an org's projects, pages and channels.",
     "description": "Every call runs as the token's owner, so the app's permissions, history and notifications apply. v1 only grows: new operations, optional request fields, response fields and enum values; clients must ignore what they don't know. A breaking change is /v2, with /v1 kept for 12 months. The oldest supported buildit-mcp is 0.1.0. Generated from the API's schemas; don't edit by hand."
   },
@@ -66,7 +66,7 @@
           "meta"
         ],
         "summary": "The API's version",
-        "description": "The API version and the oldest buildit-mcp release it supports, so the MCP server can warn its user to upgrade. Needs a valid token, but no scope. It doesn't count against the rate limits, and its response carries no RateLimit-* headers.",
+        "description": "The API version and the oldest buildit-mcp release it supports, so the MCP server can warn its user to upgrade, and the operations this server serves. Needs a valid token, but no scope. It doesn't count against the rate limits, and its response carries no RateLimit-* headers.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -92,9 +92,16 @@
                   "$ref": "#/components/schemas/MetaResponse"
                 },
                 "example": {
-                  "api_version": "1.0.0",
+                  "api_version": "1.1.0",
                   "min_mcp_version": "0.1.0",
-                  "deprecations": []
+                  "deprecations": [],
+                  "operations": [
+                    "get_item",
+                    "get_me",
+                    "get_meta",
+                    "list_projects",
+                    "search_items"
+                  ]
                 }
               }
             }
@@ -841,13 +848,13 @@
           "items"
         ],
         "summary": "Search items",
-        "description": "Items by filters (repeat a parameter to match any of its values) and, with `q`, text. Without `q`: sorted (rank by default) and paged with a cursor. With `q`: best first, at most 50, one page. Deleted items never appear.",
+        "description": "Items by filters (repeat a parameter to match any of its values) and, with `q`, text. Without `q`: sorted (rank by default) and paged with a cursor. With `q`: best first, at most 50 a page, paged with a cursor too; with `q` and `sort`, the items matching every word, in the sort's order. Deleted items never appear.",
         "parameters": [
           {
             "name": "q",
             "in": "query",
             "required": false,
-            "description": "Text: an exact key (DEMO-42), a number in the project, or words (every word must match the title, description or key). Results are best first, at most 50, with no further pages; `sort` and `cursor` aren't allowed with it.",
+            "description": "Text: an exact key (DEMO-42), a number in the project, or words (every word must match the title, description or key). Without `sort`, results are best first (each with `match`), at most 50 a page, and page with `cursor` like any list. With `sort`, `q` only narrows: the items whose title, description or key match every word, in the sort's order, up to 100 a page, without `match` (an exact key or a number counts only as words there).",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -1012,7 +1019,7 @@
             "name": "sort",
             "in": "query",
             "required": false,
-            "description": "Sort keys, a leading \"-\" for descending (\"-updated_at\"). Default: rank.",
+            "description": "Sort keys, a leading \"-\" for descending (\"-updated_at\"). Default: rank; with `q`, best first.",
             "style": "form",
             "explode": true,
             "schema": {
@@ -1465,7 +1472,7 @@
           "items"
         ],
         "summary": "Get an item",
-        "description": "An item with its children, links, latest comments and, optionally, its history and its GitHub pull requests, branches and commits.",
+        "description": "An item with its children, links, latest comments and, optionally, its history and its GitHub pull requests, branches and commits. A long description can be read in windows with description_offset.",
         "parameters": [
           {
             "name": "key",
@@ -1520,6 +1527,17 @@
               ]
             },
             "example": "true"
+          },
+          {
+            "name": "description_offset",
+            "in": "query",
+            "required": false,
+            "description": "Read the description in windows: the item's `description` is then at most 20,000 characters (Unicode code points) from this offset, whatever `detail` says, with description_offset, description_next_offset and description_length. Start at 0, then pass description_next_offset until it is null. An offset past the end returns an empty window at the end.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 262144
+            }
           },
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -11728,7 +11746,29 @@
           },
           "description_truncated": {
             "type": "boolean",
-            "description": "True when detail=concise cut the description at 2,000 characters; ask with detail=full for all of it."
+            "description": "True when `description` isn't all of it: detail=concise cut it at 2,000 characters (ask with detail=full for all of it), or get_item's description_offset returned a window of it."
+          },
+          "description_offset": {
+            "description": "With get_item's description_offset only: where this window of the description starts, in characters (Unicode code points).",
+            "type": "integer",
+            "minimum": 0
+          },
+          "description_next_offset": {
+            "description": "With get_item's description_offset only: pass it as description_offset to read the next window; null when this window reaches the end.",
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description_length": {
+            "description": "With get_item's description_offset only: the whole description's length, in characters (Unicode code points).",
+            "type": "integer",
+            "minimum": 0
           },
           "custom": {
             "type": "array",
@@ -11986,7 +12026,7 @@
             ]
           },
           "match": {
-            "description": "With `q` only.",
+            "description": "With `q` and no `sort` only.",
             "$ref": "#/components/schemas/SearchMatch"
           },
           "description": {
@@ -12999,7 +13039,7 @@
         "properties": {
           "api_version": {
             "type": "string",
-            "description": "Semver; the major is the path's version."
+            "description": "Semver; the major is the path's version. The minor moves when the contract grows (operations, optional request fields, response fields, enum values, error codes), the patch when only its wording changes."
           },
           "min_mcp_version": {
             "type": "string",
@@ -13032,6 +13072,13 @@
                 "note",
                 "removed_after"
               ]
+            }
+          },
+          "operations": {
+            "description": "The operationIds this server serves, sorted. An operation of the contract that isn't listed answers 404 here. Absent from servers older than API version 1.1.0.",
+            "type": "array",
+            "items": {
+              "type": "string"
             }
           }
         },

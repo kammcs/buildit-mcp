@@ -487,6 +487,26 @@ describe('list_releases and plan_release', () => {
     expect(r.text).toContain('The API does not serve this call');
   });
 
+  it("refuses an action the API says it doesn't serve, without calling it", async () => {
+    api.compat.releaseOps = false;
+    const c = await client();
+    await c.call('whoami');
+    const before = api.requests.length;
+    const r = await c.call('plan_release', { project: 'DEMO', action: 'reopen', release: '1.0.1' });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain(
+      "This buildIt.Social server (API 1.1.0) doesn't serve reopen_release yet, which this needs.",
+    );
+    expect(api.requests.length).toBe(before);
+    // The actions it serves still work.
+    const created = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'create',
+      name: '2.0.0',
+    });
+    expect(created.isError).toBe(false);
+  });
+
   it('defuses a hostile name and description in an update', async () => {
     const c = await client();
     const r = await c.call('plan_release', {

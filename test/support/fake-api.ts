@@ -768,6 +768,11 @@ export function seedStore(): FakeStore {
 // Errors
 // ---------------------------------------------------------------------------
 
+/** What /v1/meta says, apart from the served operations (compat.servedList). */
+function defaultMeta(): Record<string, unknown> {
+  return { api_version: '1.1.0', min_mcp_version: '0.1.0', deprecations: [] };
+}
+
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
 const OLDER_RELEASE_OPS = new Set<OperationId>([
   'update_release',
@@ -885,19 +890,26 @@ export class FakeApi {
   /** Requests or responses that broke the contract's exact schemas. Tests expect it empty. */
   readonly violations: string[] = [];
   identities: Record<string, FakeIdentity>;
-  meta: Record<string, unknown> = {
-    api_version: '1.0.0',
-    min_mcp_version: '0.1.0',
-    deprecations: [],
-  };
+  meta: Record<string, unknown> = defaultMeta();
   store: FakeStore = seedStore();
   private readonly queues = new Map<string, ScriptedResponse[]>();
   private readonly examples = new Set<OperationId>();
   private server: Server | undefined;
   private baseUrl = '';
   private clock = Date.parse('2026-10-07T15:00:00Z');
-  /** Answer like an older API: without error hints, transition moves, the members route or the release operations. */
-  compat = { hints: true, moves: true, membersRoute: true, releaseOps: true };
+  /**
+   * Answer like an older API: without error hints, transition moves, the
+   * members route or the release operations; without description windows
+   * and text-search paging, or the served operations in /v1/meta (1.0.0).
+   */
+  compat = {
+    hints: true,
+    moves: true,
+    membersRoute: true,
+    releaseOps: true,
+    textPaging: true,
+    servedList: true,
+  };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
 
@@ -913,9 +925,17 @@ export class FakeApi {
 
   /** Restores the seed data and the identities, and forgets requests, scripts, examples and violations. */
   reset(): void {
+    this.meta = defaultMeta();
     this.store = seedStore();
     this.identities = structuredClone(this.initialIdentities);
-    this.compat = { hints: true, moves: true, membersRoute: true, releaseOps: true };
+    this.compat = {
+      hints: true,
+      moves: true,
+      membersRoute: true,
+      releaseOps: true,
+      textPaging: true,
+      servedList: true,
+    };
     this.requests.length = 0;
     this.violations.length = 0;
     this.queues.clear();
@@ -1044,7 +1064,13 @@ export class FakeApi {
     }
 
     if (method === 'GET' && path === '/v1/meta') {
-      this.send(res, { status: 200, body: this.meta });
+      this.send(res, {
+        status: 200,
+        body: {
+          ...this.meta,
+          ...(this.compat.servedList ? { operations: this.servedOperations() } : {}),
+        },
+      });
       return;
     }
 
@@ -1383,7 +1409,22 @@ export class FakeApi {
     });
   }
 
-  private detail(i: FakeItem, full: boolean): ItemDetail {
+  private detail(i: FakeItem, full: boolean, windowAt?: number): ItemDetail {
+    if (windowAt !== undefined) {
+      // A window of up to 20,000 code points, whatever `detail` says.
+      const points = Array.from(i.description); // code points, as the contract counts
+      const start = Math.min(windowAt, points.length);
+      const end = Math.min(start + 20_000, points.length);
+      return {
+        ...this.summary(i),
+        description: points.slice(start, end).join(''),
+        description_truncated: start > 0 || end < points.length,
+        description_offset: start,
+        description_next_offset: end < points.length ? end : null,
+        description_length: points.length,
+        custom: this.customOut(i),
+      };
+    }
     const cut = !full && i.description.length > 2000;
     return {
       ...this.summary(i),
@@ -1426,6 +1467,14 @@ export class FakeApi {
         status: this.statusBrief(this.statusOf(other)),
       },
     };
+  }
+
+  /** The operations this fake serves now, sorted, as /v1/meta lists them. */
+  private servedOperations(): string[] {
+    return (Object.keys(OPERATIONS) as OperationId[])
+      .filter((id) => this.compat.releaseOps || !OLDER_RELEASE_OPS.has(id))
+      .filter((id) => this.compat.membersRoute || id !== 'list_project_members')
+      .sort();
   }
 
   private ordered(items: FakeItem[]): FakeItem[] {
@@ -1751,29 +1800,43 @@ export class FakeApi {
       ...(full ? { description: i.description, custom: this.customOut(i) } : {}),
     });
 
-    if (typeof query.q === 'string') {
-      const words = lower(query.q).split(/\s+/).filter(Boolean);
-      const hits = items
-        .filter((i) => {
-          const hay = lower(`${i.project}-${i.number} ${i.title} ${i.description}`);
-          return words.every((w) => hay.includes(w));
-        })
-        .slice(0, 50);
+    const words =
+      typeof query.q === 'string' ? lower(query.q).split(/\s+/).filter(Boolean) : undefined;
+    if (words !== undefined) {
+      if (!this.compat.textPaging && (query.cursor !== undefined || query.sort !== undefined)) {
+        throw new FakeError('validation', {
+          fields: [{ path: 'q', message: "sort and cursor aren't allowed with q." }],
+        });
+      }
+      items = items.filter((i) => {
+        const hay = lower(`${i.project}-${i.number} ${i.title} ${i.description}`);
+        return words.every((w) => hay.includes(w));
+      });
+    }
+    if (words !== undefined && query.sort === undefined) {
+      // Best first (here: rank order), at most 50 a page, with a cursor from API 1.1.0.
+      const offset = this.compat.textPaging ? decodeCursor(query.cursor) : 0;
+      const limit = Math.min(50, (query.limit as number | undefined) ?? 25);
+      const page = this.ordered(items).slice(
+        offset,
+        offset + (this.compat.textPaging ? limit : 50),
+      );
+      const more = this.compat.textPaging && offset + limit < items.length;
       return {
         status: 200,
         body: {
-          items: hits.map((i, n) => {
+          items: page.map((i, n) => {
             const at = lower(i.description).indexOf(words[0] ?? '');
             return {
               ...render(i),
               match: {
-                score: 1 / (n + 1),
+                score: 1 / (offset + n + 1),
                 title_highlight: i.title,
                 snippet: at >= 0 ? i.description.slice(Math.max(0, at - 40), at + 80) : null,
               },
             };
           }),
-          next_cursor: null,
+          next_cursor: more ? encodeCursor(offset + limit) : null,
         },
       };
     }
@@ -1828,7 +1891,14 @@ export class FakeApi {
     return {
       status: 200,
       body: {
-        item: this.detail(item, full),
+        item: this.detail(
+          item,
+          full,
+          // An older API ignores the parameter.
+          this.compat.textPaging && query.description_offset !== undefined
+            ? (query.description_offset as number)
+            : undefined,
+        ),
         children: this.ordered(this.store.items.filter((i) => i.parentId === item.id)).map((i) =>
           this.summary(i),
         ),
