@@ -5,10 +5,10 @@ import { z } from 'zod';
 
 import type { Development, Feedback } from '../api/generated/schemas.js';
 import type { SearchItemsQuery } from '../api/generated/strict.js';
-import { ToolInputError } from '../errors.js';
 import { defineTool } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
 import {
+  apiAtLeast,
   commentOut,
   CommentOutSchema,
   commentText,
@@ -27,6 +27,7 @@ import {
   LinkOutSchema,
   nextPageHint,
   personText,
+  requireApi,
   scopesOf,
   searchItemOut,
   SearchItemOutSchema,
@@ -54,7 +55,7 @@ export const searchItemsTool = defineTool({
   description: `Finds items (epics, stories, tasks, bugs, subtasks) by filters and, optionally, text.
 - Filters combine with AND; the values inside one filter combine with OR. Statuses, types and labels are names (describe_project lists them); people are "me", "none" (unassigned), an email or a display name.
 - Without query: sorted by rank (or sort) and paged; pass next_cursor as cursor for the next page.
-- With query: best matches first, at most 50, one page; sort and cursor can't be used with it. query can be an exact key (DEMO-12), a number, or words that must all match the title, description or key.
+- With query: best matches first, at most 50 a page, paged with cursor too. With query and sort: only the items matching every word, in the sort's order. query can be an exact key (DEMO-12), a number, or words that must all match the title, description or key.
 - detail="concise" (default) returns one line per item; detail="full" adds descriptions (cut at ${FULL_DESCRIPTION_CHARS} characters) and custom fields, at most ${FULL_MAX_LIMIT} per page. For one item, get_item is better.
 Examples: my open work: assignees=["me"], categories=["not_started","started"]. Bugs in a sprint: projects=["DEMO"], types=["Bug"], sprint="active". An epic's children: parent="DEMO-12".`,
   scopes: scopesOf('search_items'),
@@ -122,13 +123,11 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
   outputSchema: z.object({
     items: z.array(SearchItemOutSchema),
     next_cursor: z.string().nullable(),
-    text_search: z.boolean().describe('True when query was used: best first, no further pages.'),
+    text_search: z.boolean().describe('True when query was used without sort: best first.'),
   }),
   async run(args, ctx) {
     if (args.query !== undefined && (args.sort !== undefined || args.cursor !== undefined)) {
-      throw new ToolInputError(
-        'query cannot be combined with sort or cursor: text results come best first, in one page. Drop sort and cursor, or drop query and use filters.',
-      );
+      requireApi(ctx.api, '1.1.0', 'query with sort or cursor');
     }
     const detail = args.detail ?? 'concise';
     let limit = args.limit;
@@ -157,7 +156,7 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
     };
     const page = await ctx.call('search_items', { query });
     const items = page.items.map((i) => searchItemOut(i, FULL_DESCRIPTION_CHARS));
-    const textSearch = args.query !== undefined;
+    const textSearch = args.query !== undefined && args.sort === undefined;
 
     const parts: string[] = [];
     if (items.length === 0) {
@@ -180,9 +179,13 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
         parts.push(wrapLines(lines, 'item_list'));
       }
     }
+    // An API older than 1.1.0 answers a text search with one page of at most 50.
     parts.push(
-      textSearch
-        ? 'Text search returns one page of at most 50; narrow it with filters for more.'
+      textSearch &&
+        page.next_cursor === null &&
+        items.length >= 50 &&
+        apiAtLeast(ctx.api, '1.1.0') !== true
+        ? 'This may be all: an older buildIt.Social server returns one page of text results; narrow with filters for more.'
         : nextPageHint('search_items', page.next_cursor),
     );
     return {
@@ -198,6 +201,8 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
 
 const CONCISE_DESCRIPTION_CHARS = 2000;
 const FULL_DESCRIPTION_MAX = 20_000;
+/** A window is 20,000 code points, which can be twice as many UTF-16 characters. */
+const WINDOW_MAX_CHARS = 40_000;
 const COMMENT_CHARS = { concise: 2000, full: 600 } as const;
 
 const ChildOut = ItemOutSchema.pick({
@@ -450,6 +455,7 @@ export const getItemTool = defineTool({
   description: `Reads one item by key (DEMO-12): its fields, description (Markdown), custom fields, children, links, the latest comments and, optionally, its history.
 - detail="concise" (default): the description cut at ${CONCISE_DESCRIPTION_CHARS} characters and the 5 latest comments.
 - detail="full": the description up to 20,000 characters and the 20 latest comments (each cut at ${COMMENT_CHARS.full} characters).
+- description_offset reads a longer description in windows of 20,000 characters: start at 0, then pass description_next_offset until it is null.
 - include_history=true adds the 50 latest history events.
 - include_development=true adds the GitHub pull requests, branches and commits that name the item's key (at most 20 of each, newest first, with totals); their text comes from GitHub, wrapped as untrusted content (source "git").
 - An item filed through the Feedback app by another organization adds feedback: the report, with the reporter, organization and device as untrusted content. Your comments never reach the reporter.
@@ -469,9 +475,20 @@ The result carries version and description_version: pass them to update_item (if
       .boolean()
       .optional()
       .describe('Add its GitHub pull requests, branches and commits.'),
+    description_offset: z
+      .number()
+      .int()
+      .min(0)
+      .max(262_144)
+      .optional()
+      .describe('Read the description in a window from this character.'),
   }),
   outputSchema: z.object({
     item: ItemFullSchema,
+    description_window: z
+      .object({ offset: z.number(), next_offset: z.number().nullable(), length: z.number() })
+      .optional()
+      .describe('With description_offset: next_offset is null at the end.'),
     children: z.array(ChildOut),
     links: z.array(LinkOutSchema),
     comments: z.array(CommentOutSchema).describe('The latest comments, oldest first.'),
@@ -485,18 +502,37 @@ The result carries version and description_version: pass them to update_item (if
   }),
   async run(args, ctx) {
     const detail = args.detail ?? 'concise';
+    const windowAt = args.description_offset;
+    if (windowAt !== undefined) requireApi(ctx.api, '1.1.0', 'description_offset');
     const r = await ctx.call('get_item', {
       path: { key: itemRef(args.item) },
       query: {
         ...(detail === 'full' ? { detail } : {}),
         ...(args.include_history ? { include_history: 'true' } : {}),
         ...(args.include_development ? { include_development: 'true' } : {}),
+        ...(windowAt !== undefined ? { description_offset: windowAt } : {}),
       },
     });
+    // A window answers with its offsets; an API older than 1.1.0 ignores the parameter.
+    const window =
+      windowAt !== undefined && r.item.description_offset !== undefined
+        ? {
+            offset: r.item.description_offset,
+            next_offset: r.item.description_next_offset ?? null,
+            length: r.item.description_length ?? r.item.description.length,
+          }
+        : undefined;
     const item = itemFull(
       r.item,
-      detail === 'full' ? FULL_DESCRIPTION_MAX : CONCISE_DESCRIPTION_CHARS,
+      window
+        ? WINDOW_MAX_CHARS
+        : detail === 'full'
+          ? FULL_DESCRIPTION_MAX
+          : CONCISE_DESCRIPTION_CHARS,
       detail === 'full',
+      detail === 'full' && apiAtLeast(ctx.api, '1.1.0') !== false
+        ? `Call get_item with item="${r.item.key}" and description_offset=0 to read all of it in windows.`
+        : undefined,
     );
     const children = r.children.map((c) => {
       const o = itemOut(c);
@@ -547,6 +583,15 @@ The result carries version and description_version: pass them to update_item (if
       facts.join('\n'),
       wrapLines(fields, 'item_fields'),
       wrapUntrusted(r.item.title, { source: 'title', maxChars: 300 }),
+      ...(window
+        ? [
+            `Description, characters ${window.offset} to ${window.next_offset ?? window.length} of ${window.length}: ${window.next_offset === null ? 'the last window.' : `the next window is description_offset=${window.next_offset}.`}`,
+          ]
+        : windowAt !== undefined
+          ? [
+              'This buildIt.Social server ignored description_offset (its API is older than 1.1.0), so the description is cut as usual.',
+            ]
+          : []),
       i.description === '' ? '(no description)' : i.description,
     ];
     if (r.item.custom.length > 0) {
@@ -630,6 +675,7 @@ The result carries version and description_version: pass them to update_item (if
         ...(history ? { history } : {}),
         ...(development ? { development } : {}),
         ...(feedback ? { feedback } : {}),
+        ...(window ? { description_window: window } : {}),
       },
       text: parts.join('\n\n'),
     };

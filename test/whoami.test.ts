@@ -21,6 +21,7 @@ afterAll(async () => {
 });
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()));
+  api.reset();
 });
 
 async function connect(token: string): Promise<Client> {
@@ -93,8 +94,9 @@ describe('whoami', () => {
       server: {
         name: 'buildit-mcp',
         version: SERVER_VERSION,
-        api_version: '1.0.0',
+        api_version: '1.1.0',
         update_required: false,
+        not_served: [],
       },
     });
     const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
@@ -188,8 +190,30 @@ describe('whoami', () => {
       expect(result.structuredContent).toMatchObject({ server: { update_required: true } });
       expect(JSON.stringify(result.content)).toContain('Ask the person to update it.');
     } finally {
-      api.meta = { api_version: '1.0.0', min_mcp_version: '0.1.0', deprecations: [] };
+      api.meta = { api_version: '1.1.0', min_mcp_version: '0.1.0', deprecations: [] };
     }
+  });
+
+  it("lists the operations this API doesn't serve yet, and says when it doesn't say", async () => {
+    api.compat.releaseOps = false;
+    const client = await connect(TOKENS.read);
+    const result = await client.callTool({ name: 'whoami', arguments: {} });
+    expect(result.structuredContent).toMatchObject({
+      server: {
+        not_served: ['archive_release', 'reopen_release', 'restore_release', 'update_release'],
+      },
+    });
+    expect(JSON.stringify(result.content)).toContain(
+      "doesn't serve these operations yet, so calls that need them are refused until it is updated: archive_release, reopen_release, restore_release, update_release.",
+    );
+
+    api.compat.servedList = false;
+    api.meta = { api_version: '1.0.0', min_mcp_version: '0.1.0', deprecations: [] };
+    const older = await client.callTool({ name: 'whoami', arguments: {} });
+    expect(older.structuredContent).toMatchObject({
+      server: { api_version: '1.0.0', not_served: null },
+    });
+    expect(JSON.stringify(older.content)).not.toContain("doesn't serve");
   });
 
   it('turns an API refusal into an actionable error result', async () => {

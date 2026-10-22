@@ -68,6 +68,7 @@ Reset the org to this seed before each run.
 - **Success:** my open items (`DEMO-12`, `DEMO-42`, `DEMO-49`) ordered by priority and status; no change.
 - **Tools:** `search_items` (`assignees: ["me"]`, `categories: ["not_started", "started"]`, `sort: ["-priority"]`).
 - **Good run:** 1 or 2 calls.
+- **Variant:** "Which of my open items mention backups, newest first?" Success is one `search_items` call with `query`, `sort: ["-updated_at"]` and the same filters, following `next_cursor` if there is one.
 
 ### 5. Triage new bugs
 
@@ -140,6 +141,7 @@ Reset the org to this seed before each run.
 - **Success:** exactly that wording changes; the mention link to Sam stays intact.
 - **Tools:** `get_item`, `update_item` with `description_replace` and `description_version`.
 - **Variant:** edit the description in the app between the agent's read and write. Success is the agent reading again after the `conflict` error and reapplying, not overwriting.
+- **Variant:** give DEMO-42 a description of about 50,000 characters with the phrase near the end. Success is the agent reading on with `description_offset` (0, then each `description_next_offset`) until it finds it, and replacing the whole description only with all of it read.
 
 ### 14. Move through the workflow
 

@@ -32,8 +32,11 @@ import type {
   Link,
   User,
 } from '../api/generated/schemas.js';
+import type { ApiClient } from '../api/client.js';
+import { ToolInputError } from '../errors.js';
 import type { Scope } from '../toolsets/toolsets.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
+import { compareVersions } from '../version.js';
 
 // ---------------------------------------------------------------------------
 // Scopes and annotations from the contract
@@ -54,6 +57,25 @@ export function scopesOf(...ids: OperationId[]): Scope[] {
     for (const scope of OPERATIONS[id].requiredScopes) out.add(scope);
   }
   return [...out];
+}
+
+/**
+ * Whether the API is at least `version`: true or false when /v1/meta has
+ * said (stdio reads it at startup), undefined when it hasn't (the API then
+ * answers for itself).
+ */
+export function apiAtLeast(api: ApiClient, version: string): boolean | undefined {
+  const known = api.served?.apiVersion;
+  return known === undefined ? undefined : compareVersions(known, version) >= 0;
+}
+
+/** Refuses `what` when the API is known to be older than `version`. */
+export function requireApi(api: ApiClient, version: string, what: string): void {
+  if (apiAtLeast(api, version) === false) {
+    throw new ToolInputError(
+      `${what} needs buildIt.Social's agent API ${version} or newer, and this server runs ${api.served?.apiVersion ?? 'an older one'}. Leave it out; the person's buildIt.Social server needs an update for it.`,
+    );
+  }
 }
 
 /** Every scope the given plan actions need, from the contract's x-buildit-plan-required-scopes. */
@@ -273,7 +295,13 @@ export type ItemFull = z.infer<typeof ItemFullSchema>;
  * An item with its description, cut at `maxDescription` characters. In full
  * mode the API has sent everything, so a cut can't be read further here.
  */
-export function itemFull(i: ItemDetail, maxDescription: number, full = false): ItemFull {
+export function itemFull(
+  i: ItemDetail,
+  maxDescription: number,
+  full = false,
+  /** What the note on a cut description says to do, in place of the default. */
+  moreHint?: string,
+): ItemFull {
   const cut = i.description.length > maxDescription;
   return {
     ...itemOut(i),
@@ -291,9 +319,11 @@ export function itemFull(i: ItemDetail, maxDescription: number, full = false): I
         : wrapUntrusted(i.description, {
             source: 'description',
             maxChars: maxDescription,
-            moreHint: full
-              ? 'The rest is too long to show here; the person can read it in buildIt.Social.'
-              : `Call get_item with item="${i.key}" and detail="full" to read more.`,
+            moreHint:
+              moreHint ??
+              (full
+                ? 'The rest is too long to show here; the person can read it in buildIt.Social.'
+                : `Call get_item with item="${i.key}" and detail="full" to read more.`),
           }),
     description_truncated: i.description_truncated || cut,
     custom: i.custom.map(customOut),

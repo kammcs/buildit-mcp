@@ -58,6 +58,13 @@ export async function callOperation<Id extends OperationId>(
   options: Omit<ApiRequestOptions, 'query' | 'body'>,
 ): Promise<OperationResponse<Id>> {
   const op = OPERATIONS[id];
+  // The API lists what it serves from 1.1.0; an operation it leaves out would answer 404.
+  const served = api.served;
+  if (served?.operations !== undefined && !served.operations.has(id)) {
+    throw new ToolInputError(
+      `This buildIt.Social server (API ${served.apiVersion}) doesn't serve ${id} yet, which this needs. Tell the person: it works once their buildIt.Social server is updated; until then they can do it in the app.`,
+    );
+  }
   const path = operationPath(id, args.path);
   const query = args.query as Record<string, QueryValue | readonly string[]> | undefined;
   const body = args.body as unknown;

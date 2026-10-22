@@ -124,6 +124,12 @@ export interface ApiRequestOptions {
   pathTemplate?: string;
 }
 
+/** The API's version and the operations it serves (undefined from an API older than 1.1.0). */
+export interface ServedApi {
+  apiVersion: string;
+  operations: ReadonlySet<string> | undefined;
+}
+
 export interface ApiClientOptions {
   baseUrl: string;
   token: string;
@@ -217,6 +223,13 @@ export class ApiClient {
   private readonly logger: Logger;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly onError: ((err: ApiError) => void) | undefined;
+  /**
+   * What the API said of itself in the last /v1/meta this client read (stdio
+   * reads it at startup; whoami reads it too): its version and, from API
+   * 1.1.0, the operations it serves. Undefined until then. It describes the
+   * deployment, not the caller.
+   */
+  served: ServedApi | undefined;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -231,10 +244,15 @@ export class ApiClient {
 
   /** GET /v1/meta */
   async getMeta(options: ApiRequestOptions = {}): Promise<MetaResponse> {
-    return this.requestParsed('GET', '/v1/meta', MetaResponseSchema, {
+    const meta = await this.requestParsed('GET', '/v1/meta', MetaResponseSchema, {
       operation: 'get_meta',
       ...options,
     });
+    this.served = {
+      apiVersion: meta.api_version,
+      operations: meta.operations ? new Set(meta.operations) : undefined,
+    };
+    return meta;
   }
 
   /** GET /v1/me */
