@@ -23,11 +23,11 @@ It runs on your own machine (stdio) or as a stateless HTTP server for a team. It
 Nothing to install by hand: clients start the server with `npx`, which downloads it on first use.
 
 ```sh
-npx -y @kammcs/buildit-mcp@0 --help
+npx -y @kammcs/buildit-mcp@latest --help
 ```
 
-- **Versions:** `@0` follows the 0.x releases, so you get fixes and new tools as they ship; `@0.2.0` pins one release. The server tells you when the API needs a newer one ([Versions](#versions)).
-- **Windows:** a client that starts `npx` directly fails there (`spawn npx ENOENT`: npx is a `.cmd` file), as Claude Code does. Use `cmd` as the command, with `/c`, `npx`, `-y` and `@kammcs/buildit-mcp@0` as its arguments (the Claude Code example below shows it).
+- **Versions:** `@latest` gets the newest release each time the client starts the server, so you get fixes and new tools as they ship; `@0.2.0` pins one release. Don't use a range such as `@0`: npx keeps the copy it first installed for a range and never updates it. The server tells you when the API needs a newer one ([Versions](#versions)).
+- **Windows:** a client that starts `npx` directly fails there (`spawn npx ENOENT`: npx is a `.cmd` file), as Claude Code does. Use `cmd` as the command, with `/c`, `npx`, `-y` and `@kammcs/buildit-mcp@latest` as its arguments (the Claude Code example below shows it).
 - Also available as a [container image](#container-image) and, for Claude Desktop, as a [bundle](#claude-desktop).
 
 ### From a clone (contributors)
@@ -39,7 +39,7 @@ npm ci
 npm run build
 ```
 
-The server is then `node /path/to/buildit-mcp/dist/index.js`: use that command and argument in place of `npx -y @kammcs/buildit-mcp@0` in the examples below. Inside the clone itself, `npx @kammcs/buildit-mcp` finds the clone's own `package.json` and fails (`buildit-mcp` is not recognized), so a client working in the clone needs `dist/index.js`; with Claude Code, add it there with `--scope local`, which wins over a user-scope entry in that folder only.
+The server is then `node /path/to/buildit-mcp/dist/index.js`: use that command and argument in place of `npx -y @kammcs/buildit-mcp@latest` in the examples below. Inside the clone itself, `npx @kammcs/buildit-mcp` finds the clone's own `package.json` and fails (`buildit-mcp` is not recognized), so a client working in the clone needs `dist/index.js`; with Claude Code, add it there with `--scope local`, which wins over a user-scope entry in that folder only.
 
 ## Configuration
 
@@ -140,13 +140,13 @@ In every example the token comes from the `BUILDIT_TOKEN` environment variable; 
 Single quotes keep `${BUILDIT_TOKEN}` literal, so the configuration stores the reference, not the token; Claude Code expands it when it starts the server.
 
 ```sh
-claude mcp add buildit --scope user -e 'BUILDIT_TOKEN=${BUILDIT_TOKEN}' -- npx -y @kammcs/buildit-mcp@0
+claude mcp add buildit --scope user -e 'BUILDIT_TOKEN=${BUILDIT_TOKEN}' -- npx -y @kammcs/buildit-mcp@latest
 ```
 
 On Windows, from PowerShell (Git Bash would turn `/c` into a path):
 
 ```powershell
-claude mcp add buildit --scope user -e 'BUILDIT_TOKEN=${BUILDIT_TOKEN}' -- cmd /c npx -y "@kammcs/buildit-mcp@0"
+claude mcp add buildit --scope user -e 'BUILDIT_TOKEN=${BUILDIT_TOKEN}' -- cmd /c npx -y "@kammcs/buildit-mcp@latest"
 ```
 
 Or share it with a project through `.mcp.json`, where each person's own `BUILDIT_TOKEN` is used:
@@ -156,7 +156,7 @@ Or share it with a project through `.mcp.json`, where each person's own `BUILDIT
   "mcpServers": {
     "buildit": {
       "command": "npx",
-      "args": ["-y", "@kammcs/buildit-mcp@0"],
+      "args": ["-y", "@kammcs/buildit-mcp@latest"],
       "env": { "BUILDIT_TOKEN": "${BUILDIT_TOKEN}" }
     }
   }
@@ -174,7 +174,7 @@ In `~/.cursor/mcp.json` (or a project's `.cursor/mcp.json`), using Cursor's `${e
   "mcpServers": {
     "buildit": {
       "command": "npx",
-      "args": ["-y", "@kammcs/buildit-mcp@0"],
+      "args": ["-y", "@kammcs/buildit-mcp@latest"],
       "env": { "BUILDIT_TOKEN": "${env:BUILDIT_TOKEN}" }
     }
   }
@@ -199,7 +199,7 @@ In `.vscode/mcp.json`. VS Code prompts for the token once and keeps it in its se
     "buildit": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@kammcs/buildit-mcp@0"],
+      "args": ["-y", "@kammcs/buildit-mcp@latest"],
       "env": { "BUILDIT_TOKEN": "${input:buildit-token}" }
     }
   }
@@ -222,7 +222,7 @@ Without the bundle, don't put a token in `claude_desktop_config.json`: it doesn'
   "mcpServers": {
     "buildit": {
       "command": "npx",
-      "args": ["-y", "@kammcs/buildit-mcp@0"]
+      "args": ["-y", "@kammcs/buildit-mcp@latest"]
     }
   }
 }
@@ -231,7 +231,7 @@ Without the bundle, don't put a token in `claude_desktop_config.json`: it doesn'
 ## HTTP mode
 
 ```sh
-npx -y @kammcs/buildit-mcp@0 --http     # http://127.0.0.1:8765/mcp
+npx -y @kammcs/buildit-mcp@latest --http     # http://127.0.0.1:8765/mcp
 ```
 
 - Every request must carry `Authorization: Bearer <token>`; the server uses that request's token for its API calls and keeps nothing afterwards. A token is required even on localhost.
@@ -251,7 +251,7 @@ claude mcp add buildit --transport http --header 'Authorization: Bearer ${BUILDI
 One server can serve a whole team: each member connects with the team URL and their own token, and the server forwards each request with that member's token. It holds no buildIt.Social secret and stores nothing, so it can run as several replicas behind any load balancer.
 
 ```sh
-npx -y @kammcs/buildit-mcp@0 --http --host 0.0.0.0 --port 8765
+npx -y @kammcs/buildit-mcp@latest --http --host 0.0.0.0 --port 8765
 # with BUILDIT_ALLOWED_HOSTS=mcp.example.com
 ```
 
@@ -304,7 +304,7 @@ buildit-mcp follows [semantic versioning](https://semver.org), and every release
 - **The API says when to update.** buildIt.Social's agent API publishes the oldest buildit-mcp release it supports (`min_mcp_version`, from `GET /v1/meta`). When this server is older, `whoami` reports `update_required: true` and asks the agent to tell you to update, and in stdio mode the server also logs a warning when it starts. It doesn't stop working by itself: calls go on as far as the API accepts them.
 - **The API says what it serves.** From API 1.1.0, `GET /v1/meta` also lists the operations the deployment serves. Once the server has read it (in stdio mode at startup, and whenever `whoami` runs), a call the deployment doesn't serve yet, such as a newer `plan_release` action, is refused with a clear message instead of reaching the API, `whoami` lists those operations (`not_served`), and arguments that need a newer API (such as `description_offset`) are refused the same way.
 
-To update: `npx` with `@0` picks up the newest 0.x release when the client next starts the server (run `npx -y @kammcs/buildit-mcp@0 --version` to check); with a pinned version, change the pin. From a clone, pull and rebuild.
+To update: with `@latest`, npx checks for the newest release whenever the client starts the server (run `npx -y @kammcs/buildit-mcp@latest --version` to check); with a pinned version, change the pin. If a client was set up with a range such as `@0`, switch it to `@latest`: npx keeps a range's first install. From a clone, pull and rebuild. The container image's `0` tag moves with each 0.x release; `docker pull` (or `docker compose pull`) fetches it.
 
 ## Development
 
