@@ -45,6 +45,7 @@
     "inspect": "npm run build && tsx scripts/inspect.ts",
     "inspect:docker": "npm run build && docker build -t buildit-mcp:inspect . && tsx scripts/inspect.ts --image buildit-mcp:inspect",
     "image:publish": "tsx scripts/publish-image.ts",
+    "bundle": "npm run build && tsx scripts/bundle.ts",
     "conformance": "npm run build && tsx scripts/conformance.ts",
     "generate": "tsx scripts/generate.ts",
     "privacy": "tsx scripts/privacy.ts",

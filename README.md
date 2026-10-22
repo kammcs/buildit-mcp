@@ -189,7 +189,11 @@ In `.vscode/mcp.json`. VS Code prompts for the token once and keeps it in its se
 
 ### Claude Desktop
 
-Claude Desktop's `claude_desktop_config.json` does not expand environment variables, so don't put a token there. A Claude Desktop bundle (`.mcpb`) that stores the token as a protected setting is planned. Until then, either:
+Install the bundle: download `buildit-mcp-<version>.mcpb` from the [latest release](https://github.com/kammcs/buildit-mcp/releases/latest) and open it (or drag it onto Claude Desktop's Settings → Extensions). Claude Desktop asks for your personal access token and keeps it as a protected setting in your system's secure storage, never in a plain config file. The other settings (toolsets, read-only, the API URL) are optional; change them later in the extension's settings. Then ask Claude to call `whoami` to check the token.
+
+To build the bundle from a clone: `npm run bundle`.
+
+Without the bundle, don't put a token in `claude_desktop_config.json`: it doesn't expand environment variables, so the token would sit there in plain text. Instead, either:
 
 - set `BUILDIT_TOKEN` in your user environment and add the server **without** an `env` entry, then restart Claude Desktop and call `whoami` to confirm the token reached the server (whether Claude Desktop passes its environment to servers is not documented, so check); or
 - run the server in HTTP mode on your machine (below) and connect to it as a remote server.
@@ -289,6 +293,7 @@ npm ci
 npm run check         # lint, format check, build, tests, the privacy guard over the packed package
 npm run inspect       # MCP Inspector smoke test against a fake API
 npm run inspect:docker  # the same, also against the container image (Docker Desktop)
+npm run bundle        # build the Claude Desktop bundle (.mcpb) and smoke-test it
 npm run conformance   # official MCP conformance suite, offline
 npm run generate      # regenerate src/api/generated/ from openapi/openapi.json
 npm run privacy       # check that no file holds private details (the tests run it too)
