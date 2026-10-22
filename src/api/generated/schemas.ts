@@ -93,6 +93,15 @@ export type Estimate = z.infer<typeof EstimateSchema>;
 export const EstimateScaleSchema = openEnum(['none', 'points', 'tshirt']);
 export type EstimateScale = z.infer<typeof EstimateScaleSchema>;
 
+export const FeedbackDeviceSchema = z.looseObject({
+  app: z.string().nullable(),
+  build: z.string().nullable(),
+  platform: z.string().nullable(),
+  os: z.string().nullable(),
+  form: z.string().nullable(),
+});
+export type FeedbackDevice = z.infer<typeof FeedbackDeviceSchema>;
+
 export const FieldKindSchema = openEnum([
   'text',
   'number',
@@ -630,6 +639,18 @@ export const ErrorSchema = z.looseObject({
 });
 export type Error = z.infer<typeof ErrorSchema>;
 
+export const FeedbackSchema = z.looseObject({
+  reporter_name: z.string().nullable(),
+  org_name: z.string(),
+  org_label: z.string(),
+  kind: openEnum(['bug', 'feature']),
+  severity: openEnum(['blocker', 'annoying', 'minor']),
+  device: FeedbackDeviceSchema,
+  plus_ones: z.number(),
+  state: openEnum(['open', 'org_off', 'org_deleted', 'reporter_gone', 'blocked', 'ended']),
+});
+export type Feedback = z.infer<typeof FeedbackSchema>;
+
 export const FieldChangeArgsSchema = z.union([
   z.looseObject({
     op: z.literal('create'),
@@ -717,6 +738,14 @@ export const LabelChangeArgsSchema = z.union([
   z.looseObject({ op: z.literal('delete'), project: ProjectRefSchema, label: LabelRefSchema }),
 ]);
 export type LabelChangeArgs = z.infer<typeof LabelChangeArgsSchema>;
+
+export const MessageAuthorSchema = z.looseObject({
+  id: UuidSchema,
+  display_name: z.string(),
+  email: z.string().nullable(),
+  type: openEnum(['user', 'app']),
+});
+export type MessageAuthor = z.infer<typeof MessageAuthorSchema>;
 
 export const MetaResponseSchema = z.looseObject({
   api_version: z.string(),
@@ -855,6 +884,15 @@ export const SprintSchema = z.looseObject({
 });
 export type Sprint = z.infer<typeof SprintSchema>;
 
+export const SprintBoardMoveSchema = z.looseObject({
+  id: UuidSchema,
+  key: ItemKeySchema,
+  title: z.string(),
+  from: z.string(),
+  to: z.string(),
+});
+export type SprintBoardMove = z.infer<typeof SprintBoardMoveSchema>;
+
 export const SprintBriefSchema = z.looseObject({
   id: UuidSchema,
   number: z.number(),
@@ -862,6 +900,16 @@ export const SprintBriefSchema = z.looseObject({
   state: SprintStateSchema,
 });
 export type SprintBrief = z.infer<typeof SprintBriefSchema>;
+
+export const SprintNotMovedSchema = z.looseObject({
+  id: UuidSchema,
+  key: ItemKeySchema,
+  title: z.string(),
+  status: z.string(),
+  reason: openEnum(['no_board_status', 'transition_not_allowed', 'required_fields', 'admins_only']),
+  required_fields: z.array(z.string()),
+});
+export type SprintNotMoved = z.infer<typeof SprintNotMovedSchema>;
 
 export const StartSprintRequestSchema = z.looseObject({
   starts_on: DateSchema.optional(),
@@ -1180,7 +1228,7 @@ export type MeResponse = z.infer<typeof MeResponseSchema>;
 export const MessageSchema = z.looseObject({
   id: UuidSchema,
   channel_id: UuidSchema,
-  author: UserSchema.nullable(),
+  author: MessageAuthorSchema.nullable(),
   kind: MessageKindSchema,
   body: z.string(),
   code: z.string().nullable(),
@@ -1284,6 +1332,13 @@ export type SprintItemsResponse = z.infer<typeof SprintItemsResponseSchema>;
 
 export const SprintResponseSchema = z.looseObject({ sprint: SprintSchema });
 export type SprintResponse = z.infer<typeof SprintResponseSchema>;
+
+export const StartSprintResponseSchema = z.looseObject({
+  sprint: SprintSchema,
+  moved_to_board: z.array(SprintBoardMoveSchema),
+  not_moved: z.array(SprintNotMovedSchema),
+});
+export type StartSprintResponse = z.infer<typeof StartSprintResponseSchema>;
 
 export const TransitionSetSchema = z.looseObject({
   assignee: UserRefSchema.nullable().optional(),
@@ -1636,6 +1691,7 @@ export const GetItemResponseSchema = z.looseObject({
   comments_next_cursor: z.string().nullable(),
   history: z.array(HistoryEventSchema).optional(),
   development: DevelopmentSchema.optional(),
+  feedback: FeedbackSchema.optional(),
 });
 export type GetItemResponse = z.infer<typeof GetItemResponseSchema>;
 

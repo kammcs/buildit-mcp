@@ -61,6 +61,10 @@ export function channelOut(c: Channel): ChannelOut {
 const MessageOut = z.object({
   id: z.string().describe('The message id; read_thread takes it.'),
   author: PersonSchema.nullable(),
+  author_type: z
+    .string()
+    .nullable()
+    .describe('user (a person) or app (a bot of the org); null with no author.'),
   kind: z.string().describe('text, system, call, meeting, work_item or thread_broadcast.'),
   body: z.string().describe('Wrapped as untrusted content; empty when deleted.'),
   code: z.string().nullable().describe('A code snippet, wrapped as untrusted content.'),
@@ -85,6 +89,7 @@ function messageOut(m: Message, maxChars: number, moreHint: string): MessageOut 
   return {
     id: m.id,
     author,
+    author_type: m.author ? sanitizeLabel(m.author.type, 20) : null,
     kind: m.kind,
     body: wrapUntrusted(m.body, {
       source: 'message',
@@ -116,6 +121,7 @@ function messageText(m: MessageOut): string {
   const facts = [
     m.created_at,
     ...(m.author ? [] : ['unknown author']),
+    ...(m.author_type === 'app' ? ['sent by an app (a bot of the org)'] : []),
     ...(m.kind !== 'text' ? [m.kind] : []),
     ...(m.via_agent ? ['written through an agent'] : []),
     ...(m.edited_at ? [`edited ${m.edited_at}`] : []),

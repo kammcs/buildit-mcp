@@ -125,6 +125,36 @@ describe('read_channel', () => {
     expect(second.text).toContain('This is the last page.');
   });
 
+  it("says when an app (a bot of the org) sent a message, and wraps the app's name", async () => {
+    api.store.messages.push({
+      id: uid(9050),
+      channelId: CHANNELS.general,
+      authorId: uid(9051),
+      app: { name: `Build bot ${HOSTILE.slice(0, 40)}` },
+      body: 'Build 125 passed.',
+      parentId: null,
+      createdAt: '2026-10-08T09:00:00Z',
+      deleted: false,
+      viaAgent: null,
+    });
+    const c = await client();
+    const r = await c.call('read_channel', { channel: 'general' });
+    expect(r.isError).toBe(false);
+    const messages = r.structured.messages as {
+      id: string;
+      author: { name: string; email: string | null } | null;
+      author_type: string | null;
+    }[];
+    const bot = messages.find((m) => m.id === uid(9050))!;
+    expect(bot.author_type).toBe('app');
+    expect(bot.author?.email).toBeNull();
+    expect(messages.find((m) => m.id !== uid(9050))?.author_type).toBe('user');
+    expect(r.text).toContain('sent by an app (a bot of the org)');
+    assertDefused(r.text);
+    expect(injectionIsInsideBlocks(r.text)).toBe(true);
+    assertDefused(JSON.stringify(r.structured));
+  });
+
   it('never reads a direct message', async () => {
     const c = await client();
     const dm = await c.call('read_channel', { channel: CHANNELS.dm });
