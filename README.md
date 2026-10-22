@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://bu
 
 It runs on your own machine (stdio) or as a stateless HTTP server for a team. It holds no secrets of its own: each person's token stays in their own client.
 
-**Status:** 0.1.0, the first release, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (41 tools in all).
+**Status:** 0.2.0, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (41 tools in all).
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
@@ -26,7 +26,7 @@ Nothing to install by hand: clients start the server with `npx`, which downloads
 npx -y @kammcs/buildit-mcp@0 --help
 ```
 
-- **Versions:** `@0` follows the 0.x releases, so you get fixes and new tools as they ship; `@0.1.0` pins one release. The server tells you when the API needs a newer one ([Versions](#versions)).
+- **Versions:** `@0` follows the 0.x releases, so you get fixes and new tools as they ship; `@0.2.0` pins one release. The server tells you when the API needs a newer one ([Versions](#versions)).
 - **Windows:** a client that starts `npx` directly fails there (`spawn npx ENOENT`: npx is a `.cmd` file), as Claude Code does. Use `cmd` as the command, with `/c`, `npx`, `-y` and `@kammcs/buildit-mcp@0` as its arguments (the Claude Code example below shows it).
 - Also available as a [container image](#container-image) and, for Claude Desktop, as a [bundle](#claude-desktop).
 
@@ -259,7 +259,7 @@ Bound to anything but loopback, the server refuses to start without `BUILDIT_ALL
 
 ### Container image
 
-`ghcr.io/kammcs/buildit-mcp` runs the server in HTTP mode on port 8765, as a non-root user, with a health check on `/healthz`. Each release is tagged with its version (`0.1.0`) and its major version (`0`), for amd64 and arm64. No token is in the image: each request brings its own.
+`ghcr.io/kammcs/buildit-mcp` runs the server in HTTP mode on port 8765, as a non-root user, with a health check on `/healthz`. Each release is tagged with its version (`0.2.0`) and its major version (`0`), for amd64 and arm64. No token is in the image: each request brings its own.
 
 ```sh
 docker run -d -p 8765:8765 -e BUILDIT_ALLOWED_HOSTS=mcp.example.com ghcr.io/kammcs/buildit-mcp:0

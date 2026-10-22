@@ -35,11 +35,11 @@ Not vulnerabilities on their own:
 
 Security fixes go into the latest minor release on npm, as a patch release, and are listed in [CHANGELOG.md](CHANGELOG.md).
 
-| Version                                         | Supported |
-| ----------------------------------------------- | --------- |
-| The latest minor release (0.1.x, the first one) | Yes       |
-| Older minor releases                            | No        |
-| Unreleased commits on `main`                    | No        |
+| Version                          | Supported |
+| -------------------------------- | --------- |
+| The latest minor release (0.2.x) | Yes       |
+| Older minor releases             | No        |
+| Unreleased commits on `main`     | No        |
 
 To get a fix, update to the latest release. See [Versions](README.md#versions) for the versioning policy.
 

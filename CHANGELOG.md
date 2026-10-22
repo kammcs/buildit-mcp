@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [Unreleased]
+## [0.2.0] - 2026-10-22
 
 Built on version 1.2.0 of the agent API's contract; each addition needs a buildIt.Social server that serves it, and is refused with a clear message on an older one.
 
@@ -80,4 +80,5 @@ Both transports serve MCP 2026-07-28 (stateless, with per-request `_meta`) and 2
 - Node.js 20 or newer (22 recommended).
 - A buildIt.Social personal access token, from an org with agent access turned on.
 
+[0.2.0]: https://github.com/kammcs/buildit-mcp/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kammcs/buildit-mcp/releases/tag/v0.1.0

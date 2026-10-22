@@ -1,6 +1,6 @@
 {
   "name": "@kammcs/buildit-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for buildIt.Social: lets AI agents work with an org's projects, pages and channels through the buildIt.Social agent API, with a personal access token.",
   "license": "MIT",
   "author": "Kamm Creative Solutions",
