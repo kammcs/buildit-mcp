@@ -1,0 +1,79 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.kammcs/buildit-mcp",
+  "title": "buildIt.Social",
+  "description": "Work with buildIt.Social projects, items, comments, pages and channels with your own token.",
+  "repository": {
+    "url": "https://github.com/kammcs/buildit-mcp",
+    "source": "github",
+    "id": "1409250712"
+  },
+  "websiteUrl": "https://github.com/kammcs/buildit-mcp#readme",
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@kammcs/buildit-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "BUILDIT_TOKEN",
+          "description": "A buildIt.Social personal access token (it starts with buildit_pat_). Give it only the scopes you need.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "BUILDIT_TOOLSETS",
+          "description": "Comma-separated toolsets: items, comments, planning, pages, chat, admin, destructive, or all.",
+          "default": "items,comments"
+        },
+        {
+          "name": "BUILDIT_READ_ONLY",
+          "description": "true: only list tools that change nothing.",
+          "format": "boolean",
+          "default": "false"
+        },
+        {
+          "name": "BUILDIT_API_URL",
+          "description": "The agent API URL; change it only for another buildIt.Social deployment.",
+          "default": "https://api.buildit.social/functions/v1/agent-api"
+        }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/kammcs/buildit-mcp:0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "BUILDIT_HTTP",
+          "description": "The image serves HTTP by default; over stdio it must be false.",
+          "value": "false"
+        },
+        {
+          "name": "BUILDIT_TOKEN",
+          "description": "A buildIt.Social personal access token (it starts with buildit_pat_). Give it only the scopes you need.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "BUILDIT_TOOLSETS",
+          "description": "Comma-separated toolsets: items, comments, planning, pages, chat, admin, destructive, or all.",
+          "default": "items,comments"
+        },
+        {
+          "name": "BUILDIT_READ_ONLY",
+          "description": "true: only list tools that change nothing.",
+          "format": "boolean",
+          "default": "false"
+        }
+      ]
+    }
+  ]
+}
