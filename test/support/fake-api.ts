@@ -768,9 +768,12 @@ export function seedStore(): FakeStore {
 // Errors
 // ---------------------------------------------------------------------------
 
+/** The operations API 1.2.0 added (compat.v12 false leaves them out). */
+const V12_OPS = new Set<OperationId>(['search_pages', 'list_members']);
+
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.1.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.2.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -900,7 +903,9 @@ export class FakeApi {
   /**
    * Answer like an older API: without error hints, transition moves, the
    * members route or the release operations; without description windows
-   * and text-search paging, or the served operations in /v1/meta (1.0.0).
+   * and text-search paging, or the served operations in /v1/meta (1.0.0);
+   * without search_pages, list_members, link and activity filters and
+   * org.test (1.1.0).
    */
   compat = {
     hints: true,
@@ -909,6 +914,7 @@ export class FakeApi {
     releaseOps: true,
     textPaging: true,
     servedList: true,
+    v12: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -935,6 +941,7 @@ export class FakeApi {
       releaseOps: true,
       textPaging: true,
       servedList: true,
+      v12: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1118,7 +1125,8 @@ export class FakeApi {
       const op = OPERATIONS[route.id];
       const olderRoute =
         (route.id === 'list_project_members' && !this.compat.membersRoute) ||
-        (OLDER_RELEASE_OPS.has(route.id) && !this.compat.releaseOps);
+        (OLDER_RELEASE_OPS.has(route.id) && !this.compat.releaseOps) ||
+        (V12_OPS.has(route.id) && !this.compat.v12);
       if (olderRoute) {
         this.send(res, {
           status: 404,
@@ -1469,11 +1477,64 @@ export class FakeApi {
     };
   }
 
+  /** An item's links as seen from it, with the other item's status category. */
+  private linksOf(i: FakeItem): { kind: string; category: string }[] {
+    const out: { kind: string; category: string }[] = [];
+    for (const l of this.store.links) {
+      const from = l.fromId === i.id;
+      if (!from && l.toId !== i.id) continue;
+      const other = this.store.items.find((x) => x.id === (from ? l.toId : l.fromId));
+      if (!other) continue;
+      const kind =
+        l.kind === 'relates'
+          ? 'relates'
+          : from
+            ? l.kind
+            : l.kind === 'blocks'
+              ? 'blocked_by'
+              : 'duplicated_by';
+      out.push({ kind, category: this.statusOf(other).category });
+    }
+    return out;
+  }
+
+  private linkCounts(i: FakeItem): {
+    blocks: number;
+    blocked_by: number;
+    relates: number;
+    duplicates: number;
+    duplicated_by: number;
+    blocked_by_open: number;
+  } {
+    const links = this.linksOf(i);
+    const count = (kind: string) => links.filter((l) => l.kind === kind).length;
+    return {
+      blocks: count('blocks'),
+      blocked_by: count('blocked_by'),
+      relates: count('relates'),
+      duplicates: count('duplicates'),
+      duplicated_by: count('duplicated_by'),
+      blocked_by_open: links.filter(
+        (l) => l.kind === 'blocked_by' && ['not_started', 'started'].includes(l.category),
+      ).length,
+    };
+  }
+
+  /** The latest of the item's own change and its comments. */
+  private activityAt(i: FakeItem): string {
+    const times = [
+      i.updatedAt,
+      ...this.store.comments.filter((c) => c.itemId === i.id).map((c) => c.createdAt),
+    ];
+    return times.sort()[times.length - 1] ?? i.updatedAt;
+  }
+
   /** The operations this fake serves now, sorted, as /v1/meta lists them. */
   private servedOperations(): string[] {
     return (Object.keys(OPERATIONS) as OperationId[])
       .filter((id) => this.compat.releaseOps || !OLDER_RELEASE_OPS.has(id))
       .filter((id) => this.compat.membersRoute || id !== 'list_project_members')
+      .filter((id) => this.compat.v12 || !V12_OPS.has(id))
       .sort();
   }
 
@@ -1536,7 +1597,17 @@ export class FakeApi {
   private dispatch(id: OperationId, call: Call): Handled {
     switch (id) {
       case 'get_me':
-        return { status: 200, body: call.identity };
+        // From 1.2.0, org.test is always sent (false unless an identity sets it).
+        return {
+          status: 200,
+          body: this.compat.v12
+            ? { ...call.identity, org: { test: false, ...call.identity.org } }
+            : call.identity,
+        };
+      case 'search_pages':
+        return this.searchPages(call);
+      case 'list_members':
+        return this.listMembers(call);
       case 'list_projects':
         return this.listProjects(call);
       case 'describe_project':
@@ -1794,10 +1865,35 @@ export class FakeApi {
       const since = Date.parse(query.updated_since);
       items = items.filter((i) => Date.parse(i.updatedAt) > since);
     }
+    if (this.compat.v12) {
+      const kinds = query.has_link as string[] | undefined;
+      if (kinds) {
+        items = items.filter((i) =>
+          kinds.some((spec) => {
+            const [kind, category] = spec.split(':');
+            return this.linksOf(i).some(
+              (l) =>
+                l.kind === kind &&
+                (category === undefined ||
+                  (category === 'open'
+                    ? ['not_started', 'started'].includes(l.category)
+                    : l.category === category)),
+            );
+          }),
+        );
+      }
+      if (typeof query.activity_since === 'string') {
+        const since = Date.parse(query.activity_since);
+        items = items.filter((i) => Date.parse(this.activityAt(i)) >= since);
+      }
+    }
     const full = query.detail === 'full';
     const render = (i: FakeItem): ItemSearchResult => ({
       ...this.summary(i),
       ...(full ? { description: i.description, custom: this.customOut(i) } : {}),
+      ...(this.compat.v12
+        ? { link_counts: this.linkCounts(i), activity_at: this.activityAt(i) }
+        : {}),
     });
 
     const words =
@@ -2971,6 +3067,86 @@ export class FakeApi {
       throw err;
     }
     return x;
+  }
+
+  private searchPages({ identity, query }: Call): Handled {
+    const words = lower(String(query.q)).split(/\s+/).filter(Boolean);
+    const refs = query.channel as string[] | undefined;
+    const limited = identity.token.limits.channels;
+    const channels = refs
+      ? refs.map((ref) => this.channel(ref, identity))
+      : this.store.channels.filter(
+          (c) =>
+            !c.direct &&
+            c.memberIds.includes(identity.user.id) &&
+            (!limited || limited.some((l) => l.id === c.id)),
+        );
+    const ids = new Set(channels.map((c) => c.id));
+    const hits = this.store.pages
+      .filter((x) => ids.has(x.channelId))
+      .filter((x) => words.every((w) => lower(`${x.title} ${x.body}`).includes(w)))
+      .map((x, n) => {
+        const c = this.store.channels.find((ch) => ch.id === x.channelId)!;
+        const at = Math.max(0, lower(x.body).indexOf(words[0] ?? ''));
+        return {
+          id: x.id,
+          title: x.title,
+          parent_id: x.parentId,
+          channel: { id: c.id, name: c.name },
+          updated_at: x.updatedAt,
+          match: {
+            score: 1 / (n + 1),
+            title_highlight: x.title,
+            snippet: x.body === '' ? null : x.body.slice(Math.max(0, at - 40), at + 80),
+          },
+        };
+      });
+    const limit = Math.min(50, (query.limit as number | undefined) ?? 25);
+    return { status: 200, body: this.page(hits, { ...query, limit }) };
+  }
+
+  private listMembers({ identity, query }: Call): Handled {
+    const q = typeof query.q === 'string' ? lower(query.q) : undefined;
+    const { channels, projects } = identity.token.limits;
+    // A limited token sees only the people in the channels it reaches.
+    const reached =
+      channels === null && projects === null
+        ? undefined
+        : new Set(
+            this.store.channels
+              .filter(
+                (c) =>
+                  !c.direct &&
+                  ((channels?.some((l) => l.id === c.id) ?? false) ||
+                    (projects?.some(
+                      (l) => this.store.projects.find((p) => p.id === l.id)?.channelId === c.id,
+                    ) ??
+                      false)),
+              )
+              .flatMap((c) => c.memberIds),
+          );
+    const members = this.store.users
+      .filter((u) => reached === undefined || reached.has(u.id))
+      .filter(
+        (u) =>
+          q === undefined ||
+          lower(u.display_name).includes(q) ||
+          (u.email !== null && lower(u.email).includes(q)),
+      )
+      .sort((a, b) =>
+        a.display_name === b.display_name
+          ? a.id < b.id
+            ? -1
+            : 1
+          : a.display_name < b.display_name
+            ? -1
+            : 1,
+      )
+      .map((u) => ({
+        ...u,
+        role: u.id === USERS.me.id ? ('owner' as const) : ('member' as const),
+      }));
+    return { status: 200, body: this.page(members, query) };
   }
 
   private listPages({ identity, params, query }: Call): Handled {

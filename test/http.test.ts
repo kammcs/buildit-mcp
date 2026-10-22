@@ -342,7 +342,7 @@ describe('HTTP mode: every toolset', () => {
     };
     try {
       const all = await open(TOKENS.full, 'all', true);
-      expect(await toolNames(all)).toHaveLength(40);
+      expect(await toolNames(all)).toHaveLength(41);
       expect(all.getInstructions()).toContain('apply_plan');
       const templates = (await all.listResourceTemplates()).resourceTemplates;
       expect(templates.map((t) => t.uriTemplate)).toEqual([
@@ -363,7 +363,7 @@ describe('HTTP mode: every toolset', () => {
           'plan_sprint',
           'write_release_notes',
         ],
-        pages: ['create_page', 'get_page', 'list_pages', 'update_page'],
+        pages: ['create_page', 'get_page', 'list_pages', 'search_pages', 'update_page'],
         chat: ['list_channels', 'read_channel', 'read_thread'],
         admin: [
           'create_channel',

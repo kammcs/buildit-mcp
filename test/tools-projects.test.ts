@@ -114,6 +114,51 @@ describe('describe_project', () => {
   });
 });
 
+describe('find_users without a project', () => {
+  it("finds the org's people through the members route", async () => {
+    const c = await client(TOKENS.read);
+    const r = await c.call('find_users', { query: 'alex' });
+    expect(r.isError).toBe(false);
+    expect(api.requests.at(-1)?.path).toBe('/v1/members');
+    expect(r.structured).toMatchObject({ project: null, next_cursor: null });
+    const users = r.structured.users as { email: string; is_project_admin: boolean | null }[];
+    expect(users.map((u) => u.email)).toEqual(['alex.one@example.com', 'alex.two@example.com']);
+    expect(users[0]?.is_project_admin).toBeNull();
+    expect(r.text).toContain('2 person(s) in the org matching "alex":');
+    const nobody = await c.call('find_users', { query: 'nobody@example.org' });
+    expect(nobody.text).toContain('No one in the org matches');
+  });
+
+  it('finds "me" in the org', async () => {
+    const c = await client(TOKENS.read);
+    const r = await c.call('find_users', { query: 'me' });
+    expect((r.structured.users as { email: string }[]).map((u) => u.email)).toEqual([
+      'test.user@example.com',
+    ]);
+  });
+
+  it('defuses a hostile name', async () => {
+    api.store.users[1]!.display_name = HOSTILE.slice(0, 60);
+    const c = await client(TOKENS.read);
+    const r = await c.call('find_users', {});
+    assertDefused(r.text);
+    assertDefused(JSON.stringify(r.structured));
+  });
+
+  it("says when the API doesn't serve it yet", async () => {
+    api.compat.v12 = false;
+    api.meta = { api_version: '1.1.0', min_mcp_version: '0.1.0', deprecations: [] };
+    const c = await client(TOKENS.read);
+    await c.call('whoami');
+    const r = await c.call('find_users', { query: 'sam' });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("doesn't serve list_members yet");
+    // With a project it works as before.
+    const inProject = await c.call('find_users', { project: 'DEMO', query: 'sam' });
+    expect(inProject.isError).toBe(false);
+  });
+});
+
 describe('find_users', () => {
   it('searches the members by part of a name or email, through the members route', async () => {
     const c = await client(TOKENS.read);

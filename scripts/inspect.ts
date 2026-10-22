@@ -132,6 +132,7 @@ const MORE_TOOLS = [
   'plan_release',
   'write_release_notes',
   'list_pages',
+  'search_pages',
   'get_page',
   'create_page',
   'update_page',

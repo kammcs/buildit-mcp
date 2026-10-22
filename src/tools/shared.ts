@@ -341,6 +341,17 @@ export const SearchItemOutSchema = ItemOutSchema.extend({
     .describe('With a text query only.'),
   description: z.string().optional().describe('With detail="full" only; wrapped, may be cut.'),
   custom: z.array(CustomOutSchema).optional().describe('With detail="full" only.'),
+  link_counts: z
+    .object({
+      blocks: z.number(),
+      blocked_by: z.number(),
+      relates: z.number(),
+      duplicates: z.number(),
+      duplicated_by: z.number(),
+      blocked_by_open: z.number(),
+    })
+    .optional(),
+  activity_at: z.string().optional(),
 });
 export type SearchItemOut = z.infer<typeof SearchItemOutSchema>;
 
@@ -364,6 +375,18 @@ export function searchItemOut(i: ItemSearchResult, maxDescription: number): Sear
     });
   }
   if (i.custom !== undefined) out.custom = i.custom.map(customOut);
+  if (i.link_counts !== undefined) {
+    const c = i.link_counts;
+    out.link_counts = {
+      blocks: c.blocks,
+      blocked_by: c.blocked_by,
+      relates: c.relates,
+      duplicates: c.duplicates,
+      duplicated_by: c.duplicated_by,
+      blocked_by_open: c.blocked_by_open,
+    };
+  }
+  if (i.activity_at !== undefined) out.activity_at = i.activity_at;
   return out;
 }
 

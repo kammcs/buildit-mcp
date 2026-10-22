@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { ApiError } from '../api/client.js';
 import type {
   DescribeProjectResponse,
+  OrgMember,
   ProjectMember,
   ProjectSummary,
 } from '../api/generated/schemas.js';
@@ -117,17 +118,17 @@ const MemberOut = z.object({
   name: z.string(),
   email: z.string().nullable(),
   role: z.string().describe('owner, admin, member or guest (in the org).'),
-  is_project_admin: z.boolean(),
+  is_project_admin: z.boolean().nullable().describe('Null without a project.'),
 });
 type MemberOut = z.infer<typeof MemberOut>;
 
-function memberOut(m: ProjectMember): MemberOut {
+function memberOut(m: ProjectMember | OrgMember): MemberOut {
   return {
     id: m.id,
     name: label(m.display_name, PERSON_NAME_CHARS),
     email: m.email === null ? null : label(m.email, 320),
     role: m.role,
-    is_project_admin: m.is_project_admin,
+    is_project_admin: typeof m.is_project_admin === 'boolean' ? m.is_project_admin : null,
   };
 }
 
@@ -381,18 +382,20 @@ function noMembersRoute(err: unknown): boolean {
 export const findUsersTool = defineTool({
   name: 'find_users',
   toolset: 'items',
-  title: 'Find people in a project',
+  title: 'Find people',
   description:
-    'Finds people among a project\'s members, the people who can be assigned items or mentioned there: by part of a name or email (case-insensitive), or "me". Leave query out to list everyone, by display name, one page at a time (pass next_cursor as cursor for more). Returns names, emails, org roles and whether each is a project admin. Use the email (or "me") to assign or mention someone; a display name works only when it is unique, and this tells two people with the same name apart.',
-  scopes: scopesOf('list_project_members'),
+    'Finds people among a project\'s members (who can be assigned or mentioned there) or, without project, the org\'s people the token reaches: by part of a name or email (case-insensitive), or "me". Leave query out to list everyone, by display name, one page at a time (pass next_cursor as cursor for more). Returns names, emails, org roles and whether each is a project admin. Use the email (or "me") to assign or mention someone; a display name works only when it is unique, and this tells two people with the same name apart.',
+  scopes: scopesOf('list_project_members', 'list_members'),
   annotations: {
-    title: 'Find people in a project',
+    title: 'Find people',
     readOnlyHint: true,
     idempotentHint: true,
     openWorldHint: false,
   },
   inputSchema: z.object({
-    project: ProjectKeyInput,
+    project: ProjectKeyInput.optional().describe(
+      'A project key: its members. Leave it out for the whole org.',
+    ),
     query: z
       .string()
       .max(100)
@@ -404,7 +407,7 @@ export const findUsersTool = defineTool({
     limit: limitInput(100, 25),
   }),
   outputSchema: z.object({
-    project: z.string(),
+    project: z.string().nullable(),
     users: z.array(MemberOut),
     next_cursor: z.string().nullable(),
   }),
@@ -415,12 +418,12 @@ export const findUsersTool = defineTool({
     if (normalize(query) === 'me') me = (await ctx.api.getMe(ctx.apiOptions)).user;
     const q = me ? (me.email ?? me.display_name) : query;
 
-    let members: ProjectMember[];
+    let members: (ProjectMember | OrgMember)[];
     let next: string | null;
     let fallback = false;
-    try {
-      const page = await ctx.call('list_project_members', {
-        path: { key: args.project },
+    const project = args.project;
+    if (project === undefined) {
+      const page = await ctx.call('list_members', {
         query: {
           ...(q !== '' ? { q: q.slice(0, 100) } : {}),
           ...(args.cursor ? { cursor: args.cursor } : {}),
@@ -429,18 +432,31 @@ export const findUsersTool = defineTool({
       });
       members = page.items;
       next = page.next_cursor;
-    } catch (err) {
-      if (!noMembersRoute(err)) throw err;
-      // An older API: filter describe_project's members here, in one page.
-      fallback = true;
-      const needle = normalize(q);
-      members = (await readProject(ctx, args.project)).members.filter(
-        (m) =>
-          needle === '' ||
-          normalize(m.display_name).includes(needle) ||
-          (m.email !== null && normalize(m.email).includes(needle)),
-      );
-      next = null;
+    } else {
+      try {
+        const page = await ctx.call('list_project_members', {
+          path: { key: project },
+          query: {
+            ...(q !== '' ? { q: q.slice(0, 100) } : {}),
+            ...(args.cursor ? { cursor: args.cursor } : {}),
+            limit,
+          },
+        });
+        members = page.items;
+        next = page.next_cursor;
+      } catch (err) {
+        if (!noMembersRoute(err)) throw err;
+        // An older API: filter describe_project's members here, in one page.
+        fallback = true;
+        const needle = normalize(q);
+        members = (await readProject(ctx, project)).members.filter(
+          (m) =>
+            needle === '' ||
+            normalize(m.display_name).includes(needle) ||
+            (m.email !== null && normalize(m.email).includes(needle)),
+        );
+        next = null;
+      }
     }
     if (me) {
       const id = me.id;
@@ -448,11 +464,12 @@ export const findUsersTool = defineTool({
       next = null;
     }
     const users = members.slice(0, limit).map(memberOut);
-    const key = args.project.toUpperCase();
+    const key = project === undefined ? null : project.toUpperCase();
+
     const header =
       users.length === 0
-        ? `No member of ${key} matches${query ? ` "${sanitizeLabel(query, 100)}"` : ''}${args.cursor ? ' in this page' : ''}.`
-        : `${users.length} member(s) of ${key}${query ? ` matching "${sanitizeLabel(query, 100)}"` : ''}:`;
+        ? `No ${key === null ? 'one in the org' : `member of ${key}`} matches${query ? ` "${sanitizeLabel(query, 100)}"` : ''}${args.cursor ? ' in this page' : ''}.`
+        : `${users.length} ${key === null ? 'person(s) in the org' : `member(s) of ${key}`}${query ? ` matching "${sanitizeLabel(query, 100)}"` : ''}:`;
     const lines = [
       header,
       ...(users.length > 0

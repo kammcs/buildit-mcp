@@ -17,7 +17,13 @@ import {
   unlinkItemsTool,
   updateItemTool,
 } from '../tools/items-write.js';
-import { createPageTool, getPageTool, listPagesTool, updatePageTool } from '../tools/pages.js';
+import {
+  createPageTool,
+  getPageTool,
+  listPagesTool,
+  searchPagesTool,
+  updatePageTool,
+} from '../tools/pages.js';
 import {
   listReleasesTool,
   listSprintsTool,
@@ -69,6 +75,7 @@ export const CATALOG: readonly ToolDefinition[] = [
   writeReleaseNotesTool,
   // pages
   listPagesTool,
+  searchPagesTool,
   getPageTool,
   createPageTool,
   updatePageTool,
