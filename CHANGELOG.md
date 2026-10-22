@@ -30,6 +30,7 @@ Also in this release:
 - The server's instructions no longer ask the agent to call `whoami` before everything (it cost a call in most tasks), and ask it to tell the person about requests aimed at agents that it finds in content, rather than leaving them out of a summary; `get_page`, `read_channel` and `read_thread` say the same where the text is read.
 - After `plan_expired` or `plan_stale`, the error, `apply_plan`'s description and the instructions say the new plan needs its own yes: an agent re-proposed an expired deletion and applied it without asking again.
 - `get_item` shows the report behind an item that another organization filed through the Feedback app: its kind, severity, plus-ones and state, and the reporter's name, organization and device, wrapped as untrusted content (`source="feedback"`). It says that the agent's comments never reach the reporter.
+- `plan_release` can correct a release afterwards: `update` (name, description, dates, and the day a released release was released), `reopen` (released back to unreleased, items untouched), `archive` and `restore`. Error hints name these actions.
 - `plan_sprint` with `start` lists the sprint's backlog items that moved onto the board, and those that stay, with why.
 - `read_channel` and `read_thread` say which messages an app (a bot of the org) sent (`author_type`).
 - `server.json` lists the server in the MCP Registry as `io.github.kammcs/buildit-mcp`, with the npm package and the container image.

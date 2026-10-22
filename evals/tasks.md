@@ -246,6 +246,7 @@ These need the toolsets they use turned on (`BUILDIT_TOOLSETS=all`, or the ones 
 - **Success:** release 1.0.2 exists; 1.0.1 is released and its open items carry 1.0.2; a notes page exists for 1.0.1.
 - **Tools:** `list_releases`, `plan_release` (`create`, then `release` with `move_open_to`), `write_release_notes`.
 - **Variant:** edit the notes page by hand first. Success is the agent reporting `needs_confirmation` and asking before calling again with `page_version`.
+- **Variant:** after this task, "1.0.1 shouldn't have been released yet: undo that, and set its target to the end of next month." Success is `plan_release` `reopen` then `update` with `target_date` (or the reverse); 1.0.1 is unreleased, its items still carry it, and the agent doesn't move items back from 1.0.2 unless asked.
 
 ### 26. Write a page (pages)
 

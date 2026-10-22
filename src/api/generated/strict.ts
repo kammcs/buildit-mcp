@@ -707,6 +707,18 @@ export const ErrorSchema = z.strictObject({
       hint: z.string().optional(),
       details: z.strictObject({}),
     }),
+    z.strictObject({
+      code: z.literal('release_archived'),
+      message: z.string().min(1),
+      hint: z.string().optional(),
+      details: z.strictObject({ ref: z.string().max(400) }),
+    }),
+    z.strictObject({
+      code: z.literal('release_not_released'),
+      message: z.string().min(1),
+      hint: z.string().optional(),
+      details: z.strictObject({ ref: z.string().max(400) }),
+    }),
   ]),
 });
 export type Error = z.infer<typeof ErrorSchema>;
@@ -1007,6 +1019,15 @@ export const UpdatePageRequestSchema = z.strictObject({
   position: z.int().min(0).optional(),
 });
 export type UpdatePageRequest = z.infer<typeof UpdatePageRequestSchema>;
+
+export const UpdateReleaseRequestSchema = z.strictObject({
+  name: z.string().min(1).max(80).optional(),
+  description: z.string().max(10000).nullable().optional(),
+  start_date: DateSchema.nullable().optional(),
+  target_date: DateSchema.nullable().optional(),
+  released_on: DateSchema.optional(),
+});
+export type UpdateReleaseRequest = z.infer<typeof UpdateReleaseRequestSchema>;
 
 export const UserSchema = z.strictObject({
   id: UuidSchema,
@@ -1795,6 +1816,7 @@ export const QUERY_SCHEMAS = {
   add_release_items: z.strictObject({}),
   add_sprint_items: z.strictObject({}),
   apply_plan: z.strictObject({}),
+  archive_release: z.strictObject({}),
   complete_sprint: z.strictObject({}),
   create_channel: z.strictObject({}),
   create_item: z.strictObject({}),
@@ -1867,6 +1889,8 @@ export const QUERY_SCHEMAS = {
   remove_link: z.strictObject({}),
   remove_release_items: z.strictObject({}),
   remove_sprint_items: z.strictObject({}),
+  reopen_release: z.strictObject({}),
+  restore_release: z.strictObject({}),
   search_items: z.strictObject({
     q: z.string().min(1).max(200).optional(),
     project: z.array(ProjectRefSchema).max(20).optional(),
@@ -1904,6 +1928,7 @@ export const QUERY_SCHEMAS = {
   transition_item: z.strictObject({}),
   update_item: z.strictObject({}),
   update_page: z.strictObject({}),
+  update_release: z.strictObject({}),
 } as const;
 
 /** Each operation's request body schema, or null when it takes none. */
@@ -1913,6 +1938,7 @@ export const REQUEST_SCHEMAS = {
   add_release_items: PlanningItemsRequestSchema,
   add_sprint_items: PlanningItemsRequestSchema,
   apply_plan: EmptyRequestSchema,
+  archive_release: null,
   complete_sprint: CompleteSprintRequestSchema,
   create_channel: CreateChannelRequestSchema,
   create_item: CreateItemRequestSchema,
@@ -1944,11 +1970,14 @@ export const REQUEST_SCHEMAS = {
   remove_link: null,
   remove_release_items: PlanningItemsRequestSchema,
   remove_sprint_items: PlanningItemsRequestSchema,
+  reopen_release: null,
+  restore_release: null,
   search_items: null,
   start_sprint: StartSprintRequestSchema,
   transition_item: TransitionItemRequestSchema,
   update_item: UpdateItemRequestSchema,
   update_page: UpdatePageRequestSchema,
+  update_release: UpdateReleaseRequestSchema,
 } as const;
 
 /** Each operation's success response schema. */
@@ -1958,6 +1987,7 @@ export const RESPONSE_SCHEMAS = {
   add_release_items: ReleaseItemsResponseSchema,
   add_sprint_items: SprintItemsResponseSchema,
   apply_plan: ApplyPlanResponseSchema,
+  archive_release: ReleaseResponseSchema,
   complete_sprint: CompleteSprintResponseSchema,
   create_channel: CreateChannelResponseSchema,
   create_item: CreateItemResponseSchema,
@@ -1989,11 +2019,14 @@ export const RESPONSE_SCHEMAS = {
   remove_link: RemoveLinkResponseSchema,
   remove_release_items: ReleaseItemsResponseSchema,
   remove_sprint_items: SprintItemsResponseSchema,
+  reopen_release: ReleaseResponseSchema,
+  restore_release: ReleaseResponseSchema,
   search_items: SearchItemsResponseSchema,
   start_sprint: StartSprintResponseSchema,
   transition_item: TransitionItemResponseSchema,
   update_item: ItemWriteResponseSchema,
   update_page: PageResponseSchema,
+  update_release: ReleaseResponseSchema,
 } as const;
 
 export type AddCommentBody = z.input<typeof AddCommentRequestSchema>;
@@ -2006,6 +2039,7 @@ export type AddSprintItemsBody = z.input<typeof PlanningItemsRequestSchema>;
 export type AddSprintItemsQuery = z.input<typeof QUERY_SCHEMAS.add_sprint_items>;
 export type ApplyPlanBody = z.input<typeof EmptyRequestSchema>;
 export type ApplyPlanQuery = z.input<typeof QUERY_SCHEMAS.apply_plan>;
+export type ArchiveReleaseQuery = z.input<typeof QUERY_SCHEMAS.archive_release>;
 export type CompleteSprintBody = z.input<typeof CompleteSprintRequestSchema>;
 export type CompleteSprintQuery = z.input<typeof QUERY_SCHEMAS.complete_sprint>;
 export type CreateChannelBody = z.input<typeof CreateChannelRequestSchema>;
@@ -2050,6 +2084,8 @@ export type RemoveReleaseItemsBody = z.input<typeof PlanningItemsRequestSchema>;
 export type RemoveReleaseItemsQuery = z.input<typeof QUERY_SCHEMAS.remove_release_items>;
 export type RemoveSprintItemsBody = z.input<typeof PlanningItemsRequestSchema>;
 export type RemoveSprintItemsQuery = z.input<typeof QUERY_SCHEMAS.remove_sprint_items>;
+export type ReopenReleaseQuery = z.input<typeof QUERY_SCHEMAS.reopen_release>;
+export type RestoreReleaseQuery = z.input<typeof QUERY_SCHEMAS.restore_release>;
 export type SearchItemsQuery = z.input<typeof QUERY_SCHEMAS.search_items>;
 export type StartSprintBody = z.input<typeof StartSprintRequestSchema>;
 export type StartSprintQuery = z.input<typeof QUERY_SCHEMAS.start_sprint>;
@@ -2059,6 +2095,8 @@ export type UpdateItemBody = z.input<typeof UpdateItemRequestSchema>;
 export type UpdateItemQuery = z.input<typeof QUERY_SCHEMAS.update_item>;
 export type UpdatePageBody = z.input<typeof UpdatePageRequestSchema>;
 export type UpdatePageQuery = z.input<typeof QUERY_SCHEMAS.update_page>;
+export type UpdateReleaseBody = z.input<typeof UpdateReleaseRequestSchema>;
+export type UpdateReleaseQuery = z.input<typeof QUERY_SCHEMAS.update_release>;
 
 /** Each operation's query and body types, for typed calls. */
 export interface OperationIO {
@@ -2067,6 +2105,7 @@ export interface OperationIO {
   add_release_items: { query: AddReleaseItemsQuery; body: AddReleaseItemsBody };
   add_sprint_items: { query: AddSprintItemsQuery; body: AddSprintItemsBody };
   apply_plan: { query: ApplyPlanQuery; body: ApplyPlanBody };
+  archive_release: { query: ArchiveReleaseQuery; body: undefined };
   complete_sprint: { query: CompleteSprintQuery; body: CompleteSprintBody };
   create_channel: { query: CreateChannelQuery; body: CreateChannelBody };
   create_item: { query: CreateItemQuery; body: CreateItemBody };
@@ -2098,9 +2137,12 @@ export interface OperationIO {
   remove_link: { query: RemoveLinkQuery; body: undefined };
   remove_release_items: { query: RemoveReleaseItemsQuery; body: RemoveReleaseItemsBody };
   remove_sprint_items: { query: RemoveSprintItemsQuery; body: RemoveSprintItemsBody };
+  reopen_release: { query: ReopenReleaseQuery; body: undefined };
+  restore_release: { query: RestoreReleaseQuery; body: undefined };
   search_items: { query: SearchItemsQuery; body: undefined };
   start_sprint: { query: StartSprintQuery; body: StartSprintBody };
   transition_item: { query: TransitionItemQuery; body: TransitionItemBody };
   update_item: { query: UpdateItemQuery; body: UpdateItemBody };
   update_page: { query: UpdatePageQuery; body: UpdatePageBody };
+  update_release: { query: UpdateReleaseQuery; body: UpdateReleaseBody };
 }

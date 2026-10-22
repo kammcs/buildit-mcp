@@ -768,6 +768,14 @@ export function seedStore(): FakeStore {
 // Errors
 // ---------------------------------------------------------------------------
 
+/** The release operations an older API doesn't serve (compat.releaseOps false). */
+const OLDER_RELEASE_OPS = new Set<OperationId>([
+  'update_release',
+  'reopen_release',
+  'archive_release',
+  'restore_release',
+]);
+
 class FakeError extends Error {
   constructor(
     readonly code: ErrorCode,
@@ -888,8 +896,8 @@ export class FakeApi {
   private server: Server | undefined;
   private baseUrl = '';
   private clock = Date.parse('2026-10-07T15:00:00Z');
-  /** Answer like an older API: without error hints, transition moves or the members route. */
-  compat = { hints: true, moves: true, membersRoute: true };
+  /** Answer like an older API: without error hints, transition moves, the members route or the release operations. */
+  compat = { hints: true, moves: true, membersRoute: true, releaseOps: true };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
 
@@ -907,7 +915,7 @@ export class FakeApi {
   reset(): void {
     this.store = seedStore();
     this.identities = structuredClone(this.initialIdentities);
-    this.compat = { hints: true, moves: true, membersRoute: true };
+    this.compat = { hints: true, moves: true, membersRoute: true, releaseOps: true };
     this.requests.length = 0;
     this.violations.length = 0;
     this.queues.clear();
@@ -1082,7 +1090,10 @@ export class FakeApi {
 
     try {
       const op = OPERATIONS[route.id];
-      if (route.id === 'list_project_members' && !this.compat.membersRoute) {
+      const olderRoute =
+        (route.id === 'list_project_members' && !this.compat.membersRoute) ||
+        (OLDER_RELEASE_OPS.has(route.id) && !this.compat.releaseOps);
+      if (olderRoute) {
         this.send(res, {
           status: 404,
           body: errorBody('not_found', `No route for ${method} ${path}.`, {
@@ -1521,6 +1532,12 @@ export class FakeApi {
         return this.createRelease(call);
       case 'release_version':
         return this.releaseVersion(call);
+      case 'update_release':
+        return this.updateRelease(call);
+      case 'reopen_release':
+      case 'archive_release':
+      case 'restore_release':
+        return this.releaseState(call, id);
       case 'generate_release_notes':
         return this.releaseNotes(call);
       case 'add_release_items':
@@ -2580,6 +2597,80 @@ export class FakeApi {
     }
     release.status = 'released';
     release.releasedAt = b.released_on ? `${b.released_on}T00:00:00Z` : this.now();
+    return { status: 200, body: { release: this.releaseOut(p, release) } };
+  }
+
+  private updateRelease({ identity, params, body }: Call): Handled {
+    const p = this.project(params.key ?? '', identity);
+    this.requireAdmin(p, identity);
+    const release = this.release(p, params.release ?? '');
+    const b = body as {
+      name?: string;
+      description?: string | null;
+      start_date?: string | null;
+      target_date?: string | null;
+      released_on?: string;
+    };
+    if (Object.keys(b).length === 0) {
+      throw new FakeError('validation', {
+        fields: [{ path: '', message: 'Send at least one field.' }],
+      });
+    }
+    if (b.released_on !== undefined && release.status !== 'released') {
+      throw new FakeError(
+        release.status === 'archived' ? 'release_archived' : 'release_not_released',
+        { ref: release.name },
+        release.status === 'archived'
+          ? `${release.name} is archived.`
+          : `${release.name} isn't released, so it has no release day to correct.`,
+      );
+    }
+    if (
+      b.name !== undefined &&
+      p.releases.some((r) => r.id !== release.id && lower(r.name) === lower(b.name ?? ''))
+    ) {
+      throw new FakeError('validation', {
+        fields: [{ path: 'name', message: 'A release of this project already has that name.' }],
+      });
+    }
+    const start = b.start_date !== undefined ? b.start_date : release.startDate;
+    const target = b.target_date !== undefined ? b.target_date : release.targetDate;
+    if (start !== null && target !== null && start > target) {
+      throw new FakeError('validation', {
+        fields: [{ path: 'start_date', message: 'start_date must be on or before target_date.' }],
+      });
+    }
+    if (b.name !== undefined) release.name = b.name.trim();
+    if (b.description !== undefined) release.description = b.description;
+    release.startDate = start;
+    release.targetDate = target;
+    if (b.released_on !== undefined) release.releasedAt = `${b.released_on}T00:00:00Z`;
+    return { status: 200, body: { release: this.releaseOut(p, release) } };
+  }
+
+  /** reopen, archive and restore: a release's status, and nothing else. */
+  private releaseState(
+    { identity, params }: Call,
+    op: 'reopen_release' | 'archive_release' | 'restore_release',
+  ): Handled {
+    const p = this.project(params.key ?? '', identity);
+    this.requireAdmin(p, identity);
+    const release = this.release(p, params.release ?? '');
+    if (op === 'reopen_release') {
+      if (release.status === 'archived') {
+        throw new FakeError(
+          'release_archived',
+          { ref: release.name },
+          `${release.name} is archived.`,
+        );
+      }
+      release.status = 'unreleased';
+      release.releasedAt = null;
+    } else if (op === 'archive_release') {
+      release.status = 'archived';
+    } else if (release.status === 'archived') {
+      release.status = release.releasedAt === null ? 'unreleased' : 'released';
+    }
     return { status: 200, body: { release: this.releaseOut(p, release) } };
   }
 
