@@ -67,7 +67,7 @@ src/
                         unlink_items, rank_item
   tools/comments.ts     list_comments, add_comment
   tools/planning.ts     list_sprints, plan_sprint, list_releases, plan_release, write_release_notes
-  tools/pages.ts        list_pages, get_page, create_page, update_page
+  tools/pages.ts        list_pages, search_pages, get_page, create_page, update_page
   tools/chat.ts         list_channels, read_channel, read_thread
   tools/plans.ts        get_workflow, list_work_types, the propose_* tools, apply_plan
   tools/setup.ts        create_channel, create_project

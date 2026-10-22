@@ -68,7 +68,7 @@ describe('whoami', () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({
       user: { id: USERS.me.id, name: 'Test User', email: 'test.user@example.com' },
-      org: { id: uid(5), name: 'Example Org' },
+      org: { id: uid(5), name: 'Example Org', test: false },
       token: { name: 'Test token', expires_at: '2030-01-01T00:00:00Z' },
       scopes: ['projects:read'],
       limits: { projects: null, channels: null },
@@ -94,7 +94,7 @@ describe('whoami', () => {
       server: {
         name: 'buildit-mcp',
         version: SERVER_VERSION,
-        api_version: '1.1.0',
+        api_version: '1.2.0',
         update_required: false,
         not_served: [],
       },
@@ -190,7 +190,7 @@ describe('whoami', () => {
       expect(result.structuredContent).toMatchObject({ server: { update_required: true } });
       expect(JSON.stringify(result.content)).toContain('Ask the person to update it.');
     } finally {
-      api.meta = { api_version: '1.1.0', min_mcp_version: '0.1.0', deprecations: [] };
+      api.meta = { api_version: '1.2.0', min_mcp_version: '0.1.0', deprecations: [] };
     }
   });
 
@@ -214,6 +214,22 @@ describe('whoami', () => {
       server: { api_version: '1.0.0', not_served: null },
     });
     expect(JSON.stringify(older.content)).not.toContain("doesn't serve");
+  });
+
+  it('says when the org is a test org, and null on an older API', async () => {
+    api.identities[TOKENS.read] = {
+      ...api.identities[TOKENS.read]!,
+      org: { ...api.identities[TOKENS.read]!.org, test: true },
+    };
+    const client = await connect(TOKENS.read);
+    const result = await client.callTool({ name: 'whoami', arguments: {} });
+    expect(result.structuredContent).toMatchObject({ org: { test: true } });
+    expect(JSON.stringify(result.content)).toContain('This org is a test org');
+    api.reset();
+    api.compat.v12 = false;
+    const older = await client.callTool({ name: 'whoami', arguments: {} });
+    expect(older.structuredContent).toMatchObject({ org: { test: null } });
+    expect(JSON.stringify(older.content)).not.toContain('test org');
   });
 
   it('turns an API refusal into an actionable error result', async () => {

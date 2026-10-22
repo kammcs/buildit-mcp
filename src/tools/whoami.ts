@@ -22,6 +22,10 @@ const OutputSchema = z.object({
   org: z.object({
     id: z.string(),
     name: z.string().nullable(),
+    test: z
+      .boolean()
+      .nullable()
+      .describe('A test org (true); null when the API is older than 1.2.0.'),
   }),
   token: z.object({
     name: z.string().nullable(),
@@ -144,7 +148,11 @@ export const whoamiTool = defineTool({
         name: nullableLabel(me.user.display_name, PERSON_NAME_CHARS),
         email: nullableLabel(me.user.email, 320),
       },
-      org: { id: me.org.id, name: nullableLabel(me.org.name, NAME_CHARS) },
+      org: {
+        id: me.org.id,
+        name: nullableLabel(me.org.name, NAME_CHARS),
+        test: me.org.test ?? null,
+      },
       token: {
         name: nullableLabel(me.token.name, NAME_CHARS),
         expires_at: me.token.expires_at,
@@ -214,6 +222,9 @@ export const whoamiTool = defineTool({
             : `only the ${s.limits.channels.length} channel(s) listed above, among those the user can see`
       }.`,
     ];
+    if (s.org.test === true) {
+      lines.push('This org is a test org: its data may be wiped and seeded by test tools.');
+    }
     if (s.cannot.length > 0) {
       lines.push(`This token can't: ${s.cannot.join('; ')}.`);
     }

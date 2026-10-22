@@ -30,6 +30,7 @@ import {
   requireApi,
   scopesOf,
   searchItemOut,
+  type SearchItemOut,
   SearchItemOutSchema,
   wrapLines,
 } from './shared.js';
@@ -56,6 +57,7 @@ export const searchItemsTool = defineTool({
 - Filters combine with AND; the values inside one filter combine with OR. Statuses, types and labels are names (describe_project lists them); people are "me", "none" (unassigned), an email or a display name.
 - Without query: sorted by rank (or sort) and paged; pass next_cursor as cursor for the next page.
 - With query: best matches first, at most 50 a page, paged with cursor too. With query and sort: only the items matching every word, in the sort's order. query can be an exact key (DEMO-12), a number, or words that must all match the title, description or key.
+- has_link: a link kind (blocks, blocked_by, relates, duplicates, duplicated_by), then optionally ":" and the other item's category or "open" ("blocked_by:open"). activity_since counts comments; updated_since doesn't.
 - detail="concise" (default) returns one line per item; detail="full" adds descriptions (cut at ${FULL_DESCRIPTION_CHARS} characters) and custom fields, at most ${FULL_MAX_LIMIT} per page. For one item, get_item is better.
 Examples: my open work: assignees=["me"], categories=["not_started","started"]. Bugs in a sprint: projects=["DEMO"], types=["Bug"], sprint="active". An epic's children: parent="DEMO-12".`,
   scopes: scopesOf('search_items'),
@@ -102,6 +104,13 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
       .datetime({ offset: true })
       .optional()
       .describe('Only items changed after this time, RFC 3339 (2026-10-01T00:00:00Z).'),
+    has_link: z.array(z.string().min(1).max(40)).min(1).max(10).optional(),
+    activity_since: z
+      .string()
+      .min(1)
+      .max(40)
+      .optional()
+      .describe('RFC 3339: changed or commented on after it.'),
     sort: z
       .array(z.string().regex(SORT_RE))
       .min(1)
@@ -129,6 +138,8 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
     if (args.query !== undefined && (args.sort !== undefined || args.cursor !== undefined)) {
       requireApi(ctx.api, '1.1.0', 'query with sort or cursor');
     }
+    if (args.has_link !== undefined) requireApi(ctx.api, '1.2.0', 'has_link');
+    if (args.activity_since !== undefined) requireApi(ctx.api, '1.2.0', 'activity_since');
     const detail = args.detail ?? 'concise';
     let limit = args.limit;
     let clamped = false;
@@ -149,6 +160,8 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
       ...(args.release !== undefined ? { release: args.release } : {}),
       ...(args.parent !== undefined ? { parent: itemRef(args.parent) } : {}),
       ...(args.updated_since !== undefined ? { updated_since: args.updated_since } : {}),
+      ...(args.has_link ? { has_link: args.has_link } : {}),
+      ...(args.activity_since !== undefined ? { activity_since: args.activity_since } : {}),
       ...(args.sort ? { sort: args.sort } : {}),
       ...(detail === 'full' ? { detail } : {}),
       ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
@@ -165,16 +178,35 @@ Examples: my open work: assignees=["me"], categories=["not_started","started"]. 
       parts.push(
         `${items.length} item(s)${textSearch ? ', best match first' : ''}${clamped ? ` (page size cut to ${FULL_MAX_LIMIT} for detail="full")` : ''}:`,
       );
+      // With the link or activity filters, each line says what matched.
+      const line = (i: SearchItemOut): string => {
+        const extra: string[] = [];
+        const c = i.link_counts;
+        if (args.has_link && c) {
+          const kinds = [
+            c.blocks > 0 ? `blocks ${c.blocks}` : '',
+            c.blocked_by > 0 ? `blocked by ${c.blocked_by} (${c.blocked_by_open} open)` : '',
+            c.relates > 0 ? `relates ${c.relates}` : '',
+            c.duplicates > 0 ? `duplicates ${c.duplicates}` : '',
+            c.duplicated_by > 0 ? `duplicated by ${c.duplicated_by}` : '',
+          ].filter(Boolean);
+          if (kinds.length > 0) extra.push(`links: ${kinds.join(', ')}`);
+        }
+        if (args.activity_since !== undefined && i.activity_at) {
+          extra.push(`activity ${i.activity_at}`);
+        }
+        return [itemLine(i), ...extra].join(' · ');
+      };
       if (detail === 'full') {
         for (const i of items) {
-          parts.push(wrapLines([itemLine(i)], 'item'));
+          parts.push(wrapLines([line(i)], 'item'));
           if (i.description !== undefined) parts.push(i.description);
         }
       } else {
         // The snippet goes into the list's one block as a flattened line.
         const lines = items.map((i, n) => {
           const snippet = page.items[n]?.match?.snippet;
-          return snippet ? `${itemLine(i)}\n  match: ${sanitizeLabel(snippet, 300)}` : itemLine(i);
+          return snippet ? `${line(i)}\n  match: ${sanitizeLabel(snippet, 300)}` : line(i);
         });
         parts.push(wrapLines(lines, 'item_list'));
       }

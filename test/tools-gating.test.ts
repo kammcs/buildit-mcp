@@ -69,6 +69,7 @@ const ALL_TOOLS = [
   'create_page',
   'get_page',
   'list_pages',
+  'search_pages',
   'update_page',
   // chat
   'list_channels',
@@ -105,6 +106,7 @@ const READ_TOOLS = [
   'list_sprints',
   'get_page',
   'list_pages',
+  'search_pages',
   'list_channels',
   'read_channel',
   'read_thread',
@@ -129,7 +131,7 @@ describe('the tool list', () => {
   it('has every tool with every toolset on and every scope', async () => {
     const c = await client(TOKENS.full);
     expect(await names(c)).toEqual(ALL_TOOLS);
-    expect(ALL_TOOLS).toHaveLength(40);
+    expect(ALL_TOOLS).toHaveLength(41);
   });
 
   it('keeps admin and destructive off by default, even for a token with their scopes', async () => {
@@ -166,13 +168,14 @@ describe('the tool list', () => {
         .sort(),
     );
     const pages = await client(tokenWith('pages:read'));
-    expect(await names(pages)).toEqual(['whoami', 'get_page', 'list_pages']);
+    expect(await names(pages)).toEqual(['whoami', 'get_page', 'list_pages', 'search_pages']);
     const pageWriter = await client(tokenWith('pages:write'));
     expect(await names(pageWriter)).toEqual([
       'whoami',
       'create_page',
       'get_page',
       'list_pages',
+      'search_pages',
       'update_page',
     ]);
     const chat = await client(tokenWith('chat:read'));
@@ -240,8 +243,9 @@ describe('the tool list', () => {
     const { tools } = await all.client.listTools();
     expect(JSON.stringify(tools).length).toBeLessThan(160_000);
     const defaults = await client(TOKENS.full, { toolsets: DEFAULT_TOOLSETS });
-    // About 15,000 tokens; raised from 60,000 for get_item's feedback block.
-    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(62_000);
+    // About 16,000 tokens: 60,000 until get_item's feedback block (62,000),
+    // then search_items' link and activity filters and find_users without a project.
+    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(64_000);
   });
 });
 

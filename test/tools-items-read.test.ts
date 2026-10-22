@@ -466,6 +466,64 @@ describe('get_item with include_development', () => {
   });
 });
 
+describe('search_items with link and activity filters', () => {
+  it('finds items with a link of a kind, and counts their links', async () => {
+    const c = await client();
+    const r = await c.call('search_items', { projects: ['DEMO'], has_link: ['blocked_by:open'] });
+    expect(r.isError).toBe(false);
+    expect(api.requests.at(-1)?.query).toContain('has_link=blocked_by%3Aopen');
+    expect(keys(r.structured)).toEqual(['DEMO-43']);
+    expect((r.structured.items as { link_counts: unknown }[])[0]?.link_counts).toEqual({
+      blocks: 0,
+      blocked_by: 1,
+      relates: 0,
+      duplicates: 0,
+      duplicated_by: 0,
+      blocked_by_open: 1,
+    });
+    expect(r.text).toContain('links: blocked by 1 (1 open)');
+    const blockers = await c.call('search_items', { projects: ['DEMO'], has_link: ['blocks'] });
+    expect(keys(blockers.structured)).toEqual(['DEMO-42']);
+  });
+
+  it('finds items with activity since a time, comments included', async () => {
+    const item = api.store.items.find((i) => i.number === 45)!;
+    api.store.comments.push({
+      id: uid(6900),
+      itemId: item.id,
+      authorId: USERS.sam.id,
+      body: 'Still on it.',
+      mentionIds: [],
+      createdAt: '2026-12-02T00:00:00Z',
+      viaAgent: null,
+    });
+    const c = await client();
+    const r = await c.call('search_items', {
+      projects: ['DEMO'],
+      activity_since: '2026-12-01T00:00:00Z',
+    });
+    expect(keys(r.structured)).toEqual(['DEMO-45']);
+    expect((r.structured.items as { activity_at: string }[])[0]?.activity_at).toBe(
+      '2026-12-02T00:00:00Z',
+    );
+    expect(r.text).toContain('activity 2026-12-02T00:00:00Z');
+  });
+
+  it('refuses them when the API is known to be older', async () => {
+    api.compat.v12 = false;
+    api.meta = { api_version: '1.1.0', min_mcp_version: '0.1.0', deprecations: [] };
+    const c = await client();
+    await c.call('whoami');
+    const before = api.requests.length;
+    const r = await c.call('search_items', { has_link: ['blocks'] });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("has_link needs buildIt.Social's agent API 1.2.0 or newer");
+    const a = await c.call('search_items', { activity_since: '2026-12-01T00:00:00Z' });
+    expect(a.text).toContain("activity_since needs buildIt.Social's agent API 1.2.0 or newer");
+    expect(api.requests.length).toBe(before);
+  });
+});
+
 describe('get_item with description_offset', () => {
   const story = () => api.store.items.find((i) => i.number === 42)!;
 

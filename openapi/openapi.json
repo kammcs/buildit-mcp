@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "buildIt.Social agent API",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "summary": "The versioned API that AI agents (through buildit-mcp) use to work with an org's projects, pages and channels.",
     "description": "Every call runs as the token's owner, so the app's permissions, history and notifications apply. v1 only grows: new operations, optional request fields, response fields and enum values; clients must ignore what they don't know. A breaking change is /v2, with /v1 kept for 12 months. The oldest supported buildit-mcp is 0.1.0. Generated from the API's schemas; don't edit by hand."
   },
@@ -56,6 +56,10 @@
     {
       "name": "plans",
       "description": "Destructive and configuration changes: preview, then apply."
+    },
+    {
+      "name": "people",
+      "description": "The org's people."
     }
   ],
   "paths": {
@@ -92,7 +96,7 @@
                   "$ref": "#/components/schemas/MetaResponse"
                 },
                 "example": {
-                  "api_version": "1.1.0",
+                  "api_version": "1.2.0",
                   "min_mcp_version": "0.1.0",
                   "deprecations": [],
                   "operations": [
@@ -186,7 +190,8 @@
                   },
                   "org": {
                     "id": "00000000-0000-4000-8000-000000000003",
-                    "name": "Example Co"
+                    "name": "Example Co",
+                    "test": false
                   },
                   "token": {
                     "id": "00000000-0000-4000-8000-000000000004",
@@ -848,7 +853,7 @@
           "items"
         ],
         "summary": "Search items",
-        "description": "Items by filters (repeat a parameter to match any of its values) and, with `q`, text. Without `q`: sorted (rank by default) and paged with a cursor. With `q`: best first, at most 50 a page, paged with a cursor too; with `q` and `sort`, the items matching every word, in the sort's order. Deleted items never appear.",
+        "description": "Items by filters (repeat a parameter to match any of its values) and, with `q`, text. Without `q`: sorted (rank by default) and paged with a cursor. With `q`: best first, at most 50 a page, paged with a cursor too; with `q` and `sort`, the items matching every word, in the sort's order. Deleted items never appear. `has_link` finds items by their links (blocked_by:open: blocked by an open item), and each result counts its links by kind (link_counts). `updated_since` is the item's own changes; `activity_since` adds comments, and each result's activity_at is its latest activity.",
         "parameters": [
           {
             "name": "q",
@@ -1008,12 +1013,42 @@
             }
           },
           {
+            "name": "has_link",
+            "in": "query",
+            "required": false,
+            "description": "Items with a link of this kind, as seen from the item: `blocks`, `blocked_by`, `relates`, `duplicates` or `duplicated_by`, optionally followed by `:` and the other item's status category (`not_started`, `started`, `done`, `canceled`, or `open` for not started or started). `has_link=blocked_by:open` is the items blocked by an open item. Repeat it to match any of them; it combines with the other filters. Only links whose other item you can see, within the token's limits, count.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "maxItems": 10,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^(blocks|blocked_by|relates|duplicates|duplicated_by)(?::(open|not_started|started|done|canceled))?$"
+              }
+            },
+            "example": [
+              "blocked_by:open"
+            ]
+          },
+          {
             "name": "updated_since",
             "in": "query",
             "required": false,
+            "description": "Items whose own fields changed at or after this time. A comment doesn't change its item: to include items that only got comments, use activity_since.",
             "schema": {
               "$ref": "#/components/schemas/Timestamp"
             }
+          },
+          {
+            "name": "activity_since",
+            "in": "query",
+            "required": false,
+            "description": "Items with activity at or after this time: the item changed, or a comment on it was written or edited (deleted comments don't count). Each result's activity_at is that latest time.",
+            "schema": {
+              "$ref": "#/components/schemas/Timestamp"
+            },
+            "example": "2026-10-01T00:00:00Z"
           },
           {
             "name": "sort",
@@ -1164,7 +1199,16 @@
                       "updated_at": "2026-10-07T14:03:00Z",
                       "started_at": "2026-10-02T10:00:00Z",
                       "completed_at": null,
-                      "canceled_at": null
+                      "canceled_at": null,
+                      "link_counts": {
+                        "blocks": 0,
+                        "blocked_by": 1,
+                        "relates": 2,
+                        "duplicates": 0,
+                        "duplicated_by": 0,
+                        "blocked_by_open": 1
+                      },
+                      "activity_at": "2026-10-07T15:20:00Z"
                     }
                   ],
                   "next_cursor": "{\"s\":\"updated_at:desc\",\"v\":[\"2026-10-07\"],\"id\":\"x\"}"
@@ -7805,6 +7849,306 @@
           "needs_projects": true
         }
       }
+    },
+    "/v1/pages": {
+      "get": {
+        "operationId": "search_pages",
+        "tags": [
+          "pages"
+        ],
+        "summary": "Search pages",
+        "description": "Pages whose title or body matches every word of `q`, best first, across the channels you're in that the token reaches (or only those named in `channel`), each with its channel and a snippet. At most 50 a page, paged with a cursor. Read a hit with get_page.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Words: every word must match the page's title or body, as a prefix of a word or as the same word in another form (English, Spanish, French or Serbian; accents and the Serbian script don't matter). Titles weigh more than bodies.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "example": "release checklist"
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "description": "Only these channels (a uuid or a name; repeat it for several). Each must be a channel you're in, within the token's limits. Default: every channel you're in that the token reaches.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ChannelRef"
+              }
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size, 1–100 (default 25).",
+            "schema": {
+              "default": 25,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "example": 25
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPagesResponse"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "00000000-0000-4000-8000-000000000050",
+                      "title": "Release checklist",
+                      "parent_id": null,
+                      "channel": {
+                        "id": "00000000-0000-4000-8000-00000000000b",
+                        "name": "demo"
+                      },
+                      "updated_at": "2026-10-07T14:03:00Z",
+                      "match": {
+                        "score": 0.61,
+                        "title_highlight": "**Release** **checklist**",
+                        "snippet": "Before each **release**, go through the **checklist** below."
+                      }
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "pages:read",
+        "x-buildit-required-scopes": [
+          "pages:read"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "scope_missing",
+          "outside_limits",
+          "not_found",
+          "validation",
+          "ambiguous",
+          "rate_limited",
+          "internal",
+          "unavailable"
+        ],
+        "x-buildit-hints": {
+          "read_only": true,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": false
+        }
+      }
+    },
+    "/v1/members": {
+      "get": {
+        "operationId": "list_members",
+        "tags": [
+          "people"
+        ],
+        "summary": "List the org's people",
+        "description": "The org's active members, guests included (role guest), by display name, paged; `q` narrows to names or emails containing the text. Use it to find someone for something that isn't a project's, such as create_channel's members; list_project_members lists a project's audience (who can be assigned there). A token with project or channel limits sees only the people in the channels it reaches (its channels, and its projects' channels). Works whether or not the org has Projects.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Only people whose display name or email contains this text (case-insensitive).",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "example": "sam"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size, 1–100 (default 25).",
+            "schema": {
+              "default": 25,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "example": 25
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListMembersResponse"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "00000000-0000-4000-8000-000000000002",
+                      "display_name": "Sam Lee",
+                      "email": "sam@example.com",
+                      "role": "member"
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "projects:read",
+        "x-buildit-required-scopes": [
+          "projects:read"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "scope_missing",
+          "validation",
+          "rate_limited",
+          "internal",
+          "unavailable"
+        ],
+        "x-buildit-hints": {
+          "read_only": true,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": false
+        }
+      }
     }
   },
   "components": {
@@ -12029,6 +12373,14 @@
             "description": "With `q` and no `sort` only.",
             "$ref": "#/components/schemas/SearchMatch"
           },
+          "link_counts": {
+            "description": "The item's links, counted by kind (absent on older servers).",
+            "$ref": "#/components/schemas/LinkCounts"
+          },
+          "activity_at": {
+            "description": "The item's latest activity: the latest of updated_at and its comments' writing or editing (deleted comments don't count; absent on older servers).",
+            "$ref": "#/components/schemas/Timestamp"
+          },
           "description": {
             "description": "With detail=full only.",
             "type": "string"
@@ -12435,6 +12787,49 @@
           "item"
         ]
       },
+      "LinkCounts": {
+        "type": "object",
+        "properties": {
+          "blocks": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Items this one blocks."
+          },
+          "blocked_by": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Items blocking this one."
+          },
+          "relates": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "duplicates": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Items this one duplicates."
+          },
+          "duplicated_by": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Items duplicating this one."
+          },
+          "blocked_by_open": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Blocking items that are open (not started or started)."
+          }
+        },
+        "required": [
+          "blocks",
+          "blocked_by",
+          "relates",
+          "duplicates",
+          "duplicated_by",
+          "blocked_by_open"
+        ],
+        "description": "The item's links by kind, as seen from the item. Only links whose other item you can see, and that the token's limits reach, are counted: a link to an item in a project you can't see isn't. get_item lists the links themselves."
+      },
       "LinkKind": {
         "type": "string",
         "enum": [
@@ -12536,6 +12931,29 @@
           "items",
           "next_cursor"
         ]
+      },
+      "ListMembersResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgMember"
+            }
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; null on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "description": "The org's people the token reaches, by display name."
       },
       "ListPagesResponse": {
         "type": "object",
@@ -12694,6 +13112,10 @@
               },
               "name": {
                 "type": "string"
+              },
+              "test": {
+                "description": "True when this org is a test org, marked by a buildIt administrator, whose data test tools (such as buildit-mcp's evals) may wipe and seed; false for every other org. Always sent since API 1.2.0; absent only on older servers (treat that as not a test org).",
+                "type": "boolean"
               }
             },
             "required": [
@@ -13130,6 +13552,35 @@
           "DEMO"
         ]
       },
+      "OrgMember": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Their name in this org."
+          },
+          "email": {
+            "description": "Null when the user can't see it (never for a token's owner).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrgRole"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "email",
+          "role"
+        ],
+        "description": "An active member of the org (guests included, with role guest) that the token reaches."
+      },
       "OrgRole": {
         "type": "string",
         "enum": [
@@ -13239,6 +13690,69 @@
         "required": [
           "page"
         ]
+      },
+      "PageSearchMatch": {
+        "type": "object",
+        "properties": {
+          "score": {
+            "type": "number"
+          },
+          "title_highlight": {
+            "type": "string",
+            "description": "The title with matches marked **like this**."
+          },
+          "snippet": {
+            "description": "Pieces of the body as plain text, with matches marked (the body's start when only the title matches); null for an empty body.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "score",
+          "title_highlight",
+          "snippet"
+        ]
+      },
+      "PageSearchResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "channel": {
+            "$ref": "#/components/schemas/ChannelBrief"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "match": {
+            "$ref": "#/components/schemas/PageSearchMatch"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "parent_id",
+          "channel",
+          "updated_at",
+          "match"
+        ],
+        "description": "A page that matches, without its body (get_page reads it)."
       },
       "PageSummary": {
         "type": "object",
@@ -14130,6 +14644,29 @@
           "title_highlight",
           "snippet"
         ]
+      },
+      "SearchPagesResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PageSearchResult"
+            }
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; null on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "description": "Matching pages, best first."
       },
       "Sprint": {
         "type": "object",

@@ -2,6 +2,17 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [Unreleased]
+
+Built on version 1.2.0 of the agent API's contract; each addition needs a buildIt.Social server that serves it, and is refused with a clear message on an older one.
+
+### Tools
+
+- `search_pages` (pages toolset): pages whose title or body match every word, best first, across the channels you're in or the ones named, with a wrapped snippet and the channel. 41 tools in all.
+- `find_users` without `project` finds the org's people the token reaches (for `create_channel`'s members and the like); with `project`, its members as before.
+- `search_items` filters by links (`has_link`, such as `blocked_by:open`) and by activity (`activity_since`, which counts comments, unlike `updated_since`), and returns each item's `link_counts` and `activity_at`.
+- `whoami` says whether the org is a test org (`org.test`), for eval runners.
+
 ## [0.1.0] - 2026-10-22
 
 The first release on npm, as `@kammcs/buildit-mcp`. Built on version 1 of the buildIt.Social agent API (`/v1`).

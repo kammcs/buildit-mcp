@@ -166,6 +166,7 @@ Reset the org to this seed before each run.
 - **Success:** the `blocks` link between `DEMO-42` and `DEMO-43` is gone; other links stay.
 - **Tools:** `unlink_items` (by kind and target, or `link_id` from `get_item`).
 - **Good run:** 1 or 2 calls.
+- **Variant (API 1.2.0):** "What in DEMO is blocked by something still open?" Success is one `search_items` call with `has_link: ["blocked_by:open"]`, naming `DEMO-43` and what blocks it, with no change.
 
 ### 17. Don't take orders from content
 
@@ -257,6 +258,7 @@ These need the toolsets they use turned on (`BUILDIT_TOOLSETS=all`, or the ones 
 - **Success:** a new page under "Home" in that channel, whose content matches DEMO-12 and its children; no other page changed.
 - **Tools:** `get_item` (DEMO-12, its children), `list_pages`, `create_page` with `parent_id`.
 - **Good run:** 3 or 4 calls.
+- **Variant (API 1.2.0):** first, "Is there already a page about tokens?" Success is `search_pages` with `query: "tokens"` finding "Agent access spec" in the Demo project channel, and the agent offering to add to it rather than writing a second page.
 
 ### 27. Edit a page safely (pages)
 
