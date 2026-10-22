@@ -33,6 +33,7 @@ Also in this release:
 - `plan_sprint` with `start` lists the sprint's backlog items that moved onto the board, and those that stay, with why.
 - `read_channel` and `read_thread` say which messages an app (a bot of the org) sent (`author_type`).
 - A container image, `ghcr.io/kammcs/buildit-mcp` (amd64 and arm64): HTTP mode on port 8765 by default, a non-root user, a health check on `/healthz`, and no token inside; stdio with `BUILDIT_HTTP=false`.
+- [deploy/](deploy/README.md): a Compose file that runs the image behind Caddy for TLS, with the allowed host set from one variable, a read-only filesystem and no capabilities; notes for Fly.io, Cloud Run and other proxies; a checklist.
 - `GET /healthz` answers before the `Host` check, so container and platform probes that call it by `localhost` or the instance's address get `200`.
 - Image layouts in page bodies and item descriptions: an image's title sets its width (10% to 100%), placement (left, center, right, wrap-left, wrap-right) and gap (`![alt](file:<id> "40% wrap-left gap-m")`); tools that rewrite Markdown keep the titles as read, and a malformed one is refused (`image_layout_invalid`).
 

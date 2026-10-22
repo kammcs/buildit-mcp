@@ -88,6 +88,7 @@ scripts/
   conformance.ts        official conformance suite against HTTP mode, offline
 evals/                  realistic tasks a maintainer runs by hand against a test org
 Dockerfile              the container image (HTTP mode, non-root, no token); .dockerignore is an allowlist
+deploy/                 team self-hosting: Compose with Caddy, and a guide
 ```
 
 Key rules the code relies on:

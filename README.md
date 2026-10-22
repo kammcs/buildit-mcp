@@ -250,7 +250,7 @@ A client that starts the server itself can run the image over stdio. `-e BUILDIT
 docker run -i --rm -e BUILDIT_HTTP=false -e BUILDIT_TOKEN ghcr.io/kammcs/buildit-mcp:0
 ```
 
-The essentials of running it for others are under [Hardening](#hardening).
+[deploy/](deploy/README.md) has a Compose file that runs it behind Caddy for TLS, notes for Fly.io, Cloud Run and other proxies, and a checklist. The essentials are under [Hardening](#hardening).
 
 ## Security notes
 
@@ -265,7 +265,7 @@ The essentials of running it for others are under [Hardening](#hardening).
 
 For an HTTP server that anyone other than you can reach:
 
-- terminate TLS in front of it (a reverse proxy such as Caddy or nginx);
+- terminate TLS in front of it (a reverse proxy such as Caddy or nginx; [deploy/](deploy/README.md) has a Compose file with Caddy), and don't let the proxy buffer responses, which can be event streams;
 - set `BUILDIT_ALLOWED_HOSTS` to the hostnames clients use (required off loopback, unless you set `BUILDIT_ALLOW_ANY_HOST` because the proxy checks the `Host` header), and `BUILDIT_ALLOWED_ORIGINS` only if a browser-based client needs it;
 - enable only the toolsets the team needs with `BUILDIT_TOOLSETS`: a request's `X-Buildit-Toolsets` header can narrow them, never add one;
 - optionally restrict client IP addresses at the proxy;

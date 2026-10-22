@@ -1,0 +1,48 @@
+# One buildit-mcp server for a team, behind Caddy, which gets and renews a
+# TLS certificate for your hostname. See README.md in this folder.
+#
+#   cp .env.example .env        # then set BUILDIT_MCP_HOST
+#   docker compose up -d
+#
+# The server holds no buildIt.Social secret: each member's client sends its
+# own token with every request.
+
+services:
+  buildit-mcp:
+    image: ghcr.io/kammcs/buildit-mcp:${BUILDIT_MCP_TAG:-0}
+    restart: unless-stopped
+    environment:
+      # The hostname clients use; the server refuses other Host headers.
+      BUILDIT_ALLOWED_HOSTS: ${BUILDIT_MCP_HOST:?set BUILDIT_MCP_HOST in .env}
+      BUILDIT_TOOLSETS: ${BUILDIT_TOOLSETS:-items,comments}
+      BUILDIT_READ_ONLY: ${BUILDIT_READ_ONLY:-false}
+      BUILDIT_LOG_LEVEL: ${BUILDIT_LOG_LEVEL:-info}
+    # Reached only through Caddy, never published on the host.
+    expose:
+      - '8765'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  caddy:
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    depends_on:
+      buildit-mcp:
+        condition: service_healthy
+    environment:
+      BUILDIT_MCP_HOST: ${BUILDIT_MCP_HOST:?set BUILDIT_MCP_HOST in .env}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
