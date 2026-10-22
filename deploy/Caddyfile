@@ -1,0 +1,14 @@
+# TLS for the team's hostname (Caddy gets the certificate), then everything
+# to buildit-mcp. Caddy passes the Host header through, which the server
+# checks against BUILDIT_ALLOWED_HOSTS.
+
+{$BUILDIT_MCP_HOST} {
+	# Optional: only these client addresses (your office, your VPN).
+	# @outside not remote_ip 203.0.113.0/24 2001:db8::/32
+	# respond @outside 403
+
+	reverse_proxy buildit-mcp:8765 {
+		# Stream responses (server-sent events) as they come.
+		flush_interval -1
+	}
+}
