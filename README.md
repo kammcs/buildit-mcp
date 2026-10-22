@@ -27,7 +27,7 @@ npx -y @kammcs/buildit-mcp@0 --help
 ```
 
 - **Versions:** `@0` follows the 0.x releases, so you get fixes and new tools as they ship; `@0.1.0` pins one release. The server tells you when the API needs a newer one ([Versions](#versions)).
-- **Windows:** if a client can't start `npx` (an `ENOENT` or "command not found" error), use `cmd` as the command, with `/c`, `npx`, `-y` and `@kammcs/buildit-mcp@0` as its arguments.
+- **Windows:** a client that starts `npx` directly fails there (`spawn npx ENOENT`: npx is a `.cmd` file), as Claude Code does. Use `cmd` as the command, with `/c`, `npx`, `-y` and `@kammcs/buildit-mcp@0` as its arguments (the Claude Code example below shows it).
 - Also available as a [container image](#container-image) and, for Claude Desktop, as a [bundle](#claude-desktop).
 
 ### From a clone (contributors)
@@ -39,7 +39,7 @@ npm ci
 npm run build
 ```
 
-The server is then `node /path/to/buildit-mcp/dist/index.js`: use that command and argument in place of `npx -y @kammcs/buildit-mcp@0` in the examples below.
+The server is then `node /path/to/buildit-mcp/dist/index.js`: use that command and argument in place of `npx -y @kammcs/buildit-mcp@0` in the examples below. Inside the clone itself, `npx @kammcs/buildit-mcp` finds the clone's own `package.json` and fails (`buildit-mcp` is not recognized), so a client working in the clone needs `dist/index.js`; with Claude Code, add it there with `--scope local`, which wins over a user-scope entry in that folder only.
 
 ## Configuration
 
@@ -140,6 +140,12 @@ Single quotes keep `${BUILDIT_TOKEN}` literal, so the configuration stores the r
 
 ```sh
 claude mcp add buildit --scope user -e 'BUILDIT_TOKEN=${BUILDIT_TOKEN}' -- npx -y @kammcs/buildit-mcp@0
+```
+
+On Windows, from PowerShell (Git Bash would turn `/c` into a path):
+
+```powershell
+claude mcp add buildit --scope user -e 'BUILDIT_TOKEN=${BUILDIT_TOKEN}' -- cmd /c npx -y "@kammcs/buildit-mcp@0"
 ```
 
 Or share it with a project through `.mcp.json`, where each person's own `BUILDIT_TOKEN` is used:
