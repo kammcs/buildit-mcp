@@ -635,6 +635,18 @@ export const ErrorSchema = z.looseObject({
       hint: z.string().optional(),
       details: z.looseObject({}),
     }),
+    z.looseObject({
+      code: z.literal('release_archived'),
+      message: z.string(),
+      hint: z.string().optional(),
+      details: z.looseObject({ ref: z.string() }),
+    }),
+    z.looseObject({
+      code: z.literal('release_not_released'),
+      message: z.string(),
+      hint: z.string().optional(),
+      details: z.looseObject({ ref: z.string() }),
+    }),
   ]),
 });
 export type Error = z.infer<typeof ErrorSchema>;
@@ -940,6 +952,15 @@ export const UpdatePageRequestSchema = z.looseObject({
   position: z.number().optional(),
 });
 export type UpdatePageRequest = z.infer<typeof UpdatePageRequestSchema>;
+
+export const UpdateReleaseRequestSchema = z.looseObject({
+  name: z.string().optional(),
+  description: z.string().nullable().optional(),
+  start_date: DateSchema.nullable().optional(),
+  target_date: DateSchema.nullable().optional(),
+  released_on: DateSchema.optional(),
+});
+export type UpdateReleaseRequest = z.infer<typeof UpdateReleaseRequestSchema>;
 
 export const UserSchema = z.looseObject({
   id: UuidSchema,

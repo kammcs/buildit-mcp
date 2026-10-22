@@ -341,6 +341,167 @@ describe('list_releases and plan_release', () => {
     expect(search.isError).toBe(false);
   });
 
+  it('reopens a release marked released too early, leaving its items alone', async () => {
+    const c = await client();
+    await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'release',
+      release: '1.0.1',
+      released_on: '2026-10-10',
+    });
+    const fixVersions = api.store.items.map((i) => i.releaseId);
+    const r = await c.call('plan_release', { project: 'DEMO', action: 'reopen', release: '1.0.1' });
+    expect(r.isError).toBe(false);
+    expect(r.structured).toMatchObject({
+      action: 'reopen',
+      release: { name: '1.0.1', status: 'unreleased', released_at: null },
+    });
+    expect(api.store.items.map((i) => i.releaseId)).toEqual(fixVersions);
+    expect(r.text).toContain('Reopened: the release is unreleased again');
+    expect(r.text).toContain('its items keep their fix version');
+    // Reopening an unreleased release returns it as it is.
+    const again = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'reopen',
+      release: '1.0.1',
+    });
+    expect(again.structured).toMatchObject({ release: { status: 'unreleased' } });
+  });
+
+  it('archives and restores a release, as it was', async () => {
+    const c = await client();
+    await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'release',
+      release: '1.0.1',
+      released_on: '2026-10-10',
+    });
+    const archived = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'archive',
+      release: '1.0.1',
+    });
+    expect(archived.structured).toMatchObject({ release: { status: 'archived' } });
+    expect(archived.text).toContain('Archived the release');
+
+    // An archived release can't be reopened: the hint names plan_release's action.
+    const reopen = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'reopen',
+      release: '1.0.1',
+    });
+    expect(reopen.isError).toBe(true);
+    expect(reopen.text).toContain('release_archived (HTTP 409)');
+    expect(reopen.text).toContain('plan_release (action "restore")');
+    expect(reopen.text).not.toContain('restore_release');
+
+    const restored = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'restore',
+      release: '1.0.1',
+    });
+    expect(restored.structured).toMatchObject({
+      release: { status: 'released', released_at: '2026-10-10T00:00:00Z' },
+    });
+  });
+
+  it("edits a release's name, description and dates, and clears them with null", async () => {
+    const c = await client();
+    const r = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'update',
+      release: '1.0.1',
+      name: '1.0.2',
+      description: 'Fixes, take two.',
+      start_date: '2026-10-01',
+      target_date: null,
+    });
+    expect(r.isError).toBe(false);
+    expect(r.structured).toMatchObject({
+      action: 'update',
+      release: { name: '1.0.2', start_date: '2026-10-01', target_date: null },
+    });
+    expect(stripIds((r.structured.release as { description: string }).description)).toBe(
+      '<untrusted_content source="release_description">\nFixes, take two.\n</untrusted_content>',
+    );
+    expect(api.requests.at(-1)?.body).toEqual({
+      name: '1.0.2',
+      description: 'Fixes, take two.',
+      start_date: '2026-10-01',
+      target_date: null,
+    });
+    expect(r.text).toContain('Updated the release:');
+  });
+
+  it('corrects the day a released release was released, and only then', async () => {
+    const c = await client();
+    const early = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'update',
+      release: '1.0.1',
+      released_on: '2026-10-12',
+    });
+    expect(early.isError).toBe(true);
+    expect(early.text).toContain('release_not_released (HTTP 409)');
+    expect(early.text).toContain('plan_release (action "release")');
+
+    await c.call('plan_release', { project: 'DEMO', action: 'release', release: '1.0.1' });
+    const fixed = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'update',
+      release: '1.0.1',
+      released_on: '2026-10-12',
+    });
+    expect(fixed.structured).toMatchObject({
+      release: { status: 'released', released_at: '2026-10-12T00:00:00Z' },
+    });
+  });
+
+  it('checks update and create arguments before calling the API', async () => {
+    const c = await client();
+    const before = api.requests.length;
+    const empty = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'update',
+      release: '1.0.1',
+    });
+    expect(empty.isError).toBe(true);
+    expect(empty.text).toContain('action "update" needs at least one of');
+    const nullCreate = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'create',
+      name: '2.0.0',
+      target_date: null,
+    });
+    expect(nullCreate.isError).toBe(true);
+    expect(nullCreate.text).toContain('null clears a field only with action "update"');
+    expect(api.requests.length).toBe(before);
+  });
+
+  it('says the API is older when it lacks the release operations', async () => {
+    api.compat.releaseOps = false;
+    const c = await client();
+    const r = await c.call('plan_release', { project: 'DEMO', action: 'reopen', release: '1.0.1' });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('not_found (HTTP 404)');
+    expect(r.text).toContain('The API does not serve this call');
+  });
+
+  it('defuses a hostile name and description in an update', async () => {
+    const c = await client();
+    const r = await c.call('plan_release', {
+      project: 'DEMO',
+      action: 'update',
+      release: '1.0.1',
+      name: HOSTILE.slice(0, 80),
+      description: HOSTILE,
+    });
+    expect(r.isError).toBe(false);
+    assertDefused(r.text);
+    expect(injectionIsInsideBlocks(r.text)).toBe(true);
+    assertDefused(JSON.stringify(r.structured));
+  });
+
   it('needs a release for every action but create', async () => {
     const c = await client();
     const r = await c.call('plan_release', { project: 'DEMO', action: 'release' });

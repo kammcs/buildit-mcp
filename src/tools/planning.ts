@@ -508,21 +508,44 @@ export const listReleasesTool = defineTool({
   },
 });
 
-const ReleaseActions = ['create', 'release', 'add_items', 'remove_items'] as const;
+const ReleaseActions = [
+  'create',
+  'release',
+  'update',
+  'reopen',
+  'archive',
+  'restore',
+  'add_items',
+  'remove_items',
+] as const;
+
+/** reopen, archive and restore: the operation each calls, and what the result says. */
+const STATE_CHANGES = {
+  reopen: { op: 'reopen_release', done: 'Reopened: the release is unreleased again' },
+  archive: { op: 'archive_release', done: 'Archived the release' },
+  restore: { op: 'restore_release', done: 'Restored the release' },
+} as const;
 
 export const planReleaseTool = defineTool({
   name: 'plan_release',
   toolset: 'planning',
   title: 'Plan a release',
-  description: `Creates or ships a release, or sets which items it holds. action:
+  description: `Creates, ships, corrects or archives a release, or sets which items it holds. action:
 - "create": an unreleased release; needs name (unique in the project), optional description, start_date and target_date (YYYY-MM-DD).
 - "release": marks it released (project admins), on released_on (default today); its open items move to move_open_to (another release's name) or lose their fix version. Releasing it again changes nothing.
+- "update": changes its name, description, start_date or target_date (null clears one) and, if it is released, released_on, which corrects the day it was released (project admins).
+- "reopen": a released release becomes unreleased again, for one marked released too early (project admins). Its items keep their fix version.
+- "archive": archives it once nothing more is expected from it; "restore" brings it back as it was (project admins). Items keep their fix version.
 - "add_items": sets up to 50 items' fix version to this release.
 - "remove_items": clears the fix version of up to 50 items, when it is this release.
 release names the release (by name) for every action but create. To write its notes page, use write_release_notes.`,
   scopes: scopesOf(
     'create_release',
     'release_version',
+    'update_release',
+    'reopen_release',
+    'archive_release',
+    'restore_release',
     'add_release_items',
     'remove_release_items',
   ),
@@ -543,11 +566,22 @@ release names the release (by name) for every action but create. To write its no
       .min(1)
       .max(80)
       .optional()
-      .describe('For create: the release name, such as 1.2.0.'),
-    description: z.string().max(10_000).optional().describe('For create.'),
-    start_date: DateInput.optional().describe('For create: YYYY-MM-DD.'),
-    target_date: DateInput.optional().describe('For create: YYYY-MM-DD.'),
-    released_on: DateInput.optional().describe('For release: YYYY-MM-DD (default today).'),
+      .describe('For create: the release name, such as 1.2.0; for update: its new name.'),
+    description: z
+      .string()
+      .max(10_000)
+      .nullable()
+      .optional()
+      .describe('For create and update (null clears it in update).'),
+    start_date: DateInput.nullable()
+      .optional()
+      .describe('For create and update: YYYY-MM-DD (null clears it in update).'),
+    target_date: DateInput.nullable()
+      .optional()
+      .describe('For create and update: YYYY-MM-DD (null clears it in update).'),
+    released_on: DateInput.optional().describe(
+      'For release: YYYY-MM-DD (default today). For update: the corrected day it was released.',
+    ),
     move_open_to: z
       .string()
       .min(1)
@@ -575,6 +609,11 @@ release names the release (by name) for every action but create. To write its no
     switch (args.action) {
       case 'create': {
         if (args.name === undefined) throw new ToolInputError('action "create" needs name.');
+        if (args.description === null || args.start_date === null || args.target_date === null) {
+          throw new ToolInputError(
+            'null clears a field only with action "update"; leave the field out to create without it.',
+          );
+        }
         const r = await ctx.call('create_release', {
           path: { key },
           body: {
@@ -602,6 +641,40 @@ release names the release (by name) for every action but create. To write its no
         return {
           structured: { action: args.action, release },
           text: `The release is ${release.status}:\n${wrapLines([releaseLine(release)], 'release')}`,
+        };
+      }
+      case 'update': {
+        const body = {
+          ...(args.name !== undefined ? { name: args.name } : {}),
+          ...(args.description !== undefined ? { description: args.description } : {}),
+          ...(args.start_date !== undefined ? { start_date: args.start_date } : {}),
+          ...(args.target_date !== undefined ? { target_date: args.target_date } : {}),
+          ...(args.released_on !== undefined ? { released_on: args.released_on } : {}),
+        };
+        if (Object.keys(body).length === 0) {
+          throw new ToolInputError(
+            'action "update" needs at least one of name, description, start_date, target_date or released_on.',
+          );
+        }
+        const r = await ctx.call('update_release', {
+          path: { key, release: needRelease() },
+          body,
+        });
+        const release = releaseOut(r.release);
+        return {
+          structured: { action: args.action, release },
+          text: `Updated the release:\n${releaseText(release, r.release.description)}`,
+        };
+      }
+      case 'reopen':
+      case 'archive':
+      case 'restore': {
+        const change = STATE_CHANGES[args.action];
+        const r = await ctx.call(change.op, { path: { key, release: needRelease() } });
+        const release = releaseOut(r.release);
+        return {
+          structured: { action: args.action, release },
+          text: `${change.done} (its items keep their fix version):\n${wrapLines([releaseLine(release)], 'release')}`,
         };
       }
       case 'add_items':

@@ -7227,6 +7227,566 @@
           "needs_projects": true
         }
       }
+    },
+    "/v1/projects/{key}/releases/{release}": {
+      "patch": {
+        "operationId": "update_release",
+        "tags": [
+          "planning"
+        ],
+        "summary": "Edit a release",
+        "description": "Changes a release's name (unique in the project), description, start_date or target_date (null clears them; start_date must stay on or before target_date) and, on a released release only, released_on, which corrects the day it was released (in the project's time zone, not after today). Project admins. Send at least one field. Values equal to the release's change nothing, so repeating the call is safe. Items and the notes page are left alone. released_on on an archived release is 409 release_archived, on an unreleased one 409 release_not_released.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectRef"
+            },
+            "example": "DEMO"
+          },
+          {
+            "name": "release",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ReleaseRef"
+            },
+            "example": "1.0.1"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReleaseRequest"
+              },
+              "example": {
+                "name": "1.1.0",
+                "description": "Exports and the date picker fix.",
+                "target_date": "2026-11-14"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResponse"
+                },
+                "example": {
+                  "release": {
+                    "id": "00000000-0000-4000-8000-000000000047",
+                    "name": "1.1.0",
+                    "description": "Exports and the date picker fix.",
+                    "status": "unreleased",
+                    "start_date": null,
+                    "target_date": "2026-11-14",
+                    "released_at": null,
+                    "notes_page_id": null,
+                    "item_count": 8,
+                    "done_count": 5
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "projects:write",
+        "x-buildit-required-scopes": [
+          "projects:write"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "projects_off",
+          "scope_missing",
+          "outside_limits",
+          "forbidden",
+          "archived",
+          "not_found",
+          "body_too_large",
+          "validation",
+          "ambiguous",
+          "limit_reached",
+          "rate_limited",
+          "internal",
+          "unavailable",
+          "release_archived",
+          "release_not_released"
+        ],
+        "x-buildit-hints": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": true
+        }
+      }
+    },
+    "/v1/projects/{key}/releases/{release}/reopen": {
+      "post": {
+        "operationId": "reopen_release",
+        "tags": [
+          "planning"
+        ],
+        "summary": "Reopen a release",
+        "description": "A released release becomes unreleased again and loses its released_at. Its items keep their fix version and the notes page stays. Project admins. An unreleased release is returned as it is. An archived one is 409 release_archived: restore it first (restore_release).",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectRef"
+            },
+            "example": "DEMO"
+          },
+          {
+            "name": "release",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ReleaseRef"
+            },
+            "example": "1.0.1"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResponse"
+                },
+                "example": {
+                  "release": {
+                    "id": "00000000-0000-4000-8000-000000000047",
+                    "name": "1.0.1",
+                    "description": null,
+                    "status": "unreleased",
+                    "start_date": null,
+                    "target_date": "2026-10-31",
+                    "released_at": null,
+                    "notes_page_id": null,
+                    "item_count": 8,
+                    "done_count": 5
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "projects:write",
+        "x-buildit-required-scopes": [
+          "projects:write"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "projects_off",
+          "scope_missing",
+          "outside_limits",
+          "forbidden",
+          "archived",
+          "not_found",
+          "validation",
+          "ambiguous",
+          "limit_reached",
+          "rate_limited",
+          "internal",
+          "unavailable",
+          "release_archived"
+        ],
+        "x-buildit-hints": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": true
+        }
+      }
+    },
+    "/v1/projects/{key}/releases/{release}/archive": {
+      "post": {
+        "operationId": "archive_release",
+        "tags": [
+          "planning"
+        ],
+        "summary": "Archive a release",
+        "description": "An unreleased or released release becomes archived. Its items keep their fix version, and it keeps its released_at; an archived release can't be released, reopened or given items. Project admins. An archived release is returned as it is. restore_release undoes it.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectRef"
+            },
+            "example": "DEMO"
+          },
+          {
+            "name": "release",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ReleaseRef"
+            },
+            "example": "1.0.1"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResponse"
+                },
+                "example": {
+                  "release": {
+                    "id": "00000000-0000-4000-8000-000000000047",
+                    "name": "1.0.1",
+                    "description": null,
+                    "status": "archived",
+                    "start_date": null,
+                    "target_date": "2026-10-31",
+                    "released_at": null,
+                    "notes_page_id": null,
+                    "item_count": 8,
+                    "done_count": 5
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "projects:write",
+        "x-buildit-required-scopes": [
+          "projects:write"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "projects_off",
+          "scope_missing",
+          "outside_limits",
+          "forbidden",
+          "archived",
+          "not_found",
+          "validation",
+          "ambiguous",
+          "limit_reached",
+          "rate_limited",
+          "internal",
+          "unavailable"
+        ],
+        "x-buildit-hints": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": true
+        }
+      }
+    },
+    "/v1/projects/{key}/releases/{release}/restore": {
+      "post": {
+        "operationId": "restore_release",
+        "tags": [
+          "planning"
+        ],
+        "summary": "Restore an archived release",
+        "description": "An archived release goes back to what it was: released, with its released_at, if it had been released, else unreleased. Project admins. A release that isn't archived is returned as it is.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectRef"
+            },
+            "example": "DEMO"
+          },
+          {
+            "name": "release",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ReleaseRef"
+            },
+            "example": "1.0.1"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResponse"
+                },
+                "example": {
+                  "release": {
+                    "id": "00000000-0000-4000-8000-000000000047",
+                    "name": "1.0.1",
+                    "description": null,
+                    "status": "unreleased",
+                    "start_date": null,
+                    "target_date": "2026-10-31",
+                    "released_at": null,
+                    "notes_page_id": null,
+                    "item_count": 8,
+                    "done_count": 5
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "projects:write",
+        "x-buildit-required-scopes": [
+          "projects:write"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "projects_off",
+          "scope_missing",
+          "outside_limits",
+          "forbidden",
+          "archived",
+          "not_found",
+          "validation",
+          "ambiguous",
+          "limit_reached",
+          "rate_limited",
+          "internal",
+          "unavailable"
+        ],
+        "x-buildit-hints": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": true
+        }
+      }
     }
   },
   "components": {
@@ -7349,7 +7909,7 @@
         }
       },
       "Error409": {
-        "description": "An error: conflict, idempotency_conflict, plan_used, plan_stale. The operation's x-buildit-errors lists the codes it can answer.",
+        "description": "An error: conflict, idempotency_conflict, plan_used, plan_stale, release_archived, release_not_released. The operation's x-buildit-errors lists the codes it can answer.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"
@@ -10156,6 +10716,76 @@
                   "details": {
                     "type": "object",
                     "properties": {}
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "details"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "const": "release_archived"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "hint": {
+                    "description": "The code's stable one-line hint: what to do next.",
+                    "type": "string"
+                  },
+                  "details": {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string",
+                        "maxLength": 400,
+                        "description": "The reference as the caller wrote it, or the id."
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ]
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "details"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "const": "release_not_released"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "hint": {
+                    "description": "The code's stable one-line hint: what to do next.",
+                    "type": "string"
+                  },
+                  "details": {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string",
+                        "maxLength": 400,
+                        "description": "The reference as the caller wrote it, or the id."
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ]
                   }
                 },
                 "required": [
@@ -14110,6 +14740,55 @@
           "version"
         ]
       },
+      "UpdateReleaseRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The new name, unique in the project (ignoring case).",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "description": {
+            "description": "null clears it.",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start_date": {
+            "description": "null clears it.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Date"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_date": {
+            "description": "null clears it.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Date"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "released_on": {
+            "description": "Released releases only: corrects the day it was released, in the project's time zone (not after today).",
+            "$ref": "#/components/schemas/Date"
+          }
+        }
+      },
       "User": {
         "type": "object",
         "properties": {
@@ -14951,6 +15630,18 @@
       "when": "The server is overloaded or being updated.",
       "message": "The service is briefly unavailable. Try again in a minute.",
       "hint": "Retry in a minute."
+    },
+    "release_archived": {
+      "status": 409,
+      "when": "The release is archived: reopening it, or correcting its released_on, needs it restored first.",
+      "message": "That release is archived. Restore it (restore_release), then retry.",
+      "hint": "Restore the release with restore_release, then retry."
+    },
+    "release_not_released": {
+      "status": 409,
+      "when": "released_on was sent for a release that isn't released: only a released release's date can be corrected.",
+      "message": "That release isn't released, so it has no release date to correct. Leave released_on out, or release it with release_version (which takes released_on).",
+      "hint": "Leave released_on out, or release it with release_version, which takes released_on."
     }
   }
 }

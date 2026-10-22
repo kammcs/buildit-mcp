@@ -124,9 +124,24 @@ const RATE_BUCKETS: Record<RateLimitBucket, string> = {
   user_requests_per_minute: 'requests per minute for your account, across all your tokens',
 };
 
+/** The release operations, as plan_release's actions. */
+const RELEASE_ACTIONS: Record<string, string> = {
+  create_release: 'create',
+  release_version: 'release',
+  update_release: 'update',
+  reopen_release: 'reopen',
+  archive_release: 'archive',
+  restore_release: 'restore',
+};
+
 /** The API's own terms, as this server names them. */
 function inServerTerms(hint: string): string {
-  return hint.replace(/\bget_me\b/g, 'whoami');
+  return hint
+    .replace(/\bget_me\b/g, 'whoami')
+    .replace(
+      /\b(create_release|release_version|update_release|reopen_release|archive_release|restore_release)\b/g,
+      (op: string) => `plan_release (action "${RELEASE_ACTIONS[op] ?? op}")`,
+    );
 }
 
 /** The next step for an error: the API's hint, else the contract's, else this server's own. */
