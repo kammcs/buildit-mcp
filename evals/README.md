@@ -8,7 +8,7 @@ They are run by hand by a maintainer, with a real MCP client against a **test or
 
 1. **A test org.** Create (or reset) an org on a buildIt.Social deployment you may test against, with Projects and agent access turned on, and build the seed described at the top of [tasks.md](tasks.md): the `DEMO` project, its workflow, labels, field, members and items, and (for tasks 23 to 34) the channels, pages and messages described before task 23. Item numbers matter, since the tasks name them.
 2. **Tokens.** In the test org, create a personal access token with `projects:write` (it implies `projects:read`), limited to the `DEMO` project, expiring soon. For task 18, also create one with only `projects:read`. For tasks 23 to 34, create one more with `projects:write`, `projects:admin`, `projects:delete`, `pages:write` and `chat:read`, without project or channel limits, and run the client with `BUILDIT_TOOLSETS=all`. Put each in an environment variable, never in a file.
-3. **A client.** Build the server (`npm ci && npm run build`) and add it to the client as the [README](../README.md#set-up-your-client) shows, with `BUILDIT_API_URL` pointing at the test deployment's agent API and `BUILDIT_TOKEN` at the test token. Claude Code is the reference client; others are worth a pass too.
+3. **A client.** Add the server to the client as the [README](../README.md#set-up-your-client) shows (with `npx -y @kammcs/buildit-mcp@<version>` for the release under test, or a clone's `dist/index.js` for unreleased changes), with `BUILDIT_API_URL` pointing at the test deployment's agent API and `BUILDIT_TOKEN` at the test token. Claude Code is the reference client; others are worth a pass too.
 
 ## Running a task
 
