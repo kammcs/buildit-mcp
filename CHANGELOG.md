@@ -2,7 +2,15 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-23
+
+Built on version 1.4.0 of the agent API's contract. `list_pins` and `list_emoji` need a buildIt.Social server that serves them, and are refused with a clear message on an older one; `read_channel` and `read_thread` need API 1.3.0 or newer.
+
+### Tools
+
+- `list_pins` (chat toolset): a channel's pinned messages, newest pinned first, with when and by whom each was pinned. Never direct messages; agents can't pin or unpin.
+- `list_emoji` (chat toolset): the org's custom emoji by name, which messages and comments show as `:name:`. No images; agents can't add, rename or remove emoji. 43 tools in all.
+- `read_channel` and `read_thread` say whether each message is pinned (`pinned`, `pinned_at`, `pinned_by`).
 
 ### Docs
 
@@ -86,5 +94,6 @@ Both transports serve MCP 2026-07-28 (stateless, with per-request `_meta`) and 2
 - Node.js 20 or newer (22 recommended).
 - A buildIt.Social personal access token, from an org with agent access turned on.
 
+[0.3.0]: https://github.com/kammcs/buildit-mcp/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kammcs/buildit-mcp/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kammcs/buildit-mcp/releases/tag/v0.1.0

@@ -73,6 +73,8 @@ const ALL_TOOLS = [
   'update_page',
   // chat
   'list_channels',
+  'list_emoji',
+  'list_pins',
   'read_channel',
   'read_thread',
   // admin
@@ -110,12 +112,14 @@ const READ_TOOLS = [
   'list_channels',
   'read_channel',
   'read_thread',
+  'list_pins',
+  'list_emoji',
   'get_workflow',
   'list_work_types',
 ];
 
 const DESTRUCTIVE = ['unlink_items', 'write_release_notes', 'update_page', 'apply_plan'];
-const OPEN_WORLD = ['list_channels', 'read_channel', 'read_thread'];
+const OPEN_WORLD = ['list_channels', 'read_channel', 'read_thread', 'list_pins'];
 
 async function names(c: Connected): Promise<string[]> {
   return (await c.client.listTools()).tools.map((t) => t.name);
@@ -131,7 +135,7 @@ describe('the tool list', () => {
   it('has every tool with every toolset on and every scope', async () => {
     const c = await client(TOKENS.full);
     expect(await names(c)).toEqual(ALL_TOOLS);
-    expect(ALL_TOOLS).toHaveLength(41);
+    expect(ALL_TOOLS).toHaveLength(43);
   });
 
   it('keeps admin and destructive off by default, even for a token with their scopes', async () => {
@@ -179,7 +183,14 @@ describe('the tool list', () => {
       'update_page',
     ]);
     const chat = await client(tokenWith('chat:read'));
-    expect(await names(chat)).toEqual(['whoami', 'list_channels', 'read_channel', 'read_thread']);
+    expect(await names(chat)).toEqual([
+      'whoami',
+      'list_channels',
+      'list_emoji',
+      'list_pins',
+      'read_channel',
+      'read_thread',
+    ]);
   });
 
   it('lists apply_plan with the propose_* tools a token may use, and only then', async () => {

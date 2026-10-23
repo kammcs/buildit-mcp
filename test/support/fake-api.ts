@@ -248,6 +248,16 @@ export interface FakeMessage {
   viaAgent: string | null;
   /** Set when a bot of the org sent it: authorId is then the app's id. */
   app?: { name: string };
+  /** Set when pinned; pinnedById null is a deleted account. */
+  pin?: { at: string; byId: string | null };
+}
+
+export interface FakeEmoji {
+  id: string;
+  name: string;
+  animated: boolean;
+  /** A removed emoji isn't listed. */
+  active: boolean;
 }
 
 export interface FakePage {
@@ -331,6 +341,7 @@ export interface FakeStore {
   events: (HistoryEvent & { itemId: string })[];
   channels: FakeChannel[];
   messages: FakeMessage[];
+  emoji: FakeEmoji[];
   pages: FakePage[];
   plans: FakePlan[];
   /** GitHub refs by item id; an item without an entry has none (as for a guest). */
@@ -671,6 +682,7 @@ export function seedStore(): FakeStore {
         createdAt: '2026-10-06T09:30:00Z',
         deleted: false,
         viaAgent: null,
+        pin: { at: '2026-10-06T10:00:00Z', byId: USERS.sam.id },
       },
       {
         id: MESSAGES.other,
@@ -681,6 +693,7 @@ export function seedStore(): FakeStore {
         createdAt: '2026-10-07T08:00:00Z',
         deleted: false,
         viaAgent: null,
+        pin: { at: '2026-10-07T08:05:00Z', byId: USERS.me.id },
       },
       {
         id: uid(9004),
@@ -692,6 +705,11 @@ export function seedStore(): FakeStore {
         deleted: false,
         viaAgent: null,
       },
+    ],
+    emoji: [
+      { id: uid(9401), name: 'shipit', animated: false, active: true },
+      { id: uid(9402), name: 'party_parrot', animated: true, active: true },
+      { id: uid(9403), name: 'retired', animated: false, active: false },
     ],
     pages: [
       {
@@ -771,9 +789,12 @@ export function seedStore(): FakeStore {
 /** The operations API 1.2.0 added (compat.v12 false leaves them out). */
 const V12_OPS = new Set<OperationId>(['search_pages', 'list_members']);
 
+/** The operations APIs 1.3.0 and 1.4.0 added (compat.v14 false leaves them out). */
+const V14_OPS = new Set<OperationId>(['list_pins', 'list_emoji']);
+
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.2.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.4.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -905,7 +926,7 @@ export class FakeApi {
    * members route or the release operations; without description windows
    * and text-search paging, or the served operations in /v1/meta (1.0.0);
    * without search_pages, list_members, link and activity filters and
-   * org.test (1.1.0).
+   * org.test (1.1.0); without list_pins and list_emoji (1.2.0).
    */
   compat = {
     hints: true,
@@ -915,6 +936,7 @@ export class FakeApi {
     textPaging: true,
     servedList: true,
     v12: true,
+    v14: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -942,6 +964,7 @@ export class FakeApi {
       textPaging: true,
       servedList: true,
       v12: true,
+      v14: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1126,7 +1149,8 @@ export class FakeApi {
       const olderRoute =
         (route.id === 'list_project_members' && !this.compat.membersRoute) ||
         (OLDER_RELEASE_OPS.has(route.id) && !this.compat.releaseOps) ||
-        (V12_OPS.has(route.id) && !this.compat.v12);
+        (V12_OPS.has(route.id) && !this.compat.v12) ||
+        (V14_OPS.has(route.id) && !this.compat.v14);
       if (olderRoute) {
         this.send(res, {
           status: 404,
@@ -1535,6 +1559,7 @@ export class FakeApi {
       .filter((id) => this.compat.releaseOps || !OLDER_RELEASE_OPS.has(id))
       .filter((id) => this.compat.membersRoute || id !== 'list_project_members')
       .filter((id) => this.compat.v12 || !V12_OPS.has(id))
+      .filter((id) => this.compat.v14 || !V14_OPS.has(id))
       .sort();
   }
 
@@ -1670,6 +1695,10 @@ export class FakeApi {
         return this.listChannelMessages(call);
       case 'get_thread':
         return this.getThread(call);
+      case 'list_pins':
+        return this.listPins(call);
+      case 'list_emoji':
+        return this.listEmoji();
       case 'list_pages':
         return this.listPages(call);
       case 'get_page':
@@ -2994,7 +3023,36 @@ export class FakeApi {
       edited_at: null,
       deleted: m.deleted,
       via_agent: m.viaAgent,
+      pinned: m.pin !== undefined,
+      pinned_at: m.pin?.at ?? null,
+      pinned_by: this.pinner(m),
     };
+  }
+
+  private pinner(m: FakeMessage): Message['pinned_by'] {
+    if (!m.pin?.byId) return null;
+    return { ...this.user(m.pin.byId), type: 'user' };
+  }
+
+  /** A channel's pins, newest pinned first (never a direct message). */
+  private listPins({ identity, params, query }: Call): Handled {
+    const c = this.channel(params.channel ?? '', identity);
+    const pins = this.store.messages
+      .filter((m) => m.channelId === c.id && m.pin !== undefined && !m.deleted)
+      .sort((a, b) => (a.pin!.at < b.pin!.at ? 1 : -1))
+      .map((m) => ({
+        pinned_at: m.pin!.at,
+        pinned_by: this.pinner(m),
+        message: this.messageOut(m),
+      }));
+    return { status: 200, body: this.page(pins, query) };
+  }
+
+  private listEmoji(): Handled {
+    const items = this.store.emoji
+      .filter((e) => e.active)
+      .map((e) => ({ id: e.id, name: e.name, animated: e.animated }));
+    return { status: 200, body: { items } };
   }
 
   private listChannelMessages({ identity, params, query }: Call): Handled {

@@ -5,7 +5,13 @@
  */
 import { PROMPTS } from '../prompts.js';
 import { RESOURCES } from '../resources.js';
-import { listChannelsTool, readChannelTool, readThreadTool } from '../tools/chat.js';
+import {
+  listChannelsTool,
+  listEmojiTool,
+  listPinsTool,
+  readChannelTool,
+  readThreadTool,
+} from '../tools/chat.js';
 import { addCommentTool, listCommentsTool } from '../tools/comments.js';
 import { getItemTool, searchItemsTool } from '../tools/items-read.js';
 import {
@@ -83,6 +89,8 @@ export const CATALOG: readonly ToolDefinition[] = [
   listChannelsTool,
   readChannelTool,
   readThreadTool,
+  listPinsTool,
+  listEmojiTool,
   // admin
   createChannelTool,
   createProjectTool,
