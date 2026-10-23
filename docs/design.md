@@ -43,14 +43,14 @@ The API is versioned (`/v1`) and only grows: new endpoints, new optional fields,
 
 Scopes:
 
-| Scope                       | Allows                                                                                               |
-| --------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `projects:read`             | Projects, items, comments, history, links, sprints, releases                                         |
-| `projects:write`            | Create and edit items, transitions, assignments, comments, links, planning (implies `projects:read`) |
-| `projects:delete`           | Delete, move, bulk update, archive a status; always previewed and confirmed                          |
-| `projects:admin`            | Workflows, work types, fields, labels (always previewed and confirmed); new channels and projects    |
-| `pages:read`, `pages:write` | Channel pages (write implies read)                                                                   |
-| `chat:read`                 | Messages and threads in channels the person belongs to; never direct messages                        |
+| Scope                       | Allows                                                                                                          |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `projects:read`             | Projects, items, comments, history, links, sprints, releases                                                    |
+| `projects:write`            | Create and edit items, transitions, assignments, comments, links, planning (implies `projects:read`)            |
+| `projects:delete`           | Delete, move, bulk update, archive a status; always previewed and confirmed                                     |
+| `projects:admin`            | Workflows, work types, fields, labels (always previewed and confirmed); new channels and projects               |
+| `pages:read`, `pages:write` | Channel pages (write implies read)                                                                              |
+| `chat:read`                 | Messages, threads and pins in channels the person belongs to, and the org's custom emoji; never direct messages |
 
 The server never stores a token. In stdio mode it reads `BUILDIT_TOKEN` from its environment; in HTTP mode each request brings its own. The token is sent only to the configured API URL, never follows redirects, and never appears in logs or error messages.
 
@@ -106,19 +106,19 @@ Tools are grouped into toolsets that can be switched on and off. A tool is liste
 | `comments`      | on      | `list_comments`, `add_comment`                                                                                                                                                                     |
 | `planning`      | off     | `list_sprints`, `plan_sprint`, `list_releases`, `plan_release`, `write_release_notes`                                                                                                              |
 | `pages`         | off     | `list_pages`, `search_pages`, `get_page`, `create_page`, `update_page`                                                                                                                             |
-| `chat`          | off     | `list_channels`, `read_channel`, `read_thread` (read only)                                                                                                                                         |
+| `chat`          | off     | `list_channels`, `read_channel`, `read_thread`, `list_pins`, `list_emoji` (read only)                                                                                                              |
 | `admin`         | off     | `create_channel`, `create_project`, `get_workflow`, `list_work_types`, `propose_workflow_change`, `propose_work_type_change`, `propose_field_change`, `propose_label_change`                       |
 | `destructive`   | off     | `propose_delete_item`, `propose_move_item`, `propose_bulk_update`, `propose_archive_status`                                                                                                        |
 | with `propose_` | -       | `apply_plan`                                                                                                                                                                                       |
 
-That is 15 tools by default and 40 with every toolset. `admin` and `destructive` stay off unless the configuration names them, whatever the token's scopes.
+That is 15 tools by default and 43 with every toolset. `admin` and `destructive` stay off unless the configuration names them, whatever the token's scopes.
 
 Tools are shaped around tasks rather than endpoints. They use readable identifiers (item keys such as `DEMO-42`, status, sprint, release, channel and user names), return both a short text summary and structured content with an output schema, page long results, and keep tool descriptions as static text that never includes server data.
 
 How the tools behave:
 
 - **Scopes.** Each tool declares every scope of the operations it calls, read from the contract (`x-buildit-required-scopes`, or `x-buildit-scope` where an operation has no list; for a plan, its action's), and is listed only when the token has all of them: `write_release_notes` needs `pages:write` as well, `propose_archive_status` both `projects:delete` and `projects:admin`. A token with only `projects:read` never sees a write tool. `create_channel` and `create_project` also need a token without project or channel limits (the API answers a limited one with `outside_limits`), so they aren't listed for a token that `GET /v1/me` shows with limits. Read-only mode keeps only the tools annotated `readOnlyHint`.
-- **Annotations** follow the contract's hints: creates (`create_item`, `add_comment`, `create_page`, `plan_sprint`, `plan_release`, `create_channel`, `create_project`) are not idempotent; updates, transitions, assignments, links and ranks are. Destructive: `unlink_items` (it removes a link), `update_page` (it replaces the body), `write_release_notes` (it can replace an edited notes page) and `apply_plan`. Adding a link is not destructive, which is why links have two tools. Only the chat tools are open-world; the others touch only the org's structured data.
+- **Annotations** follow the contract's hints: creates (`create_item`, `add_comment`, `create_page`, `plan_sprint`, `plan_release`, `create_channel`, `create_project`) are not idempotent; updates, transitions, assignments, links and ranks are. Destructive: `unlink_items` (it removes a link), `update_page` (it replaces the body), `write_release_notes` (it can replace an edited notes page) and `apply_plan`. Adding a link is not destructive, which is why links have two tools. Only the chat tools that read messages are open-world; the others (`list_emoji` among them) touch only the org's structured data.
 - **Few tools for a lifecycle.** `plan_sprint` (create, start, complete, add and remove items) and `plan_release` (create, release, update, reopen, archive, restore, add and remove items) take an action, so planning is five tools instead of fifteen. Reopening, archiving and restoring a release apply directly, like releasing it: each is undone by another action and changes no item.
 - **What the deployment serves.** The API and this server ship separately, so a new operation can be in the contract before the deployment serves it. `/v1/meta` (from API 1.1.0) lists the operations served; the API client keeps what it last read (about the deployment, not the caller), and a call to an operation it doesn't list, or an argument that needs a newer `api_version`, is refused locally with what to tell the person. In HTTP mode, where nothing is kept between requests, the API answers for itself.
 - **Concise by default.** Lists give one line per entry; `detail: "full"` adds descriptions and custom fields. `get_item` gives the latest comments; `list_comments` pages through the rest.

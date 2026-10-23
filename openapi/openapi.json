@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "buildIt.Social agent API",
-    "version": "1.2.0",
+    "version": "1.4.0",
     "summary": "The versioned API that AI agents (through buildit-mcp) use to work with an org's projects, pages and channels.",
     "description": "Every call runs as the token's owner, so the app's permissions, history and notifications apply. v1 only grows: new operations, optional request fields, response fields and enum values; clients must ignore what they don't know. A breaking change is /v2, with /v1 kept for 12 months. The oldest supported buildit-mcp is 0.1.0. Generated from the API's schemas; don't edit by hand."
   },
@@ -96,7 +96,7 @@
                   "$ref": "#/components/schemas/MetaResponse"
                 },
                 "example": {
-                  "api_version": "1.2.0",
+                  "api_version": "1.4.0",
                   "min_mcp_version": "0.1.0",
                   "deprecations": [],
                   "operations": [
@@ -6173,7 +6173,15 @@
                       "created_at": "2026-10-07T13:00:00Z",
                       "edited_at": null,
                       "deleted": false,
-                      "via_agent": null
+                      "via_agent": null,
+                      "pinned": true,
+                      "pinned_at": "2026-10-07T13:05:00Z",
+                      "pinned_by": {
+                        "id": "00000000-0000-4000-8000-000000000002",
+                        "display_name": "Sam Lee",
+                        "email": "sam@example.com",
+                        "type": "user"
+                      }
                     }
                   ],
                   "next_cursor": null
@@ -6326,7 +6334,15 @@
                     "created_at": "2026-10-07T13:00:00Z",
                     "edited_at": null,
                     "deleted": false,
-                    "via_agent": null
+                    "via_agent": null,
+                    "pinned": true,
+                    "pinned_at": "2026-10-07T13:05:00Z",
+                    "pinned_by": {
+                      "id": "00000000-0000-4000-8000-000000000002",
+                      "display_name": "Sam Lee",
+                      "email": "sam@example.com",
+                      "type": "user"
+                    }
                   },
                   "replies": [
                     {
@@ -6350,7 +6366,10 @@
                       "created_at": "2026-10-07T13:00:00Z",
                       "edited_at": null,
                       "deleted": false,
-                      "via_agent": null
+                      "via_agent": null,
+                      "pinned": false,
+                      "pinned_at": null,
+                      "pinned_by": null
                     }
                   ],
                   "next_cursor": null
@@ -8149,6 +8168,279 @@
           "needs_projects": false
         }
       }
+    },
+    "/v1/channels/{channel}/pins": {
+      "get": {
+        "operationId": "list_pins",
+        "tags": [
+          "chat"
+        ],
+        "summary": "List a channel's pinned messages",
+        "description": "The messages pinned in a channel (at most 100), newest pinned first, each with when and by whom it was pinned. Never a DM or group DM. Agents read pins; they can't pin or unpin.",
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ChannelRef"
+            },
+            "example": "demo"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size, 1–100 (default 25).",
+            "schema": {
+              "default": 25,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "example": 25
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListPinsResponse"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "pinned_at": "2026-10-07T13:05:00Z",
+                      "pinned_by": {
+                        "id": "00000000-0000-4000-8000-000000000002",
+                        "display_name": "Sam Lee",
+                        "email": "sam@example.com",
+                        "type": "user"
+                      },
+                      "message": {
+                        "id": "00000000-0000-4000-8000-00000000005a",
+                        "channel_id": "00000000-0000-4000-8000-00000000000b",
+                        "author": {
+                          "id": "00000000-0000-4000-8000-000000000001",
+                          "display_name": "Ana Ruiz",
+                          "email": "ana@example.com",
+                          "type": "user"
+                        },
+                        "kind": "text",
+                        "body": "Merged DEMO-42.",
+                        "code": null,
+                        "code_language": null,
+                        "file": null,
+                        "photos": [],
+                        "mentions": [],
+                        "reply_count": 1,
+                        "last_reply_at": "2026-10-07T14:03:00Z",
+                        "created_at": "2026-10-07T13:00:00Z",
+                        "edited_at": null,
+                        "deleted": false,
+                        "via_agent": null,
+                        "pinned": true,
+                        "pinned_at": "2026-10-07T13:05:00Z",
+                        "pinned_by": {
+                          "id": "00000000-0000-4000-8000-000000000002",
+                          "display_name": "Sam Lee",
+                          "email": "sam@example.com",
+                          "type": "user"
+                        }
+                      }
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "chat:read",
+        "x-buildit-required-scopes": [
+          "chat:read"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "scope_missing",
+          "outside_limits",
+          "not_found",
+          "validation",
+          "ambiguous",
+          "rate_limited",
+          "internal",
+          "unavailable"
+        ],
+        "x-buildit-hints": {
+          "read_only": true,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": false
+        }
+      }
+    },
+    "/v1/emoji": {
+      "get": {
+        "operationId": "list_emoji",
+        "tags": [
+          "chat"
+        ],
+        "summary": "List the org's custom emoji",
+        "description": "The org's active custom emoji, by name: messages show them as :name:. Agents read the names; they can't add, rename or remove emoji, and their images aren't served here.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListEmojiResponse"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "5d0e6f2a-8c1b-4e3d-9a7f-1b2c3d4e5f60",
+                      "name": "party_parrot",
+                      "animated": true
+                    },
+                    {
+                      "id": "5d0e6f2a-8c1b-4e3d-9a7f-1b2c3d4e5f61",
+                      "name": "shipit",
+                      "animated": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": "chat:read",
+        "x-buildit-required-scopes": [
+          "chat:read"
+        ],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "scope_missing",
+          "rate_limited",
+          "internal",
+          "unavailable"
+        ],
+        "x-buildit-hints": {
+          "read_only": true,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": false
+        }
+      }
     }
   },
   "components": {
@@ -8850,7 +9142,7 @@
           },
           "body": {
             "type": "string",
-            "description": "As written: plain text, with any Discord-style formatting markers kept (**bold**, ||spoiler||, [text](link)); spoilers are not masked."
+            "description": "As written: plain text, with any Discord-style formatting markers kept (**bold**, ||spoiler||, [text](link)); spoilers are not masked. The org's custom emoji show as :name: (list_emoji has them)."
           },
           "mentions": {
             "type": "array",
@@ -9414,6 +9706,27 @@
         "minLength": 1,
         "maxLength": 2048,
         "description": "An opaque cursor from a previous page's next_cursor. Valid only with the same query. A cursor in the wrong format is a 422 validation error on `cursor`."
+      },
+      "CustomEmoji": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "a-z, 0-9 and _, 2 to 32 characters; messages show it as :name:."
+          },
+          "animated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "animated"
+        ],
+        "description": "One of the org's custom emoji."
       },
       "CustomFieldValue": {
         "type": "object",
@@ -12932,6 +13245,21 @@
           "next_cursor"
         ]
       },
+      "ListEmojiResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomEmoji"
+            },
+            "description": "The org's active custom emoji, by name (at most 500)."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
       "ListMembersResponse": {
         "type": "object",
         "properties": {
@@ -12977,6 +13305,29 @@
           "next_cursor"
         ],
         "description": "The channel's pages, as a tree flattened by parent and position."
+      },
+      "ListPinsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PinnedMessage"
+            }
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; null on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "description": "A channel's pinned messages (at most 100), newest pinned first. A thread reply's message has its thread in GET /v1/messages/{id}/thread."
       },
       "ListProjectMembersResponse": {
         "type": "object",
@@ -13248,7 +13599,7 @@
           },
           "body": {
             "type": "string",
-            "description": "As written: plain text, with any Discord-style formatting markers kept (**bold**, ||spoiler||, [text](link)); spoilers are not masked."
+            "description": "As written: plain text, with any Discord-style formatting markers kept (**bold**, ||spoiler||, [text](link)); spoilers are not masked. The org's custom emoji show as :name: (list_emoji has them)."
           },
           "code": {
             "type": [
@@ -13388,6 +13739,32 @@
               "string",
               "null"
             ]
+          },
+          "pinned": {
+            "type": "boolean",
+            "description": "Whether the message is pinned in its channel (everyone in the channel sees the same pins; list_pins lists them)."
+          },
+          "pinned_at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it was pinned; null when it isn't pinned."
+          },
+          "pinned_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageAuthor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who pinned it: a person, or a bot of the org (type app). Null when it isn't pinned, and for a deleted account."
           }
         },
         "required": [
@@ -13406,7 +13783,10 @@
           "created_at",
           "edited_at",
           "deleted",
-          "via_agent"
+          "via_agent",
+          "pinned",
+          "pinned_at",
+          "pinned_by"
         ]
       },
       "MessageAuthor": {
@@ -13822,6 +14202,33 @@
         "description": "1–200 characters, trimmed.",
         "examples": [
           "Release plan"
+        ]
+      },
+      "PinnedMessage": {
+        "type": "object",
+        "properties": {
+          "pinned_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "pinned_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageAuthor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who pinned it: a person, or a bot of the org (type app); null for a deleted account."
+          },
+          "message": {
+            "$ref": "#/components/schemas/Message"
+          }
+        },
+        "required": [
+          "pinned_at",
+          "pinned_by",
+          "message"
         ]
       },
       "PlanAction": {
@@ -16036,7 +16443,7 @@
       ]
     },
     "chat:read": {
-      "description": "Read messages and threads of channels the user belongs to. Never DMs or group DMs.",
+      "description": "Read messages and threads of channels the user belongs to, and the org's custom emoji. Never DMs or group DMs.",
       "implies": []
     }
   },

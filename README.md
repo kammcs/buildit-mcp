@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://bu
 
 It runs on your own machine (stdio) or as a stateless HTTP server for a team. It holds no secrets of its own: each person's token stays in their own client.
 
-**Status:** 0.2.0, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (41 tools in all).
+**Status:** 0.2.0, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all).
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
@@ -64,7 +64,7 @@ The tools you see depend on the enabled toolsets, read-only mode, the exclude li
 
 ### Toolsets
 
-`items` and `comments` are on by default (15 tools). Turn others on with `BUILDIT_TOOLSETS` (or `--toolsets`), for example `BUILDIT_TOOLSETS=items,comments,planning,pages` or `BUILDIT_TOOLSETS=all` (41 tools). In HTTP mode, the `X-Buildit-Toolsets` header picks them per request, among the ones the server enables: it can narrow them, never add one.
+`items` and `comments` are on by default (15 tools). Turn others on with `BUILDIT_TOOLSETS` (or `--toolsets`), for example `BUILDIT_TOOLSETS=items,comments,planning,pages` or `BUILDIT_TOOLSETS=all` (43 tools). In HTTP mode, the `X-Buildit-Toolsets` header picks them per request, among the ones the server enables: it can narrow them, never add one.
 
 **`admin` and `destructive` stay off unless you name them**, even when your token has `projects:admin` or `projects:delete`. Turn them on only for work that needs them, for example a separate client entry with `BUILDIT_TOOLSETS=items,admin` while you reorganize a workflow. Their changes always go through preview and confirm (below), except creating a channel or a project, which changes nothing that exists.
 
@@ -100,6 +100,8 @@ The tools you see depend on the enabled toolsets, read-only mode, the exclude li
 | `chat`                    | `list_channels`            | `chat:read`                         | read-only, open-world   | The channels you belong to (never direct messages). Paged.                                                                                                                                                                                 |
 |                           | `read_channel`             | `chat:read`                         | read-only, open-world   | A channel's messages, newest first, optionally `since` a time; says which come from an app (a bot of the org). Paged.                                                                                                                      |
 |                           | `read_thread`              | `chat:read`                         | read-only, open-world   | A message and its replies, oldest first. Paged.                                                                                                                                                                                            |
+|                           | `list_pins`                | `chat:read`                         | read-only, open-world   | A channel's pinned messages, newest pinned first, with when and by whom. Paged. Messages say whether they're pinned in `read_channel` and `read_thread` too.                                                                               |
+|                           | `list_emoji`               | `chat:read`                         | read-only               | The org's custom emoji by name (messages show them as `:name:`); no images.                                                                                                                                                                |
 | `admin` (off)             | `create_channel`           | `projects:admin`                    |                         | A public or private channel, with members; safe to retry with its idempotency key. Needs a token without project or channel limits.                                                                                                        |
 |                           | `create_project`           | `projects:admin`                    |                         | Turn a channel into a project from a template, with its key (named after the channel); safe to retry. Needs a token without limits and Projects.                                                                                           |
 |                           | `get_workflow`             | `projects:admin`                    | read-only               | A workflow's statuses, moves and whole definition, to edit and propose.                                                                                                                                                                    |

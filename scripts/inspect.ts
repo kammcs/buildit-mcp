@@ -139,6 +139,8 @@ const MORE_TOOLS = [
   'list_channels',
   'read_channel',
   'read_thread',
+  'list_pins',
+  'list_emoji',
   'create_channel',
   'create_project',
   'get_workflow',

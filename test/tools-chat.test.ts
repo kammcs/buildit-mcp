@@ -1,5 +1,6 @@
 /**
- * The chat toolset (read only): list_channels, read_channel and read_thread.
+ * The chat toolset (read only): list_channels, read_channel, read_thread,
+ * list_pins and list_emoji.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -105,6 +106,22 @@ describe('read_channel', () => {
     );
     expect(r.text).toContain('1 replies (read_thread)');
     expect(r.text).toContain('2 message(s) in the channel, newest first:');
+  });
+
+  it('says which messages are pinned, when and by whom', async () => {
+    const c = await client();
+    const r = await c.call('read_channel', { channel: 'general' });
+    expect(r.structured.messages).toMatchObject([
+      {
+        id: MESSAGES.other,
+        pinned: true,
+        pinned_at: '2026-10-07T08:05:00Z',
+        pinned_by: { name: 'Test User' },
+      },
+      { id: MESSAGES.root, pinned: false, pinned_at: null, pinned_by: null },
+    ]);
+    expect(r.text).toContain('pinned 2026-10-07T08:05:00Z');
+    expect(r.text.match(/pinned /g)).toHaveLength(1);
   });
 
   it('reads only what came after since, and pages with a cursor', async () => {
@@ -219,6 +236,7 @@ describe('read_thread', () => {
       next_cursor: null,
     });
     expect(r.text).toContain('1 reply, oldest first:');
+    expect(r.structured.replies).toEqual([expect.objectContaining({ pinned: true })]);
   });
 
   it('says what to do for a reply id or an unknown message', async () => {
@@ -245,5 +263,148 @@ describe('read_thread', () => {
     const r = await c.call('read_thread', { message: MESSAGES.root });
     assertDefused(r.text);
     expect(injectionIsInsideBlocks(r.text)).toBe(true);
+  });
+});
+
+describe('list_pins', () => {
+  it("lists a channel's pins, newest pinned first, with who pinned them", async () => {
+    const c = await client();
+    const r = await c.call('list_pins', { channel: 'general' });
+    expect(r.isError).toBe(false);
+    expect(r.structured).toMatchObject({
+      pins: [
+        {
+          pinned_at: '2026-10-07T08:05:00Z',
+          pinned_by: { name: 'Test User' },
+          message: { id: MESSAGES.other, pinned: true },
+        },
+        {
+          pinned_at: '2026-10-06T10:00:00Z',
+          pinned_by: { name: 'Sam Example' },
+          message: { id: MESSAGES.reply },
+        },
+      ],
+      next_cursor: null,
+    });
+    expect(r.text).toContain('2 pinned message(s) in the channel, newest pinned first:');
+    expect(stripIds(r.text)).toContain(
+      '<untrusted_content source="message" author="Alex Example">\nStandup moves to 10:00 tomorrow.',
+    );
+    expect(api.requests.at(-1)?.path).toBe('/v1/channels/general/pins');
+  });
+
+  it('pages with a cursor, and says when a channel has none', async () => {
+    const c = await client();
+    const first = await c.call('list_pins', { channel: 'general', limit: 1 });
+    const cursor = first.structured.next_cursor as string;
+    expect(cursor).toBeTruthy();
+    const second = await c.call('list_pins', { channel: 'general', limit: 1, cursor });
+    expect((second.structured.pins as { message: { id: string } }[])[0]?.message.id).toBe(
+      MESSAGES.reply,
+    );
+    expect(second.text).toContain('This is the last page.');
+    const none = await c.call('list_pins', { channel: 'Demo project' });
+    expect(none.structured.pins).toEqual([]);
+    expect(none.text).toContain('No pinned messages in the channel.');
+  });
+
+  it('shows a deleted account as no one, and never reads a direct message', async () => {
+    api.store.messages.find((m) => m.id === MESSAGES.other)!.pin = {
+      at: '2026-10-07T08:05:00Z',
+      byId: null,
+    };
+    const c = await client();
+    const r = await c.call('list_pins', { channel: 'general' });
+    expect((r.structured.pins as { pinned_by: unknown }[])[0]?.pinned_by).toBeNull();
+    const dm = await c.call('list_pins', { channel: CHANNELS.dm });
+    expect(dm.isError).toBe(true);
+    expect(dm.text).toContain('not_found (HTTP 404)');
+  });
+
+  it('wraps and defuses hostile pinned messages and names', async () => {
+    api.store.messages.push({
+      id: uid(9500),
+      channelId: CHANNELS.general,
+      authorId: USERS.sam.id,
+      body: HOSTILE,
+      parentId: null,
+      createdAt: '2026-10-07T09:00:00Z',
+      deleted: false,
+      viaAgent: null,
+      pin: { at: '2026-10-07T09:10:00Z', byId: USERS.sam.id },
+    });
+    api.store.users.find((u) => u.id === USERS.sam.id)!.display_name = HOSTILE.slice(0, 60);
+    const c = await client();
+    const r = await c.call('list_pins', { channel: 'general' });
+    expect(r.isError).toBe(false);
+    assertDefused(r.text);
+    expect(injectionIsInsideBlocks(r.text)).toBe(true);
+    assertDefused(JSON.stringify(r.structured));
+  });
+
+  it("says when the API doesn't serve it yet", async () => {
+    api.compat.v14 = false;
+    api.meta = { api_version: '1.2.0', min_mcp_version: '0.1.0', deprecations: [] };
+    const c = await client();
+    await c.call('whoami');
+    const before = api.requests.length;
+    const r = await c.call('list_pins', { channel: 'general' });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("doesn't serve list_pins yet");
+    expect(api.requests.length).toBe(before);
+  });
+});
+
+describe('list_emoji', () => {
+  it("lists the org's active custom emoji by name", async () => {
+    const c = await client();
+    const r = await c.call('list_emoji');
+    expect(r.isError).toBe(false);
+    expect(r.structured.emoji).toEqual([
+      { id: uid(9401), name: 'shipit', animated: false },
+      { id: uid(9402), name: 'party_parrot', animated: true },
+    ]);
+    expect(r.text).toContain('2 custom emoji:');
+    expect(r.text).toContain('- :party_parrot: (animated)');
+    expect(r.text).not.toContain('retired');
+  });
+
+  it('says when the org has none, and defuses a hostile name', async () => {
+    api.store.emoji = [];
+    const c = await client();
+    const none = await c.call('list_emoji');
+    expect(none.text).toContain('The org has no custom emoji.');
+    api.store.emoji = [{ id: uid(9404), name: HOSTILE, animated: false, active: true }];
+    const r = await c.call('list_emoji');
+    assertDefused(r.text);
+    expect(injectionIsInsideBlocks(r.text)).toBe(true);
+    assertDefused(JSON.stringify(r.structured));
+  });
+
+  it('is read-only, and hidden without chat:read', async () => {
+    const c = await client();
+    const tools = (await c.client.listTools()).tools;
+    expect(tools.find((t) => t.name === 'list_emoji')?.annotations).toMatchObject({
+      readOnlyHint: true,
+      openWorldHint: false,
+    });
+    expect(tools.find((t) => t.name === 'list_pins')?.annotations).toMatchObject({
+      readOnlyHint: true,
+      openWorldHint: true,
+    });
+    const reader = await client(TOKENS.read);
+    const names = (await reader.client.listTools()).tools.map((t) => t.name);
+    expect(names).not.toContain('list_emoji');
+    expect(names).not.toContain('list_pins');
+  });
+
+  it("says when the API doesn't serve it yet", async () => {
+    api.compat.v14 = false;
+    api.meta = { api_version: '1.2.0', min_mcp_version: '0.1.0', deprecations: [] };
+    const c = await client();
+    await c.call('whoami');
+    const r = await c.call('list_emoji');
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("doesn't serve list_emoji yet");
   });
 });

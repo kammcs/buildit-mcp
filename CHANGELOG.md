@@ -4,6 +4,14 @@ All notable changes to buildit-mcp are listed here. The project follows [semanti
 
 ## [Unreleased]
 
+Built on version 1.4.0 of the agent API's contract. `list_pins` and `list_emoji` need a buildIt.Social server that serves them, and are refused with a clear message on an older one; `read_channel` and `read_thread` need API 1.3.0 or newer.
+
+### Tools
+
+- `list_pins` (chat toolset): a channel's pinned messages, newest pinned first, with when and by whom each was pinned. Never direct messages; agents can't pin or unpin.
+- `list_emoji` (chat toolset): the org's custom emoji by name, which messages and comments show as `:name:`. No images; agents can't add, rename or remove emoji. 43 tools in all.
+- `read_channel` and `read_thread` say whether each message is pinned (`pinned`, `pinned_at`, `pinned_by`).
+
 ### Docs
 
 - Set clients up with `npx -y @kammcs/buildit-mcp@latest`, not `@0`: npx keeps the copy it first installed for a version range and never updates it, so `@0` stayed on 0.1.0 after 0.2.0 shipped.
