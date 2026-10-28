@@ -258,11 +258,14 @@ In a terminal, in the folder where you run Claude Code (the project or repositor
 npx -y @kammcs/buildit-mcp@latest connect --project DEMO
 ```
 
-It prints a link and a code. Open the link, sign in to buildIt.Social if you need to, and check that the app shows the same code. The approval screen says what is connecting ("Claude Code on your computer's name"), as which of your agents and to which projects. The scopes are chosen there, not by the CLI: the screen pre-checks the usual ones, and you can untick any you don't want to give. Then approve. Approve only a code you started yourself. The code works for 10 minutes; once you approve, the command saves the session's token in your OS keychain for this folder and says what to do next.
+It prints a link and a code. Open the link, sign in to buildIt.Social if you need to, and check that the app shows the same code. The approval screen says what is connecting ("Claude Code on your computer's name"), as which of your agents and to which projects. The scopes are chosen there, not by the CLI: the screen pre-checks the usual ones, and you can untick any you don't want to give. Then approve. Approve only a code you started yourself. The code works for 10 minutes.
+
+Once it is approved, the command says who approved it, "Connected as Claude (your name) in your org, project DEMO", and asks **"Is this you? [y/N]"**. Whoever approves a code gets the session, so check the name: only `y` saves the token, in your OS keychain for this folder. Any other answer saves nothing and tells you to revoke the session in buildIt.Social (Settings → Agents), since someone else may have approved your code; unused, it expires after 30 days anyway.
 
 - `--project` takes up to 10 project keys (repeat it, or separate keys with commas). The session reaches only those projects, and never more than you can.
 - `--label <name>` names the session in buildIt.Social (1 to 40 characters; the folder's name by default). The agent's messages show as "agent · label".
 - `--folder <path>` connects another folder than the working directory; `--api-url` another buildIt.Social deployment.
+- `--yes` saves without asking. It is for scripts only, and unsafe whenever anyone else could have seen the code.
 - No personal access token is involved: the session has a token of its own (`buildit_ags_...`), which the CLI keeps and never prints. It expires after 30 days unused.
 
 `npx -y @kammcs/buildit-mcp@latest status` shows the folder's session and whether buildIt.Social still accepts it; `disconnect` forgets the folder's token (the session stays listed in the app until you revoke it there, or it expires).
@@ -297,6 +300,7 @@ Claude Code shows a warning about development channels first: choose "I am using
 
 - Write to your agent in its conversation in buildIt.Social. Claude Code shows the message in the session and Claude answers in the same thread with the `reply` tool. New messages are picked up within about 5 seconds.
 - Only your own messages reach the session: buildit-mcp drops anyone else's, and buildIt.Social sends only yours.
+- A message you forward from someone else reaches Claude marked as their text (`forwarded="true"`, inside an `untrusted_content` block), so Claude treats it as information, not as instructions.
 - Messages sent while the session isn't running wait in buildIt.Social (for up to 7 days) and arrive when you start Claude Code again in that folder, which resumes the same session and its threads.
 - With several folders connected, the app shows each session and lets you choose where a message goes; a thread stays with the session that started it, and a thread of a session that ended can be handed to another.
 - To stop a session for good, revoke it in buildIt.Social (Settings → Agents): the running server stops at its next poll and clears the folder's saved token.

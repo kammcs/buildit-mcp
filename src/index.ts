@@ -4,6 +4,8 @@
  * a Claude Code channel with --channel; and the session commands
  * (connect, disconnect, status), which run in a terminal.
  */
+import { createInterface } from 'node:readline/promises';
+
 import { runConnect, runDisconnect, runStatus, type CommandIO } from './cli/commands.js';
 import { COMMAND_USAGE, ConfigError, parseCli, USAGE } from './config.js';
 import { createLogger } from './log.js';
@@ -46,6 +48,20 @@ async function main(): Promise<void> {
       err: (text) => process.stderr.write(`${SERVER_NAME}: ${text}`),
       store,
       logger: createLogger({ level: 'error' }),
+      ask: async (question) => {
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        // Without a terminal or input (stdin closed), the answer is empty: not saved.
+        const closed = new Promise<string>((resolve) =>
+          rl.once('close', () => {
+            resolve('');
+          }),
+        );
+        try {
+          return await Promise.race([rl.question(question), closed]);
+        } finally {
+          rl.close();
+        }
+      },
     };
     process.exitCode =
       action.kind === 'connect'

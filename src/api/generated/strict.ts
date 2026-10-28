@@ -1129,6 +1129,9 @@ export const SessionHeartbeatResponseSchema = z.strictObject({
 });
 export type SessionHeartbeatResponse = z.infer<typeof SessionHeartbeatResponseSchema>;
 
+export const SessionOwnerSchema = z.strictObject({ id: UuidSchema, name: z.string() });
+export type SessionOwner = z.infer<typeof SessionOwnerSchema>;
+
 export const SprintSchema = z.strictObject({
   id: UuidSchema,
   number: z.int(),
@@ -1371,6 +1374,7 @@ export const ConnectPollResponseSchema = z.strictObject({
   expires_at: TimestampSchema,
   session: SessionBriefSchema,
   agent: AgentBriefSchema,
+  owner: SessionOwnerSchema,
   org: z.strictObject({ id: UuidSchema, name: z.string() }),
 });
 export type ConnectPollResponse = z.infer<typeof ConnectPollResponseSchema>;
@@ -1674,7 +1678,7 @@ export const SessionResponseSchema = z.strictObject({
     expires_at: TimestampSchema,
   }),
   agent: AgentBriefSchema,
-  owner: z.strictObject({ id: UuidSchema, name: z.string() }),
+  owner: SessionOwnerSchema,
   org: z.strictObject({ id: UuidSchema, name: z.string() }),
   dm: z.strictObject({ conversation_id: UuidSchema }),
   poll_interval_s: z.int().min(1),

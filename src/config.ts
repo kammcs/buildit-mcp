@@ -76,6 +76,8 @@ export interface ConnectOptions extends SessionCommandOptions {
   projects: string[];
   /** The session's name in buildIt.Social (1 to 40 characters). */
   label: string;
+  /** Save without asking "Is this you?" (--yes, for scripts; unsafe if anyone else could see the code). */
+  yes: boolean;
 }
 
 export type SessionCommand = 'connect' | 'disconnect' | 'status';
@@ -158,7 +160,14 @@ Options:
   --folder <path>           The folder (default: the working directory)
   --api-url <url>           BUILDIT_API_URL  Agent API base URL
                             (default ${DEFAULT_API_URL})
+  --yes                     Save without asking "Is this you?" once it is
+                            approved. For scripts only: unsafe if anyone else
+                            could have seen the code, since whoever approves
+                            it gets the session
   -h, --help                Show this help
+
+Once approved, it says who approved it (the agent, its owner, the org) and
+asks "Is this you?"; only "y" saves the token.
 `,
   disconnect: `Usage: buildit-mcp disconnect [options]
 
@@ -389,6 +398,7 @@ function parseSessionCommand(
           ? {
               project: { type: 'string', multiple: true },
               label: { type: 'string' },
+              yes: { type: 'boolean' },
             }
           : {}),
       },
@@ -409,7 +419,10 @@ function parseSessionCommand(
   const projectFlags = values.project;
   const projects = parseProjects(Array.isArray(projectFlags) ? projectFlags : []);
   const label = sessionLabel(typeof values.label === 'string' ? values.label : undefined, folder);
-  return { kind: 'connect', options: { apiUrl, folder, projects, label } };
+  return {
+    kind: 'connect',
+    options: { apiUrl, folder, projects, label, yes: values.yes === true },
+  };
 }
 
 /**

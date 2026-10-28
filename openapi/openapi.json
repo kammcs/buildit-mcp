@@ -245,7 +245,7 @@
                     "writes_per_minute": 60,
                     "writes_per_day": 2000,
                     "org_requests_per_minute": 600,
-                    "polls_per_minute": 12
+                    "polls_per_minute": 20
                   }
                 }
               }
@@ -8706,6 +8706,10 @@
                     "id": "00000000-0000-4000-8000-000000000064",
                     "name": "Claude"
                   },
+                  "owner": {
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "name": "Ana Ruiz"
+                  },
                   "org": {
                     "id": "00000000-0000-4000-8000-000000000003",
                     "name": "Example Co"
@@ -8763,7 +8767,7 @@
           "session"
         ],
         "summary": "The session",
-        "description": "The token's session (its label, machine, scopes, projects and expiry), its agent, its owner, the org and the agent's direct message with its owner, where the session talks. Only messages from the owner reach the session. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
+        "description": "The token's session (its label, machine, scopes, projects and expiry), its agent, its owner, the org and the agent's direct message with its owner, where the session talks. Only messages from the owner reach the session. It counts in the session's own poll window (session_polls_per_minute), never against the user's or the org's limits. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -8893,7 +8897,7 @@
           "session"
         ],
         "summary": "The session's events",
-        "description": "What reached this session since the last ack, oldest first: the owner's messages in the agent's direct message (new top-level messages routed to this session, and replies in its threads). Deliveries are at least once: deduplicate on the event's id, and ack the cursor once handled. Events wait 7 days for a session that isn't running. Poll every `poll_interval_s` seconds of get_session; polling also counts as the session's heartbeat (online). Polls are limited to 12 a minute by default (429 rate_limited, bucket session_polls_per_minute); acks count as ordinary requests. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
+        "description": "What reached this session since the last ack, oldest first: the owner's messages in the agent's direct message (new top-level messages routed to this session, and replies in its threads). Deliveries are at least once: deduplicate on the event's id, and ack the cursor once handled. Events wait 7 days for a session that isn't running. Poll every `poll_interval_s` seconds of get_session; polling also counts as the session's heartbeat (online). Polls, get_session and heartbeats count only in the session's own window, 20 a minute by default (429 rate_limited, bucket session_polls_per_minute), never against the user's or the org's limits; acks count as ordinary requests. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
         "parameters": [
           {
             "name": "cursor",
@@ -9339,7 +9343,7 @@
           "session"
         ],
         "summary": "Say the session is online or offline",
-        "description": "online: the session is running (polling events counts too, so a session that polls needn't call it); the app shows it online for 90 seconds after the last sign. offline: the session is shutting down, shown offline at once. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
+        "description": "online: the session is running (polling events counts too, so a session that polls needn't call it); the app shows it online for 90 seconds after the last sign. offline: the session is shutting down, shown offline at once. It counts in the session's own poll window (session_polls_per_minute), never against the user's or the org's limits. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -10335,6 +10339,9 @@
           "agent": {
             "$ref": "#/components/schemas/AgentBrief"
           },
+          "owner": {
+            "$ref": "#/components/schemas/SessionOwner"
+          },
           "org": {
             "type": "object",
             "properties": {
@@ -10356,6 +10363,7 @@
           "expires_at",
           "session",
           "agent",
+          "owner",
           "org"
         ],
         "description": "The approved session's token, sent exactly once."
@@ -16210,7 +16218,7 @@
             "description": "The org's requests a minute, across all its tokens."
           },
           "polls_per_minute": {
-            "description": "A session token's polls of list_session_events a minute (acks count as ordinary requests). Absent on servers older than API version 1.5.0.",
+            "description": "A session token's polls a minute: list_session_events, get_session and session_heartbeat together, counted only for the session (acks count as ordinary requests). Absent on servers older than API version 1.5.0.",
             "type": "integer"
           }
         },
@@ -16868,6 +16876,23 @@
         ],
         "description": "A message the session posted, as the agent."
       },
+      "SessionOwner": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "Their name in this org."
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "description": "The person the session acts as and talks to. Only their messages reach the session."
+      },
       "SessionResponse": {
         "type": "object",
         "properties": {
@@ -16943,21 +16968,7 @@
             "$ref": "#/components/schemas/AgentBrief"
           },
           "owner": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "$ref": "#/components/schemas/Uuid"
-              },
-              "name": {
-                "type": "string",
-                "description": "Their name in this org."
-              }
-            },
-            "required": [
-              "id",
-              "name"
-            ],
-            "description": "The person the session acts as and talks to. Only their messages reach the session."
+            "$ref": "#/components/schemas/SessionOwner"
           },
           "org": {
             "type": "object",

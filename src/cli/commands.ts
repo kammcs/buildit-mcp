@@ -41,7 +41,12 @@ export interface CommandIO {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   machine?: string;
+  /** Asks the person a question and returns their answer ('' when there is no one to ask). */
+  ask?: (question: string) => Promise<string>;
 }
+
+/** The answers that confirm: only an explicit yes. */
+const YES = /^y(es)?$/i;
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -196,10 +201,25 @@ export async function runConnect(options: ConnectOptions, io: CommandIO): Promis
     }
     try {
       const done = await connectPoll(api, start.device_code);
+      const plural = options.projects.length === 1 ? 'project' : 'projects';
+      io.out(
+        `Connected as ${plain(done.agent.name, 80)} (${plain(done.owner.name, 80)}) in ${plain(done.org.name, 80)}, ${plural} ${options.projects.join(', ')}; session "${plain(done.session.label, 40)}".\n`,
+      );
+      // Whoever approves a code gets the session: check it was the person here.
+      const answer = options.yes ? 'y' : ((await io.ask?.('Is this you? [y/N] ')) ?? '');
+      if (!YES.test(answer.trim())) {
+        io.err(
+          [
+            'Not saved: the connection was not confirmed.',
+            `If that is not you, someone else may have approved your code. In buildIt.Social, revoke the session "${plain(done.session.label, 40)}" (Settings → Agents), or tell its owner to; unused, it expires after 30 days.`,
+            'Run "buildit-mcp connect" again for a new code, and approve it yourself.',
+          ].join('\n') + '\n',
+        );
+        return 1;
+      }
       await io.store.set(key, done.token);
       io.out(
         [
-          `Connected as ${plain(done.agent.name, 80)} · ${plain(done.session.label, 40)} in ${plain(done.org.name, 80)}.`,
           io.store.kind === 'keyring'
             ? `The session token is saved in ${io.store.location}, for this folder.`
             : `The session token is saved in ${io.store.location} (readable only by your user account), for this folder.`,

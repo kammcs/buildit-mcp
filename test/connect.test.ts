@@ -67,13 +67,17 @@ interface Harness {
   out: () => string;
   err: () => string;
   waits: number[];
+  /** The questions asked, in order. */
+  asked: string[];
 }
 
 /** The commands' IO; `onWait` runs at each poll's wait (to approve, deny...). */
-function harness(onWait: (n: number) => void = () => undefined): Harness {
+/** The commands' IO; `onWait` runs at each poll's wait, `answer` answers "Is this you?". */
+function harness(onWait: (n: number) => void = () => undefined, answer = 'y'): Harness {
   let out = '';
   let err = '';
   const waits: number[] = [];
+  const asked: string[] = [];
   const store = new KeyringTokenStore(
     memoryKeyring(),
     new FileTokenStore(join(dir, 'sessions.json')),
@@ -91,12 +95,23 @@ function harness(onWait: (n: number) => void = () => undefined): Harness {
       onWait(waits.length);
       return Promise.resolve();
     },
+    ask: (question) => {
+      asked.push(question);
+      return Promise.resolve(answer);
+    },
   };
-  return { io, store, out: () => out, err: () => err, waits };
+  return { io, store, out: () => out, err: () => err, waits, asked };
 }
 
 function options(extra: Partial<ConnectOptions> = {}): ConnectOptions {
-  return { apiUrl: api.url, folder: dir, projects: ['DEMO'], label: 'demo-folder', ...extra };
+  return {
+    apiUrl: api.url,
+    folder: dir,
+    projects: ['DEMO'],
+    label: 'demo-folder',
+    yes: false,
+    ...extra,
+  };
 }
 
 describe('connect', () => {
@@ -114,7 +129,10 @@ describe('connect', () => {
     });
     expect(h.out()).toContain(`https://app.example.com/connect?code=${grant?.userCode}`);
     expect(h.out()).toContain(`this code: ${grant?.userCode}`);
-    expect(h.out()).toContain('Connected as Claude · demo-folder in Example Org.');
+    expect(h.out()).toContain(
+      'Connected as Claude (Test User) in Example Org, project DEMO; session "demo-folder".',
+    );
+    expect(h.asked).toEqual(['Is this you? [y/N] ']);
     expect(h.out()).toContain('claude --dangerously-load-development-channels server:buildit');
     expect(h.out()).not.toContain(SESSION_TOKENS.first);
     expect(await h.store.get(sessionKey(dir, api.url))).toBe(SESSION_TOKENS.first);
@@ -123,6 +141,40 @@ describe('connect', () => {
     // The connect flow sends no token.
     const sent = api.requests.filter((r) => r.path.startsWith('/v1/connect/'));
     expect(sent.map((r) => r.headers.authorization)).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('saves only on an explicit yes: anything else may be someone else', async () => {
+    for (const answer of ['n', '', 'yeah', 'no']) {
+      const h = harness((n) => {
+        if (n === 1) api.sessions.approve();
+      }, answer);
+      expect(await runConnect(options({ projects: ['DEMO', 'OPS'] }), h.io)).toBe(1);
+      expect(h.out()).toContain(
+        'Connected as Claude (Test User) in Example Org, projects DEMO, OPS',
+      );
+      expect(h.err()).toContain('someone else may have approved your code');
+      expect(h.err()).toContain('revoke the session "demo-folder"');
+      expect(await h.store.get(sessionKey(dir, api.url))).toBeUndefined();
+      expect(h.out() + h.err()).not.toContain(SESSION_TOKENS.first);
+    }
+    for (const answer of ['Y', ' yes ']) {
+      const h = harness((n) => {
+        if (n === 1) api.sessions.approve();
+      }, answer);
+      expect(await runConnect(options(), h.io)).toBe(0);
+      expect(await h.store.get(sessionKey(dir, api.url))).toBe(SESSION_TOKENS.first);
+      await h.store.delete(sessionKey(dir, api.url));
+    }
+  });
+
+  it('with --yes, saves without asking (for scripts)', async () => {
+    const h = harness((n) => {
+      if (n === 1) api.sessions.approve();
+    }, 'n');
+    expect(await runConnect(options({ yes: true }), h.io)).toBe(0);
+    expect(h.asked).toEqual([]);
+    expect(h.out()).toContain('Connected as Claude (Test User)');
+    expect(await h.store.get(sessionKey(dir, api.url))).toBe(SESSION_TOKENS.first);
   });
 
   it('slows down when asked', async () => {

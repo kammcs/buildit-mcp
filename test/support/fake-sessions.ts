@@ -167,6 +167,7 @@ export class FakeSessions {
         expires_at: '2026-11-27T10:00:00.000Z',
         session: { id: session.id, label: session.label },
         agent: { id: SESSION_IDS.agent, name: 'Claude' },
+        owner: { id: session.ownerId, name: session.ownerName },
         org: { id: this.identity(token).org.id, name: this.identity(token).org.name },
       },
     };

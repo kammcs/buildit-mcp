@@ -259,6 +259,7 @@ describe('the session commands', () => {
         folder: cwd,
         projects: ['DEMO', 'OPS'],
         label: 'demo-folder',
+        yes: false,
       },
     });
     const custom = parseCli(
@@ -318,5 +319,8 @@ describe('the session commands', () => {
       options: { folder: resolve('/other') },
     });
     expect(parseCli(['connect', '--help'], {})).toEqual({ kind: 'help', command: 'connect' });
+    expect(parseCli(['connect', '--project', 'DEMO', '--yes'], {}, cwd)).toMatchObject({
+      options: { yes: true },
+    });
   });
 });
