@@ -4,9 +4,9 @@
  *
  * FakeApi routes the session operations here; their requests and responses
  * are checked against the contract like every other operation's. Tests
- * drive the person's side: `approve` or `deny` a code, `post` a message
- * from the owner (or someone else) into the session's events, and `revoke`
- * or `expire` a session.
+ * drive the person's side: `approve` or `deny` a code, post a message
+ * from the owner (or someone else, or one the owner forwarded) into the
+ * session's events with `postFrom`, and `revoke` or `expire` a session.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -336,7 +336,16 @@ export class FakeSessions {
   postFrom(
     token: string,
     text: string,
-    options: { from?: { id: string; name: string }; threadId?: string; type?: string } = {},
+    options: {
+      from?: { id: string; name: string };
+      threadId?: string;
+      type?: string;
+      /** The owner forwarded this message; its first author, a person or an app (or neither). */
+      forwardedFrom?: {
+        user?: { id: string; name: string } | null;
+        app?: { id: string; name: string } | null;
+      };
+    } = {},
   ): string {
     const s = this.sessions.get(token);
     if (!s) throw new Error('no session for this token');
@@ -363,6 +372,15 @@ export class FakeSessions {
           has_card: false,
           created_at: this.host.now(),
           edited_at: null,
+          forwarded: options.forwardedFrom !== undefined,
+          forwarded_from:
+            options.forwardedFrom === undefined
+              ? null
+              : {
+                  message_id: randomUUID(),
+                  user: options.forwardedFrom.user ?? null,
+                  app: options.forwardedFrom.app ?? null,
+                },
         },
         user: { id: user.id, name: user.name, is_guest: false, locale: 'en' },
       },

@@ -75,7 +75,7 @@ A person can also give a Claude Code session its own identity: a **session** of 
 - `reply` posts with `POST /v1/session/messages` as the agent, labelled with the session, in the thread named or the thread of the latest message that arrived (a new message when none has). Its idempotency key is the message's id, generated when the agent gives none and returned.
 - `connect` asks for no scopes: the person chooses them on the app's approval screen, which pre-checks the usual ones.
 
-The message text is the owner's own, so it is not wrapped as untrusted content: it is the person directing the session. A message the owner forwarded from someone else (the event's message has `forwarded` set, or a `forwarded_from` object) is someone else's text: it arrives with `meta.forwarded = "true"`, after a line saying it is data, with its text inside an `untrusted_content` block (source `forwarded message`, the original author's name sanitized). Everything the other tools return from buildIt.Social is still wrapped.
+The message text is the owner's own, so it is not wrapped as untrusted content: it is the person directing the session. A message the owner forwarded from someone else (the event's message has `forwarded` set, or a `forwarded_from` object) is someone else's text: it arrives with `meta.forwarded = "true"`, after a line saying it is data, with its text inside an `untrusted_content` block (source `forwarded message`; the author is the first message's, through any chain of forwards: a person's name, or an app's with `author_kind="app"`, sanitized, or none when the server names neither). Everything the other tools return from buildIt.Social is still wrapped.
 
 ## Transports
 

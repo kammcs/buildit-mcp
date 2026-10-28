@@ -1117,6 +1117,14 @@ export const SessionEventMessageSchema = z.strictObject({
   has_card: z.boolean(),
   created_at: TimestampSchema,
   edited_at: TimestampSchema.nullable(),
+  forwarded: z.boolean(),
+  forwarded_from: z
+    .strictObject({
+      message_id: UuidSchema,
+      user: z.strictObject({ id: UuidSchema, name: z.string() }).nullable(),
+      app: z.strictObject({ id: UuidSchema, name: z.string() }).nullable(),
+    })
+    .nullable(),
 });
 export type SessionEventMessage = z.infer<typeof SessionEventMessageSchema>;
 
