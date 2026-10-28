@@ -54,6 +54,16 @@ export interface ChannelConfig {
   apiUrlFlag: boolean;
 }
 
+/** How questions reach the person in channel mode (the plugin's settings). */
+export interface AskConfig {
+  /** Ask AskUserQuestion's questions as cards in buildIt.Social (BUILDIT_QUESTIONS_IN_APP, default true). */
+  questionsInApp: boolean;
+  /** How long a question card waits for an answer, 1 to 60 minutes (BUILDIT_ASK_TIMEOUT_MINUTES, default 60). */
+  timeoutMinutes: number;
+}
+
+export const DEFAULT_ASK_TIMEOUT_MINUTES = 60;
+
 export interface Config {
   mode: Mode;
   /** The agent API base URL, without a trailing slash. */
@@ -65,6 +75,8 @@ export interface Config {
   token?: string;
   /** Set in --channel mode (stdio only): push the session's messages into Claude Code. */
   channel?: ChannelConfig;
+  /** Channel mode: questions as cards. */
+  ask: AskConfig;
   toolsets: ToolsetName[];
   readOnly: boolean;
   excludeTools: string[];
@@ -80,6 +92,8 @@ export interface SessionCommandOptions {
   folder: string;
   /** Whether --api-url was given (disconnect and status otherwise use the API saved for the folder). */
   apiUrlFlag?: boolean;
+  /** Said once when the API address was a bare host and got the agent API's path. */
+  apiUrlNote?: string;
 }
 
 export interface ConnectOptions extends SessionCommandOptions {
@@ -131,7 +145,8 @@ Options (each also has an environment variable):
   --api-url <url>           BUILDIT_API_URL           Agent API base URL
                                                       (default ${DEFAULT_API_URL})
   --toolsets <list>         BUILDIT_TOOLSETS          Comma-separated toolsets, or "all"
-                                                      (default ${DEFAULT_TOOLSETS.join(',')};
+                                                      (default ${DEFAULT_TOOLSETS.join(',')}, or all
+                                                      with --channel;
                                                       known: ${TOOLSET_NAMES.join(', ')})
   --read-only               BUILDIT_READ_ONLY=true    Only list tools that change nothing
   --exclude-tools <list>    BUILDIT_EXCLUDE_TOOLS     Comma-separated tool names to hide
@@ -144,6 +159,11 @@ Options (each also has an environment variable):
   --channel                 BUILDIT_CHANNEL=true      Claude Code channel mode (stdio only)
   --folder <path>           BUILDIT_FOLDER            The folder whose saved session --channel uses
                                                       (default: the working directory)
+                            BUILDIT_QUESTIONS_IN_APP  --channel: the plugin's question hook asks in
+                                                      buildIt.Social (default true)
+                            BUILDIT_ASK_TIMEOUT_MINUTES
+                                                      --channel: how long a question card waits,
+                                                      1 to 60 (default 60)
   --allow-any-host          BUILDIT_ALLOW_ANY_HOST=true
                                                       Off loopback, serve without checking the
                                                       Host header (otherwise BUILDIT_ALLOWED_HOSTS
@@ -217,6 +237,38 @@ export function parseBoolean(name: string, raw: string | undefined, fallback: bo
   throw new ConfigError(`${name} must be true or false (got "${raw}").`);
 }
 
+/**
+ * The plugin's settings arrive as environment variables it fills in, so a
+ * value that is empty or doesn't parse keeps the default, with a warning,
+ * instead of stopping the server.
+ */
+function parseAsk(env: Env, warnings: string[]): AskConfig {
+  let questionsInApp = true;
+  const rawIn = env.BUILDIT_QUESTIONS_IN_APP?.trim() ?? '';
+  if (rawIn !== '') {
+    const value = rawIn.toLowerCase();
+    if (TRUE_VALUES.has(value)) questionsInApp = true;
+    else if (FALSE_VALUES.has(value)) questionsInApp = false;
+    else
+      warnings.push(
+        'BUILDIT_QUESTIONS_IN_APP is not true or false; questions go to buildIt.Social.',
+      );
+  }
+  let timeoutMinutes = DEFAULT_ASK_TIMEOUT_MINUTES;
+  const rawMinutes = env.BUILDIT_ASK_TIMEOUT_MINUTES?.trim() ?? '';
+  if (rawMinutes !== '') {
+    const n = Number(rawMinutes);
+    if (Number.isFinite(n) && n >= 1 && n <= 60) {
+      timeoutMinutes = Math.floor(n);
+    } else {
+      warnings.push(
+        `BUILDIT_ASK_TIMEOUT_MINUTES must be 1 to 60; using ${DEFAULT_ASK_TIMEOUT_MINUTES}.`,
+      );
+    }
+  }
+  return { questionsInApp, timeoutMinutes };
+}
+
 function splitList(raw: string): string[] {
   return [
     ...new Set(
@@ -262,6 +314,23 @@ export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(host.toLowerCase());
 }
 
+/** The agent API's path on a buildIt.Social host. */
+export const AGENT_API_PATH = '/functions/v1/agent-api';
+
+/**
+ * The note shown once when an API address is a bare host (no path), which
+ * parseApiUrl completes with the agent API's path; undefined otherwise.
+ */
+export function apiUrlNote(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    if (new URL(raw.trim()).pathname !== '/') return undefined;
+  } catch {
+    return undefined;
+  }
+  return `The API address ${raw.trim()} has no path, so buildit-mcp uses ${parseApiUrl(raw)}, the agent API on that host.`;
+}
+
 export function parseApiUrl(raw: string): string {
   let url: URL;
   try {
@@ -281,6 +350,8 @@ export function parseApiUrl(raw: string): string {
       'BUILDIT_API_URL must use https:// (plain http:// is only allowed for localhost).',
     );
   }
+  // A bare host means its agent API.
+  if (url.pathname === '/') url.pathname = AGENT_API_PATH;
   return url.toString().replace(/\/+$/, '');
 }
 
@@ -424,19 +495,35 @@ function parseSessionCommand(
   }
   if (values.help === true) return { kind: 'help', command };
   const apiFlag = values['api-url'];
-  const apiUrl = parseApiUrl(
-    (typeof apiFlag === 'string' ? apiFlag : nonEmpty(env.BUILDIT_API_URL)) ?? DEFAULT_API_URL,
-  );
+  const apiRaw =
+    (typeof apiFlag === 'string' ? apiFlag : nonEmpty(env.BUILDIT_API_URL)) ?? DEFAULT_API_URL;
+  const apiUrl = parseApiUrl(apiRaw);
+  const note = apiUrlNote(apiRaw);
   const folder = folderOf(values.folder, env, cwd);
   if (command !== 'connect') {
-    return { kind: command, options: { apiUrl, folder, apiUrlFlag: typeof apiFlag === 'string' } };
+    return {
+      kind: command,
+      options: {
+        apiUrl,
+        folder,
+        apiUrlFlag: typeof apiFlag === 'string',
+        ...(note === undefined ? {} : { apiUrlNote: note }),
+      },
+    };
   }
   const projectFlags = values.project;
   const projects = parseProjects(Array.isArray(projectFlags) ? projectFlags : []);
   const label = sessionLabel(typeof values.label === 'string' ? values.label : undefined, folder);
   return {
     kind: 'connect',
-    options: { apiUrl, folder, projects, label, yes: values.yes === true },
+    options: {
+      apiUrl,
+      folder,
+      projects,
+      label,
+      yes: values.yes === true,
+      ...(note === undefined ? {} : { apiUrlNote: note }),
+    },
   };
 }
 
@@ -510,9 +597,19 @@ export function parseCli(
     );
   }
 
-  const apiUrl = parseApiUrl(str('api-url', 'BUILDIT_API_URL') ?? DEFAULT_API_URL);
+  const apiRaw = str('api-url', 'BUILDIT_API_URL') ?? DEFAULT_API_URL;
+  const apiUrl = parseApiUrl(apiRaw);
+  const apiNote = apiUrlNote(apiRaw);
+  if (apiNote !== undefined) warnings.push(apiNote);
   const toolsetsRaw = str('toolsets', 'BUILDIT_TOOLSETS');
-  const toolsets = toolsetsRaw === undefined ? [...DEFAULT_TOOLSETS] : parseToolsets(toolsetsRaw);
+  // Channel mode turns every toolset on by default: approvals need destructive and admin (the
+  // session's own scopes still limit what works).
+  const toolsets =
+    toolsetsRaw === undefined
+      ? channelMode
+        ? [...TOOLSET_NAMES]
+        : [...DEFAULT_TOOLSETS]
+      : parseToolsets(toolsetsRaw);
   const readOnly =
     values['read-only'] === true || parseBoolean('BUILDIT_READ_ONLY', env.BUILDIT_READ_ONLY, false);
   const excludeRaw = str('exclude-tools', 'BUILDIT_EXCLUDE_TOOLS');
@@ -601,6 +698,7 @@ export function parseCli(
       apiUrl,
       ...(token === undefined ? {} : { token }),
       ...(channel === undefined ? {} : { channel }),
+      ask: parseAsk(env, warnings),
       toolsets,
       readOnly,
       excludeTools,

@@ -122,7 +122,13 @@ export const RULES: Rule[] = [
     id: 'owner-last-name',
     why: "the owner's name (the company name is the copyright holder)",
     pattern: /\bK[a]mm\b/gi,
-    allow: [{ path: /^(LICENSE|package\.json)$/, text: /K[a]mm Creative Solutions/ }],
+    // The company is the author in the package's and the plugin's manifests.
+    allow: [
+      {
+        path: /^(LICENSE|package\.json|plugin(-local)?\/\.claude-plugin\/plugin\.json|\.claude-plugin\/marketplace\.json)$/,
+        text: /K[a]mm Creative Solutions/,
+      },
+    ],
     examples: { hit: [j('K', 'amm Corp')], miss: ['github.com/kammcs/buildit-mcp'] },
   },
   {

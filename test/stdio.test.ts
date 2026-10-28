@@ -62,8 +62,11 @@ beforeAll(async () => {
 afterAll(async () => {
   await api.close();
 });
+/** Run after each test, once its clients are closed. */
+const cleanups: (() => void)[] = [];
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()));
+  for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
 function baseEnv(token: string): Record<string, string> {
@@ -266,9 +269,14 @@ describe('stdio channel mode (built binary)', () => {
   it("registers as a channel on the 2025 handshake and pushes the owner's messages", async () => {
     api.sessions.interval = 1;
     const session = api.sessions.open(SESSION_TOKENS.zero, 'demo-folder');
+    // The channel's lock goes next to the session file: in a folder of the test's own.
+    const home = mkdtempSync(join(tmpdir(), 'buildit-mcp-home-'));
+    cleanups.push(() => {
+      rmSync(home, { recursive: true, force: true });
+    });
     const { client, stderr } = await connect(SESSION_TOKENS.zero, {
       auto: true,
-      env: { BUILDIT_CHANNEL: 'true' },
+      env: { BUILDIT_CHANNEL: 'true', APPDATA: home, HOME: home, XDG_CONFIG_HOME: home },
     });
     const notes: { method: string; params?: unknown }[] = [];
     client.fallbackNotificationHandler = (n) => {

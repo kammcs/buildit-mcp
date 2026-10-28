@@ -8,6 +8,7 @@
  * move the cursor or disguise itself in the terminal.
  */
 import { hostname } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { ApiError, ApiClient } from '../api/client.js';
 import {
@@ -22,6 +23,7 @@ import {
 import { FORBIDDEN_CHARS, type ConnectOptions, type SessionCommandOptions } from '../config.js';
 import { isTokenRefused, isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
+import { duplicateChannelWarning } from './claude-config.js';
 import {
   forgetSession,
   forgetStaleApi,
@@ -48,6 +50,8 @@ export interface CommandIO {
   entry?: string;
   /** Asks the person a question and returns their answer ('' when there is no one to ask). */
   ask?: (question: string) => Promise<string>;
+  /** For tests: the home folder whose Claude Code files status reads. */
+  home?: string;
 }
 
 /** The answers that confirm: only an explicit yes. */
@@ -124,12 +128,34 @@ export function nextSteps(
   platform: NodeJS.Platform = process.platform,
   entry: string | undefined = process.argv[1],
 ): string[] {
+  const local = localCheckout(entry);
+  const quote = (path: string): string => (/\s/.test(path) ? `"${path}"` : path);
   return [
-    'Next, in this folder:',
-    `  ${serverCommand(platform, entry)}`,
-    '  claude --dangerously-load-development-channels server:buildit',
-    'Messages you send to the agent in buildIt.Social then arrive in that Claude Code session.',
+    'Next, in this folder, start Claude Code with buildIt.Social, in one of two ways:',
+    "- The buildit plugin (recommended): your messages, and Claude's questions and approvals as cards in buildIt.Social.",
+    ...(local === undefined
+      ? [
+          '    claude plugin marketplace add kammcs/buildit-mcp',
+          '    claude plugin install buildit@buildit-mcp',
+          '    claude --dangerously-load-development-channels plugin:buildit@buildit-mcp',
+          '  From a checkout of buildit-mcp (after npm ci && npm run build in it):',
+          '    claude --plugin-dir <checkout>/plugin-local --dangerously-load-development-channels plugin:buildit@inline',
+        ]
+      : [
+          '  From this checkout (its plugin-local runs this build):',
+          `    claude --plugin-dir ${quote(join(local, 'plugin-local'))} --dangerously-load-development-channels plugin:buildit@inline`,
+        ]),
+    '- Or a plain channel server (messages and reply only):',
+    `    ${serverCommand(platform, entry)}`,
+    '    claude --dangerously-load-development-channels server:buildit',
+    'Use one of them, not both. Messages you send to the agent in buildIt.Social then arrive in that Claude Code session.',
   ];
+}
+
+/** The checkout a local build runs from (its dist/index.js), or undefined when run through npx. */
+function localCheckout(entry: string | undefined): string | undefined {
+  if (entry === undefined || /[\\/](_npx|node_modules)[\\/]/.test(entry)) return undefined;
+  return dirname(dirname(entry));
 }
 
 /**
@@ -393,7 +419,12 @@ export async function runStatus(given: SessionCommandOptions, io: CommandIO): Pr
   const options = { ...given, apiUrl: await apiUrlOf(given, io.store) };
   const key = sessionKey(options.folder, options.apiUrl);
   const token = await io.store.get(key);
-  const header = [`Folder:   ${options.folder}`, `API:      ${options.apiUrl}`];
+  const duplicate = duplicateChannelWarning(options.folder, io.home);
+  const header = [
+    `Folder:   ${options.folder}`,
+    `API:      ${options.apiUrl}`,
+    ...(duplicate === undefined ? [] : [duplicate]),
+  ];
   if (token === undefined) {
     io.out(
       [...header, 'Not connected. Run "buildit-mcp connect --project <KEY>" in this folder.'].join(

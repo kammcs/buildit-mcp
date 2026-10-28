@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://bu
 
 It runs on your own machine (stdio) or as a stateless HTTP server for a team. It holds no secrets of its own: each person's token stays in their own client.
 
-**Status:** 0.4.0, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`.
+**Status:** 0.5.0, not yet on npm ([`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp) has 0.4.0). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`; with the [buildit plugin](#questions-and-approvals-in-builditsocial-plugin), its questions and approvals come to you there as cards.
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
@@ -248,7 +248,7 @@ It works only with the **Claude Code CLI** (not Claude Desktop), because it uses
 
 ### 1. Install or upgrade
 
-Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer.
+Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer, and the [plugin](#questions-and-approvals-in-builditsocial-plugin) 0.5.0.
 
 > **Until 0.4.0 is on npm**, `@latest` is an older release without channel mode, so use a local build: `git clone https://github.com/kammcs/buildit-mcp.git`, then `npm ci && npm run build` in it, and use `node /path/to/buildit-mcp/dist/index.js` wherever the steps below say `npx -y @kammcs/buildit-mcp@latest`. `connect` run that way prints the matching `claude mcp add` line.
 
@@ -266,7 +266,7 @@ Once it is approved, the command says who approved it and for which projects, as
 
 - `--project` takes up to 10 project keys (repeat it, or separate keys with commas). The session reaches only those projects, and never more than you can.
 - `--label <name>` names the session in buildIt.Social (1 to 40 characters; the folder's name by default). The agent's messages show as "agent · label".
-- `--folder <path>` connects another folder than the working directory; `--api-url` another buildIt.Social deployment.
+- `--folder <path>` connects another folder than the working directory. `--api-url <url>` connects to another buildIt.Social deployment: its agent API's address, such as `https://buildit.example.com/functions/v1/agent-api`; a bare host such as `https://buildit.example.com` gets `/functions/v1/agent-api` added (the command says so).
 - `--yes` saves without asking. It is for scripts only, and unsafe whenever anyone else could have seen the code.
 - No personal access token is involved: the session has a token of its own (`buildit_ags_...`), which the CLI keeps and never prints. It expires after 30 days unused.
 
@@ -308,6 +308,70 @@ Claude Code shows a warning about development channels first: choose "I am using
 - Messages sent while the session isn't running wait in buildIt.Social (for up to 7 days) and arrive when you start Claude Code again in that folder, which resumes the same session and its threads.
 - With several folders connected, the app shows each session and lets you choose where a message goes; a thread stays with the session that started it, and a thread of a session that ended can be handed to another.
 - To stop a session for good, revoke it in buildIt.Social (Settings → Agents), or run `disconnect`. The running server finds out at its next poll (or call) and clears the folder's saved token, but keeps running: Claude keeps its tools, which now answer that the session has ended and how to reconnect, and `reply` goes from the list. Run `connect` again in the folder and restart Claude Code.
+
+### Questions and approvals in buildIt.Social (plugin)
+
+The **buildit plugin** for Claude Code (0.5.0) adds what the bare channel can't do, so you can work with the session from your phone as well as from the terminal:
+
+- **Questions as cards.** When Claude asks you something (its `AskUserQuestion` tool), the question appears in your agent's conversation in buildIt.Social as a card, instead of in the terminal: one card per question: the question in full, a list of its choices with their details (several choices where Claude allows them), and a field to type your own answer instead. Claude gets all the answers together once you have answered every card. Your answer goes back to Claude, and the terminal doesn't ask. Claude can also ask you with the `ask` tool while it works on a message from the app.
+- **Approvals as cards.** A destructive or configuration change (a `propose_*` tool) is posted as a card with **Apply** and **Cancel**. buildIt.Social words the card from its own preview and applies the change itself when you tap Apply, as you through your agent; an agent session can never apply a change itself (`apply_plan` answers `plan_card_required`), so only your tap applies it. Claude learns the outcome (applied, cancelled, not applied because the items changed, failed, expired after 60 minutes, or unknown, when buildIt.Social couldn't confirm it, and then Claude checks the items) as a channel message.
+- **"<agent> is writing…"** shows in the thread while Claude works on your message, and stops when it answers, asks, posts an approval, or ends its turn.
+
+If nobody answers a question in time (60 minutes by default), the card closes and Claude is told nobody answered, so it makes a safe assumption and says which, or stops and says what it needs; it doesn't fall back to the terminal. The same goes when you dismiss the card in the app ("Dismiss question"), or when the session ends while it waits. Pressing Esc in the terminal closes the card. Without the plugin, or with its questions setting off, Claude asks in the terminal as usual.
+
+**Install it.** The plugin replaces the `claude mcp add` server of step 3: it starts buildit-mcp in channel mode itself. So **remove that server first**, in the same folder:
+
+```sh
+claude mcp remove buildit
+```
+
+Then add this repository as a plugin marketplace and install the plugin (in Claude Code, or from a terminal with `claude plugin ...`):
+
+```text
+/plugin marketplace add kammcs/buildit-mcp
+/plugin install buildit@buildit-mcp
+```
+
+(On Claude Code 2.1.275 or later, `/plugin install buildit --marketplace kammcs/buildit-mcp` does both in one step.) Connect the folder as in step 2 if you haven't, then start Claude Code with the plugin's channel:
+
+```sh
+claude --dangerously-load-development-channels plugin:buildit@buildit-mcp
+```
+
+`buildit-mcp status` warns when both the plugin and a `buildit-mcp --channel` server (in `~/.claude.json` or the folder's `.mcp.json`) are set up. If both run anyway, only the first one to start is the folder's channel (it holds a lock next to the session file); the other serves its tools without the channel, and its `reply` and `ask` say so.
+
+**Settings** (`/plugin`, the buildit plugin's options):
+
+| Setting                     | Default | What it does                                                                                                              |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Question wait (minutes)     | 60      | How long a question card waits for an answer, 1 to 60. The card closes a minute before the hook's one-hour limit at most. |
+| Questions in buildIt.Social | on      | Off: Claude's `AskUserQuestion` questions stay in the terminal. Approvals and "is writing" are unaffected.                |
+
+The plugin passes them to the server as `BUILDIT_ASK_TIMEOUT_MINUTES` and `BUILDIT_QUESTIONS_IN_APP`, and turns every toolset on (`BUILDIT_TOOLSETS=all`), since approvals need the `destructive` and `admin` tools; `--channel` does the same when `BUILDIT_TOOLSETS` isn't set. The session's own scopes and projects still limit what works. It hooks `AskUserQuestion` (`PreToolUse`, an `mcp_tool` hook calling the server's `ask` tool with a one-hour timeout) and Claude's turn ending (`Stop`, calling `turn_ended`, which only stops "is writing"; it isn't a tool for Claude). Tested with Claude Code 2.1.312, where a hook of this kind waited more than ten minutes as it should.
+
+#### Try it from a checkout
+
+Until 0.5.0 is on npm, the plugin's server (`npx -y @kammcs/buildit-mcp@0.5.0 --channel`) can't be downloaded. The checkout has a twin of the plugin for that, `plugin-local/`: the same name (`buildit`), hooks and settings, but its server runs the checkout's own build, `node ${CLAUDE_PLUGIN_ROOT}/../dist/index.js --channel`. Load it for one session with `--plugin-dir`, which installs nothing:
+
+```sh
+git clone https://github.com/kammcs/buildit-mcp.git
+cd buildit-mcp
+npm ci && npm run build
+```
+
+Then, in the folder you work in (connected as in step 2, with the local build: `node /path/to/buildit-mcp/dist/index.js connect --project DEMO`):
+
+```sh
+claude mcp remove buildit
+claude --plugin-dir /path/to/buildit-mcp/plugin-local --dangerously-load-development-channels plugin:buildit@inline
+```
+
+- `claude mcp remove buildit` is only needed when the server of step 3 is set up in that folder (it says so when there is none).
+- A plugin loaded with `--plugin-dir` belongs to the marketplace `inline`, so its channel is `plugin:buildit@inline`. Check the line under the banner: it should say that messages from `plugin:buildit@inline` arrive in this session.
+- Its server is `plugin:buildit:buildit`, as the hooks name it, and it starts in the folder Claude Code runs in, so it finds that folder's session.
+- Run `npm run build` again after pulling changes; `claude plugin validate plugin-local` checks it.
+
+On Windows, Claude Code starts the plugin's `npx` itself; if `/mcp` shows the plugin's server as failed, check that `npx -y @kammcs/buildit-mcp@0.5.0 --version` works in a terminal (Node.js 20 or newer on `PATH`).
 
 ### Where the token is kept
 
@@ -384,7 +448,7 @@ docker run -i --rm -e BUILDIT_HTTP=false -e BUILDIT_TOKEN ghcr.io/kammcs/buildit
 - **The agent acts as you.** Everything it does is done with your permissions and is labelled in buildIt.Social as done through your agent.
 - **People-written content is marked.** Titles, descriptions, comments, pages and messages, the names of people, projects, channels and the like (and GitHub titles, branch names and authors) come back inside `<untrusted_content>` blocks, and the server tells the agent to treat them as data, never instructions. Each block carries a random id, repeated in its closing tag, and only that closing tag ends it. This reduces, but cannot remove, the risk of prompt injection, so prefer narrow scopes and review what an agent proposes.
 - **Destructive and admin changes are previewed and need your confirmation** ([above](#preview-then-confirm)), and their toolsets are off unless you turn them on. Read the preview before you say yes: it is what will happen.
-- **Chat is read only**, and never reaches direct messages. The one exception is channel mode's `reply`, which writes only in your agent's own conversation with you.
+- **Chat is read only**, and never reaches direct messages. The one exception is channel mode (`reply`, `ask`'s question cards and the approval cards), which writes only in your agent's own conversation with you. Only you can answer its cards; an answer is passed to Claude as your words inside an `untrusted_content` block, and an approval card is applied by buildIt.Social on your tap, never by the session.
 - **Channel mode passes on only your own messages**, because whoever can write into a Claude Code session can steer it. A session token reaches only the projects you approved, never more than you can, and only your agent's conversation with you; revoke it in the app when you no longer need it.
 - **Logs** are JSON on stderr and never contain tokens or content.
 

@@ -11,7 +11,9 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import { postSessionMessage } from '../channel/api.js';
+import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import type { ChannelState } from '../channel/loop.js';
+import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolDefinition } from '../toolsets/registry.js';
 import { IdempotencyKeyInput } from './shared.js';
 
@@ -70,6 +72,7 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
     inputSchema: ReplyInputSchema,
     outputSchema: ReplyOutputSchema,
     async run(args, ctx) {
+      if (!state.isChannel) throw new ToolInputError(NOT_THE_CHANNEL);
       const key = args.idempotency_key ?? randomUUID();
       const threadId = args.thread_id ?? state.lastThreadId;
       const r = await postSessionMessage(
@@ -82,6 +85,7 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
         },
         ctx.apiOptions,
       );
+      state.typing?.stop(threadId);
       const m = r.message;
       const where = m.thread_id ? `in thread ${m.thread_id}` : 'as a new message';
       return {
@@ -100,6 +104,37 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
           ? `Sent ${where} (message ${m.id}).`
           : `Nothing new: this reply was already sent ${where} with this idempotency_key (message ${m.id}).`,
       };
+    },
+  });
+}
+
+/**
+ * turn_ended: called by the plugin's Stop hook when Claude's turn ends, so
+ * buildIt.Social stops showing that the agent is writing. Not for Claude.
+ */
+export function createTurnEndedTool(state: ChannelState): ToolDefinition {
+  return defineTool({
+    name: 'turn_ended',
+    toolset: 'chat',
+    title: 'Turn ended (plugin hook)',
+    description:
+      "Called by the buildit plugin's Stop hook when your turn ends; it tells buildIt.Social that the agent is no longer writing. Not for you to call: it does nothing you need.",
+    scopes: [],
+    runsAfterSessionEnd: true,
+    annotations: {
+      title: 'Turn ended (plugin hook)',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: z.object({}),
+    outputSchema: z.object({ stopped: z.number().describe('Threads that were working.') }),
+    async run() {
+      const working = state.typing?.working.length ?? 0;
+      await state.typing?.stopAll();
+      // The Stop hook reads the text as its output: an empty object lets the turn end.
+      return { structured: { stopped: working }, text: '{}' };
     },
   });
 }

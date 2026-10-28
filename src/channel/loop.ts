@@ -28,6 +28,7 @@ import { ToolInputError } from '../errors.js';
 import { isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
 import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
+import { planResolvedContent } from '../tools/plans.js';
 import {
   ackSessionEvents,
   getSession,
@@ -37,6 +38,8 @@ import {
   type SessionEvent,
   type SessionInfo,
 } from './api.js';
+import type { TypingIndicator } from './typing.js';
+import { CardWaiters, eventMessageId } from './waiters.js';
 
 /** The notification Claude Code reads as a channel event. */
 export const CHANNEL_NOTIFICATION = 'notifications/claude/channel';
@@ -58,13 +61,28 @@ const ENDED_NOTICES: Partial<Record<EndReason, string>> = {
   token_invalid: 'buildIt.Social no longer recognises the session token',
 };
 
-/** What the loop and the reply tool share: the session, and the thread of the latest message. */
+/**
+ * What the loop and the channel tools (reply, ask, the plan cards) share:
+ * the session, the thread of the latest message, the waiters for card
+ * answers, and the "is writing" indicator.
+ */
 export class ChannelState {
   session: SessionInfo | undefined;
   /** Why the session ended for good, once it has (the tools then say so). */
   ended: 'token_revoked' | 'token_expired' | 'token_invalid' | undefined;
   /** The thread the latest message came in, which reply uses when it names none. */
   lastThreadId: string | undefined;
+  /** The owner's locale, from their latest event (the cards' language). */
+  ownerLocale: string | undefined;
+  /**
+   * Whether this server is the folder's channel (it holds the lock). When
+   * it isn't, there is no loop, and reply and ask say so.
+   */
+  isChannel = true;
+  /** Who waits for answers to the session's cards. */
+  readonly waiters = new CardWaiters();
+  /** "<agent> is writing…" while Claude works on a message. */
+  typing: TypingIndicator | undefined;
 }
 
 /** Why the loop ended for good. */
@@ -193,6 +211,7 @@ export class ChannelLoop {
   private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly seen = new Seen();
   private running: Promise<void> | undefined;
+  private stopping: Promise<void> | undefined;
   private ended = false;
   private failures = 0;
 
@@ -213,12 +232,22 @@ export class ChannelLoop {
     return this.stopper.signal.aborted;
   }
 
-  /** Stops polling, waits for the loop, and says the session is offline (best effort). */
-  async stop(): Promise<void> {
+  /**
+   * Stops polling, waits for the loop, stops "is writing", and says the
+   * session is offline (best effort). Once: a second call waits for the first.
+   */
+  stop(): Promise<void> {
+    this.stopping ??= this.stopOnce();
+    return this.stopping;
+  }
+
+  private async stopOnce(): Promise<void> {
     if (this.stopper.signal.aborted && this.running === undefined) return;
     this.stopper.abort();
     await this.running;
+    this.options.state.waiters.endAll();
     if (this.ended || this.options.state.session === undefined) return;
+    await this.options.state.typing?.stopAll().catch(() => undefined);
     await sessionHeartbeat(this.options.api, 'offline', {
       signal: AbortSignal.timeout(3000),
     }).then(
@@ -302,11 +331,18 @@ export class ChannelLoop {
       return;
     }
     this.seen.add(event.id);
-    if (event.type !== 'message.posted') {
+    if (event.type === 'card.response' || event.type === 'card.closed') {
+      await this.deliverCard(event, info);
+      return;
+    }
+    // A type this version doesn't know (the contract may add some).
+    const type: string = event.type;
+    if (type !== 'message.posted') {
+      const other = event as { id: string; type: string };
       logger.info('channel event dropped', {
-        event_id: event.id,
+        event_id: other.id,
         reason: 'type',
-        type: event.type,
+        type: other.type,
       });
       return;
     }
@@ -329,6 +365,7 @@ export class ChannelLoop {
       return;
     }
     this.seen.add(`m:${message.id}`);
+    this.noteLocale(user);
     const threadId = message.thread_id ?? message.id;
     const forwarded = forwardOrigin(message);
     try {
@@ -347,7 +384,81 @@ export class ChannelLoop {
       throw err;
     }
     this.options.state.lastThreadId = threadId;
+    this.options.state.typing?.start(threadId);
     logger.info('channel message delivered', { event_id: event.id, message_id: message.id });
+  }
+
+  /** Keeps the owner's locale from their latest event, for the cards' words. */
+  private noteLocale(user: unknown): void {
+    const locale = (user as { locale?: unknown } | null | undefined)?.locale;
+    if (typeof locale === 'string' && locale !== '') this.options.state.ownerLocale = locale;
+  }
+
+  /**
+   * An answer to one of the session's cards, or a card that closed: handed
+   * to the card's waiter (an ask) and waited for; a plan card's outcome
+   * becomes a plan_resolved notification. Answers from anyone but the
+   * owner, answers no one waits for (plan cards, late ones) and other
+   * closed cards are dropped.
+   */
+  private async deliverCard(event: SessionEvent, info: SessionInfo): Promise<void> {
+    const { logger, state } = this.options;
+    if (event.session.id !== info.session.id) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: 'other_session' });
+      return;
+    }
+    const data = event.data as Record<string, unknown>;
+    const messageId = eventMessageId(event);
+    if (messageId === undefined) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: 'shape' });
+      return;
+    }
+    if (event.type === 'card.response') {
+      const user = data.user as { id?: unknown } | null | undefined;
+      if (user?.id !== info.owner.id) {
+        logger.warn('channel event dropped', { event_id: event.id, reason: 'not_owner' });
+        return;
+      }
+      this.noteLocale(user);
+    }
+    if (await state.waiters.deliver(event)) {
+      logger.info('card event handed to its waiter', { event_id: event.id, type: event.type });
+      return;
+    }
+    const plan = data.plan;
+    if (event.type === 'card.closed' && plan !== null && typeof plan === 'object') {
+      const resolved = planResolvedContent(plan as Record<string, unknown>);
+      if (resolved === undefined) {
+        logger.warn('channel event dropped', { event_id: event.id, reason: 'shape' });
+        return;
+      }
+      const message = data.message as { thread_id?: unknown };
+      const threadId = typeof message.thread_id === 'string' ? message.thread_id : messageId;
+      try {
+        await this.options.notify({
+          content: resolved.content,
+          meta: {
+            event: 'plan_resolved',
+            handle: resolved.handle,
+            outcome: resolved.outcome,
+            thread_id: threadId,
+            message_id: messageId,
+            session: sanitizeLabel(event.session.label, 40),
+          },
+        });
+      } catch (err) {
+        logger.error('channel notification failed; stopping', { error: err });
+        this.stopper.abort();
+        throw err;
+      }
+      logger.info('plan outcome delivered', { event_id: event.id, outcome: resolved.outcome });
+      return;
+    }
+    logger.info('channel event dropped', {
+      event_id: event.id,
+      reason: 'no_waiter',
+      type: event.type,
+    });
   }
 
   /**
@@ -402,6 +513,9 @@ export class ChannelLoop {
     if (reason === 'token_revoked' || reason === 'token_expired' || reason === 'token_invalid') {
       this.options.state.ended = reason;
     }
+    // Every question waiting for an answer is told the session ended.
+    this.options.state.waiters.endAll();
+    this.options.state.typing?.close();
     this.options.logger.warn(
       reason === 'session_token_required'
         ? 'channel mode needs a session token from "buildit-mcp connect"; polling stopped'
