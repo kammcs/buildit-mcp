@@ -2,6 +2,24 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.5.0] - 2026-10-28
+
+Built on version 1.6.0 of the agent API's contract. Questions, approval cards and "is writing" need a buildIt.Social server with agent API 1.6.0; on an older one, `ask` can't post (the plugin's hook then lets the terminal ask) and proposals keep the usual two steps.
+
+### The buildit plugin for Claude Code
+
+- **A Claude Code plugin** in this repository (`plugin/`, marketplace `buildit-mcp` in `.claude-plugin/marketplace.json`): `/plugin marketplace add kammcs/buildit-mcp`, then `/plugin install buildit@buildit-mcp`, and start Claude Code with `--dangerously-load-development-channels plugin:buildit@buildit-mcp`. It starts buildit-mcp in channel mode itself, so it replaces the `claude mcp add` server (remove that one first; `buildit-mcp status` warns when both are set up). Settings: the question wait (1 to 60 minutes, default 60) and whether questions go to buildIt.Social (default on). See [Questions and approvals in buildIt.Social](README.md#questions-and-approvals-in-builditsocial-plugin).
+- **Claude's questions as cards.** The plugin hooks `AskUserQuestion`: the questions are posted as a card in your agent's conversation (buttons with "Other…" for one short single-choice question, otherwise a form with multi-select and a field for another answer), and your answer is handed to Claude, so the terminal doesn't ask. No answer in time, a dismissed card, or a session that ends while it waits closes the card and tells Claude nobody answered (it doesn't fall back to the terminal). With the questions setting off, or without a channel session, the terminal asks as usual.
+- **"<agent> is writing…"** shows in the thread while Claude works on your message, and stops when it replies, asks, posts an approval or ends its turn (the plugin's `Stop` hook), after 10 minutes without activity, and on shutdown.
+
+### Channel mode
+
+- **`ask`** (channel mode only): Claude asks you 1 to 4 multiple-choice questions as a card and waits for your answer (`wait_s`, default 10 minutes), which comes back inside an `untrusted_content` block. Only your answers count; the card closes at its deadline, when the call is cancelled, or when you dismiss it.
+- **Approvals as cards.** In channel mode a `propose_*` tool also posts the preview as a card with Apply and Cancel, worded by buildIt.Social from its own preview. buildIt.Social applies the change on your tap, as you through your agent; `apply_plan` refuses such a plan (`plan_awaits_owner`), and Claude learns the outcome as a `<channel>` message with `event="plan_resolved"` (applied, cancelled, stale, failed or expired). If the card can't be posted, the usual preview-then-confirm flow stands.
+- **One channel per folder:** the first channel server in a folder takes a lock; another one serves its tools without the channel, and its `reply` and `ask` say which is the channel.
+- Event types this version doesn't know are skipped instead of failing the page of events.
+- `turn_ended`, a tool only the plugin's `Stop` hook calls.
+
 ## [0.4.0] - 2026-10-28
 
 Built on version 1.5.0 of the agent API's contract. Channel mode and the session commands need a buildIt.Social server that serves agent sessions; on an older one the channel stops with a clear log line, and everything else works as before.
@@ -118,6 +136,7 @@ Both transports serve MCP 2026-07-28 (stateless, with per-request `_meta`) and 2
 - Node.js 20 or newer (22 recommended).
 - A buildIt.Social personal access token, from an org with agent access turned on.
 
+[0.5.0]: https://github.com/kammcs/buildit-mcp/releases/tag/v0.5.0
 [0.4.0]: https://github.com/kammcs/buildit-mcp/releases/tag/v0.4.0
 [0.3.0]: https://github.com/kammcs/buildit-mcp/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kammcs/buildit-mcp/releases/tag/v0.2.0

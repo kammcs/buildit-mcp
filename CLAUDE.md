@@ -72,11 +72,19 @@ src/
   tools/chat.ts         list_channels, read_channel, read_thread, list_pins, list_emoji
   tools/plans.ts        get_workflow, list_work_types, the propose_* tools, apply_plan
   tools/setup.ts        create_channel, create_project
-  tools/reply.ts        reply (channel mode only; not in the catalog)
+  tools/reply.ts        reply, and turn_ended for the plugin's Stop hook (channel mode only;
+                        not in the catalog)
+  tools/ask.ts          ask: questions as a card, the answer back (channel mode only; also the
+                        plugin's AskUserQuestion hook, format "hook")
   channel/api.ts        the session operations (connect flow, session, events, messages, heartbeat)
   channel/loop.ts       channel mode: polls the session's events, gates the sender, sends
-                        notifications/claude/channel, acks
+                        notifications/claude/channel, hands card events to their waiters, turns
+                        plan cards' outcomes into plan_resolved notifications, acks
+  channel/waiters.ts    who waits for answers to the session's cards, by message id
+  channel/lock.ts       one channel server per folder (a lock file next to the token file)
+  channel/typing.ts     "<agent> is writing..." while Claude works on a message
   cli/commands.ts       connect (device flow), disconnect, status
+  cli/claude-config.ts  reads Claude Code's files for status (a channel server and the plugin)
   secrets/keychain.ts   a folder's session token in the OS keychain (@napi-rs/keyring,
                         optional), or a 0600 file
   transports/stdio.ts   stdio: token from BUILDIT_TOKEN, identity read at startup and refreshed;
@@ -102,6 +110,8 @@ evals/                  realistic tasks a maintainer runs by hand against a test
 Dockerfile              the container image (HTTP mode, non-root, no token); .dockerignore is an allowlist
 deploy/                 team self-hosting: Compose with Caddy, and a guide
 bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes from package.json)
+plugin/                 the Claude Code plugin (channel server, AskUserQuestion and Stop hooks);
+                        .claude-plugin/marketplace.json lists it (versions match package.json)
 server.json             the MCP Registry entry (its versions must match package.json; a test checks)
 docs/releasing.md       how a release ships through npm, GHCR, the bundle and the Registry
 ```

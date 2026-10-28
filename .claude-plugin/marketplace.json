@@ -1,0 +1,12 @@
+{
+  "name": "buildit-mcp",
+  "owner": { "name": "Kamm Creative Solutions" },
+  "plugins": [
+    {
+      "name": "buildit",
+      "source": "./plugin",
+      "version": "0.5.0",
+      "description": "buildIt.Social as a Claude Code channel: messages, questions and approvals in the app."
+    }
+  ]
+}
