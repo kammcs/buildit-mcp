@@ -297,6 +297,19 @@ describe('the agent taken off the item', () => {
     const [n] = await notes(c, 1);
     expect(n!.params!.content).toContain(`(${words})`);
   });
+
+  it('stops a thread it worked on through a mention (no assignment) too', async () => {
+    const c = await start();
+    api.sessions.itemMessage(TOKEN, item, '@Claude look', { mention: true });
+    await notes(c, 1);
+    api.sessions.unassignItem(TOKEN, item, 'moved', { withoutAssignment: true });
+    const [, n] = await notes(c, 2);
+    expect(n!.params!.content).toBe(
+      "You were unassigned from DEMO-12 (moved to another project). Stop work on it; don't post or edit it unless Test User asks again.",
+    );
+    expect(n!.params!.meta).toMatchObject({ event: 'item_unassigned', reason: 'moved' });
+    await waitFor(() => session().typings.at(-1)?.typing === false);
+  });
 });
 
 describe('reply with item', () => {

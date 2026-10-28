@@ -820,7 +820,12 @@ export class FakeSessions {
    * thread, its open cards there close (their events go dead on the
    * server, so none arrive), and the session gets work_item.unassigned.
    */
-  unassignItem(token: string, item: FakeEventItem, reason = 'unassigned'): void {
+  unassignItem(
+    token: string,
+    item: FakeEventItem,
+    reason = 'unassigned',
+    options: { withoutAssignment?: boolean } = {},
+  ): void {
     const s = this.session(token);
     s.items.delete(item.id);
     for (const card of s.cards.values()) {
@@ -831,7 +836,8 @@ export class FakeSessions {
     }
     this.event(s, 'work_item.unassigned', {
       ...this.itemData(item, false),
-      assignment: this.assignment(s),
+      // Null when the session worked on it through a mention or a hand-on, not an assignment.
+      assignment: options.withoutAssignment === true ? null : this.assignment(s),
       reason,
       user: { id: s.ownerId, name: s.ownerName, is_guest: false, locale: 'en' },
     });
