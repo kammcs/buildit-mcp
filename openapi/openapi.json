@@ -7067,7 +7067,7 @@
           "plans"
         ],
         "summary": "Apply a plan",
-        "description": "Applies a plan in one transaction, if it is the same token's, unexpired, unused, and nothing it targets changed since the preview. A plan posted as a card for its owner (post_plan_card) is theirs to apply: 409 plan_awaits_owner.",
+        "description": "Applies a plan in one transaction, if it is the same token's, unexpired, unused, and nothing it targets changed since the preview. A session token never applies a plan: 409 plan_card_required (post it as a card with post_plan_card, and the person applies it there); a plan posted as a card is the person's to apply (409 plan_awaits_owner).",
         "parameters": [
           {
             "name": "handle",
@@ -7237,7 +7237,8 @@
           "internal",
           "unavailable",
           "agent_sessions_off",
-          "plan_awaits_owner"
+          "plan_awaits_owner",
+          "plan_card_required"
         ],
         "x-buildit-auth": "token",
         "x-buildit-hints": {
@@ -10512,7 +10513,7 @@
         }
       },
       "Error409": {
-        "description": "An error: conflict, idempotency_conflict, plan_used, plan_stale, release_archived, release_not_released, thread_other_session, card_closed, response_changed, plan_awaits_owner, plan_card_exists. The operation's x-buildit-errors lists the codes it can answer.",
+        "description": "An error: conflict, idempotency_conflict, plan_used, plan_stale, release_archived, release_not_released, thread_other_session, card_closed, response_changed, plan_awaits_owner, plan_card_exists, plan_card_required. The operation's x-buildit-errors lists the codes it can answer.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"
@@ -14183,6 +14184,39 @@
                     "required": [
                       "handle",
                       "message_id"
+                    ]
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "details"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "const": "plan_card_required"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "hint": {
+                    "description": "The code's stable one-line hint: what to do next.",
+                    "type": "string"
+                  },
+                  "details": {
+                    "type": "object",
+                    "properties": {
+                      "handle": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "handle"
                     ]
                   }
                 },
@@ -18795,9 +18829,10 @@
               "cancelled",
               "stale",
               "failed",
-              "expired"
+              "expired",
+              "unknown"
             ],
-            "description": "applied: the person applied it, as themselves through the agent; cancelled: they cancelled it; stale: a target changed since the preview, so nothing was applied; failed: the apply was refused or broke, nothing was applied; expired: nobody answered within its 60 minutes, or the session ended first."
+            "description": "applied: the person applied it, as themselves through the agent; cancelled: they cancelled it; stale: a target changed since the preview, so nothing was applied; failed: the apply was refused or broke, nothing was applied; expired: nobody answered within its 60 minutes, or the session ended first; unknown: the apply started but its end couldn't be confirmed, so it may or may not have been applied (read the items before doing anything else). v1 may add values."
           },
           "result": {
             "description": "What was applied (applied only), as apply_plan answers it.",
@@ -20677,6 +20712,12 @@
       "when": "post_plan_card for a plan already posted as a card under another id.",
       "message": "This plan already has its card. Wait for the person's answer, or propose a new plan.",
       "hint": "Wait for the person's answer on the plan's card, or propose a new plan."
+    },
+    "plan_card_required": {
+      "status": 409,
+      "when": "apply_plan with a session token: a session's plans are applied only by the person, from the plan's card (post_plan_card), never by the session itself.",
+      "message": "A session can't apply plans. Post this plan as a card (post_plan_card) for the person to apply or cancel in buildIt.Social.",
+      "hint": "Post the plan as a card with post_plan_card; the person applies it there."
     }
   }
 }

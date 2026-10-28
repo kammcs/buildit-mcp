@@ -974,6 +974,12 @@ export const ErrorSchema = z.strictObject({
           ),
       }),
     }),
+    z.strictObject({
+      code: z.literal('plan_card_required'),
+      message: z.string().min(1),
+      hint: z.string().optional(),
+      details: z.strictObject({ handle: z.string() }),
+    }),
   ]),
 });
 export type Error = z.infer<typeof ErrorSchema>;
@@ -2299,7 +2305,7 @@ export type ListPinsResponse = z.infer<typeof ListPinsResponseSchema>;
 export const SessionPlanOutcomeSchema = z.strictObject({
   handle: PlanHandleSchema,
   action: PlanActionSchema,
-  outcome: z.enum(['applied', 'cancelled', 'stale', 'failed', 'expired']),
+  outcome: z.enum(['applied', 'cancelled', 'stale', 'failed', 'expired', 'unknown']),
   result: PlanResultSchema.optional(),
   error: z.strictObject({ code: z.string(), message: z.string().optional() }).optional(),
   changed: z.array(z.strictObject({ kind: z.string(), ref: z.string() })).optional(),

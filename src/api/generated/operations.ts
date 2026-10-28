@@ -80,6 +80,7 @@ export const ERROR_STATUS = {
   not_own_message: 403,
   plan_awaits_owner: 409,
   plan_card_exists: 409,
+  plan_card_required: 409,
 } as const;
 export type ErrorCode = keyof typeof ERROR_STATUS;
 
@@ -142,6 +143,7 @@ export const ERROR_HINTS: Readonly<Partial<Record<ErrorCode, string>>> = {
   not_own_message: "Change, close or answer only this session's own question cards.",
   plan_awaits_owner: 'Wait for the person to apply or cancel the plan in buildIt.Social.',
   plan_card_exists: "Wait for the person's answer on the plan's card, or propose a new plan.",
+  plan_card_required: 'Post the plan as a card with post_plan_card; the person applies it there.',
 };
 
 /** Every scope each plan action needs, all of them (the operations whose scope is 'plan_action' check them). */
@@ -396,6 +398,7 @@ export const OPERATIONS = {
       'unavailable',
       'agent_sessions_off',
       'plan_awaits_owner',
+      'plan_card_required',
     ],
     hasBody: true,
     statuses: [200],

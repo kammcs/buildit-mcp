@@ -9,7 +9,7 @@ import type { CallToolResult } from '@modelcontextprotocol/client';
 
 import { NOT_THE_CHANNEL } from '../src/channel/lock.js';
 import { cardIds, uuidV5 } from '../src/tools/ask.js';
-import { CARD_STEP } from '../src/tools/plans.js';
+import { CARD_STEP, cardFailedStep } from '../src/tools/plans.js';
 import {
   channelConfig,
   channelNotes,
@@ -493,7 +493,19 @@ describe('plan cards', () => {
     return c;
   }
 
-  it('posts the preview for the owner to apply; apply_plan then waits for them', async () => {
+  it('says so in the instructions: the person applies, this session never does', async () => {
+    const c = await planner();
+    const instructions = c.client.getInstructions() ?? '';
+    expect(instructions).toContain("Only the person's tap on Apply applies it");
+    expect(instructions).not.toContain('call apply_plan only after they confirm');
+    const tools = (await c.client.listTools()).tools;
+    expect(tools.find((t) => t.name === 'apply_plan')?.description).toContain('plan_card_required');
+    expect(tools.find((t) => t.name === 'propose_delete_item')?.description).toContain(
+      "only the person's tap on Apply applies it",
+    );
+  });
+
+  it('posts the preview for the owner to apply; apply_plan is refused', async () => {
     const c = await planner();
     const root = api.sessions.postFrom(TOKEN, 'Delete DEMO-42 please.');
     await waitFor(() => channelNotes(c.notes).length === 1);
@@ -514,11 +526,12 @@ describe('plan cards', () => {
       arguments: { handle },
     });
     expect(applied.isError).toBe(true);
-    expect(textOf(applied)).toContain('plan_awaits_owner');
-    expect(textOf(applied)).toContain("waits for the person's tap in buildIt.Social");
+    expect(textOf(applied)).toContain('plan_card_required');
+    expect(textOf(applied)).toContain('the owner approves this by tapping Apply in buildIt.Social');
+    expect(api.store.items.some((i) => `${i.project}-${i.number}` === 'DEMO-42')).toBe(true);
   });
 
-  it('keeps the usual two steps when the card cannot be posted', async () => {
+  it("says the plan can't be applied when its card can't be posted", async () => {
     const c = await planner();
     api.refusePlanCards = 1;
     const r = await c.client.callTool({
@@ -526,13 +539,28 @@ describe('plan cards', () => {
       arguments: { item: 'DEMO-42' },
     });
     expect(r.isError).toBeFalsy();
-    expect(textOf(r)).toContain('Call apply_plan with this handle only if they clearly confirm');
+    expect(textOf(r)).toContain(cardFailedStep('unavailable'));
+    expect(textOf(r)).not.toContain('Call apply_plan with this handle only if');
     const handle = (r.structuredContent as { handle: string }).handle;
-    const applied = await c.client.callTool({
-      name: 'apply_plan',
-      arguments: { handle },
+    const applied = await c.client.callTool({ name: 'apply_plan', arguments: { handle } });
+    expect(applied.isError).toBe(true);
+    expect(textOf(applied)).toContain('plan_card_required');
+  });
+
+  it("posts the card from a server that isn't the folder's channel too", async () => {
+    api.sessions.open(TOKEN);
+    api.identities[TOKEN]!.token.scopes = ['projects:write', 'projects:delete', 'chat:read'];
+    const c = await start({ env: { BUILDIT_TOOLSETS: 'items,destructive' }, owner: false });
+    const r = await c.client.callTool({
+      name: 'propose_delete_item',
+      arguments: { item: 'DEMO-42' },
     });
-    expect(applied.isError).toBeFalsy();
+    const handle = (r.structuredContent as { handle: string }).handle;
+    expect(session().cards.get(uuidV5(`plan:${handle}`))).toMatchObject({
+      kind: 'plan',
+      threadId: null,
+    });
+    expect(textOf(r)).toContain(CARD_STEP);
   });
 
   it.each([
@@ -563,6 +591,7 @@ describe('plan cards', () => {
       '(forbidden)',
     ],
     ['expired', {}, 'expired in buildIt.Social', 'Nothing changed'],
+    ['unknown', {}, 'It is unclear whether plan', 'Check the items it targets'],
   ] as const)('tells Claude the outcome: %s', async (outcome, extra, first, second) => {
     const c = await planner();
     const r = await c.client.callTool({

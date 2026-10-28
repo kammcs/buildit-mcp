@@ -841,6 +841,12 @@ export const ErrorSchema = z.looseObject({
       hint: z.string().optional(),
       details: z.looseObject({ handle: z.string(), message_id: z.string() }),
     }),
+    z.looseObject({
+      code: z.literal('plan_card_required'),
+      message: z.string(),
+      hint: z.string().optional(),
+      details: z.looseObject({ handle: z.string() }),
+    }),
   ]),
 });
 export type Error = z.infer<typeof ErrorSchema>;
@@ -2154,7 +2160,7 @@ export type ListPinsResponse = z.infer<typeof ListPinsResponseSchema>;
 export const SessionPlanOutcomeSchema = z.looseObject({
   handle: PlanHandleSchema,
   action: PlanActionSchema,
-  outcome: openEnum(['applied', 'cancelled', 'stale', 'failed', 'expired']),
+  outcome: openEnum(['applied', 'cancelled', 'stale', 'failed', 'expired', 'unknown']),
   result: PlanResultSchema.optional(),
   error: z.looseObject({ code: z.string(), message: z.string().optional() }).optional(),
   changed: z.array(z.looseObject({ kind: z.string(), ref: z.string() })).optional(),

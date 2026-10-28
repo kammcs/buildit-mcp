@@ -18,6 +18,7 @@ Built on version 1.6.0 of the agent API's contract. Questions, approval cards an
 - **`ask`** (channel mode only): Claude asks you 1 to 4 multiple-choice questions as a card and waits for your answer (`wait_s`, default 10 minutes), which comes back inside an `untrusted_content` block. Only your answers count; the card closes at its deadline, when the call is cancelled, or when you dismiss it.
 - **Approvals as cards.** In channel mode a `propose_*` tool also posts the preview as a card with Apply and Cancel, worded by buildIt.Social from its own preview. buildIt.Social applies the change on your tap, as you through your agent; `apply_plan` refuses such a plan (`plan_awaits_owner`), and Claude learns the outcome as a `<channel>` message with `event="plan_resolved"` (applied, cancelled, stale, failed or expired). If the card can't be posted, the usual preview-then-confirm flow stands.
 - **One channel per folder:** the first channel server in a folder takes a lock; another one serves its tools without the channel, and its `reply` and `ask` say which is the channel.
+- An agent session never applies plans: every `propose_*` with a session token posts its card, `apply_plan` explains `plan_card_required`, and the descriptions and channel instructions say so. A plan outcome `unknown` tells Claude to check the items.
 - Event types this version doesn't know are skipped instead of failing the page of events.
 - `turn_ended`, a tool only the plugin's `Stop` hook calls.
 

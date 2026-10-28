@@ -4044,7 +4044,7 @@ export class FakeApi {
    */
   resolvePlanCard(
     handle: string,
-    outcome: 'applied' | 'cancelled' | 'stale' | 'failed' | 'expired',
+    outcome: 'applied' | 'cancelled' | 'stale' | 'failed' | 'expired' | 'unknown',
     extra: Record<string, unknown> = {},
   ): void {
     const plan = this.store.plans.find((x) => x.handle === handle);
@@ -4064,6 +4064,14 @@ export class FakeApi {
     if (!plan) throw new FakeError('not_found', { kind: 'plan', ref: handle });
     // Another token's plan reads as unknown, like a handle that never existed.
     if (plan.token !== token) throw new FakeError('not_found', { kind: 'plan', ref: handle });
+    // A session never applies a plan: the owner's tap on its card does.
+    if (token.startsWith('buildit_ags_')) {
+      throw new FakeError(
+        'plan_card_required',
+        { handle },
+        "A session can't apply plans: the owner approves them in buildIt.Social.",
+      );
+    }
     if (plan.cardMessageId !== undefined && plan.usedAt === null) {
       throw new FakeError(
         'plan_awaits_owner',
