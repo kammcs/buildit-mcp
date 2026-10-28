@@ -2,6 +2,28 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.6.0] - 2026-10-28
+
+Built on version 1.7.0 of the agent API's contract. Work items for your agent need a buildIt.Social server with agent API 1.7.0; on an older one those events never come, and `assignee_agent` and `assign_item`'s `agent` are refused.
+
+### Work items for your agent (channel mode)
+
+- **Items assigned to your agent** arrive in the session as `<channel>` messages with `event="item_assigned"`, the item's key (`item`), its `project`, and `thread_id`, the item's own id: a lead line, then the item's title, the start of its description and the latest messages of its thread, each inside an `untrusted_content` block. Claude works on it and posts progress, questions and the result in the item's thread.
+- **Your mentions** of your agent in an item's thread (`event="mention"`) and **your other replies** in a thread it works in (`event="message"`) arrive with your words as you wrote them, then the item and the thread as data; a reply leaves out the thread messages the session already showed. Only your own messages are events: a colleague's mention or reply never reaches the session, except as untrusted context inside yours, and the server checks the owner again.
+- **Taken off the item** (`event="item_unassigned"`, with `reason`: unassigned, reassigned, moved, deleted, owner_left or agent_deleted): a notice to stop. It also stops "is writing" in that thread and ends the questions waiting there (`closed`).
+- `reply`, `ask`, the approval cards and "is writing" go to the thread of the latest message, mention or assignment when none is named, so an item's work lands in its thread. `reply` also takes `item` (a key such as DEMO-12) instead of `thread_id`, and passes the API's refusal when the session doesn't work in that thread (`thread_not_bound`).
+
+### Items
+
+- `assign_item` takes `agent`: `"mine"` or your personal agent's name has it work on the item for you (you stay the assignee), and `null` takes it off; `assignee` is now optional. `create_item` and `update_item` take `assignee_agent` with the same meaning. Only the person can assign their agent: a Claude Code session gets the API's refusal with an explanation, and may only hand an item back (`null`).
+- Items show their agent: `assignee_agent` in structured results, and "assignee Claude · for Sam" in `get_item`, `search_items` and the item lines.
+
+### Channel servers
+
+- **The plugin's server wins the folder.** When the plugin's server and one added with `claude mcp add ... --channel` run in the same folder, the plugin's (started with the new `--from-plugin`, which the plugin passes, or with `CLAUDE_PLUGIN_ROOT` set) now takes the folder's messages: the other one stops polling at its next check, for good, and never hands on what it fetched after that. Before, whichever started first took them, and a server Claude Code hadn't registered as a channel could swallow your messages. Two plugin servers keep first-wins.
+- In a server that isn't the folder's channel, `reply`, `ask` and `whoami` say another buildIt server receives the messages and how to remove the extra one (`claude mcp remove <name>`). `buildit-mcp status` names the servers set up for the folder (the plugin, and the others by name) and which running one receives its messages.
+- **`npm run dev-marketplace [-- --out <dir>]`** writes a local marketplace (`buildit-dev`) whose buildit plugin runs a checkout's build, and prints the commands to install it and start Claude Code with its channel. It replaces `plugin-local/`: Claude Code registers a plugin's channel only for an installed plugin, so `--plugin-dir` couldn't start the channel. `connect` from a checkout gives these steps.
+
 ## [0.5.0] - 2026-10-28
 
 Built on version 1.6.0 of the agent API's contract. Questions, approval cards and "is writing" need a buildIt.Social server with agent API 1.6.0; on an older one, `ask` can't post (the plugin's hook then lets the terminal ask) and proposals keep the usual two steps.

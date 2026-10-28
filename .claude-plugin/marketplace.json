@@ -8,7 +8,7 @@
     {
       "name": "buildit",
       "source": "./plugin",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "description": "buildIt.Social as a Claude Code channel: messages, questions and approvals in the app."
     }
   ]
