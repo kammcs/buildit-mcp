@@ -998,6 +998,7 @@ export class FakeApi {
     this.store = seedStore();
     this.sessions = this.newSessions();
     this.refusePlanCards = 0;
+    this.plansOutsideThread = false;
     this.identities = structuredClone(this.initialIdentities);
     this.compat = {
       hints: true,
@@ -4085,6 +4086,8 @@ export class FakeApi {
 
   /** Plan cards refused before they are posted (tests). */
   refusePlanCards = 0;
+  /** Plan cards in a thread are refused as reaching outside its item's project (tests). */
+  plansOutsideThread = false;
 
   private postPlanCard({ token, body }: Call): Handled {
     const handle = String(body.handle);
@@ -4109,6 +4112,10 @@ export class FakeApi {
     if (this.refusePlanCards > 0) {
       this.refusePlanCards--;
       throw new FakeError('unavailable', {});
+    }
+    // A plan that reaches outside the item's project, carded in the item's thread.
+    if (this.plansOutsideThread && typeof body.thread_id === 'string') {
+      throw new FakeError('plan_outside_thread', { thread_id: body.thread_id, key: 'OPS' });
     }
     plan.cardMessageId = id;
     plan.expiresAt = this.clock + 60 * 60_000;

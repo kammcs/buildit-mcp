@@ -13,6 +13,7 @@ import type { CallToolResult } from '@modelcontextprotocol/client';
 
 import { buildInstructions, ITEM_WORKER_AGENT } from '../src/server.js';
 import { uuidV5 } from '../src/tools/ask.js';
+import { CARD_IN_DM_NOTE, CARD_STEP } from '../src/tools/plans.js';
 import {
   channelConfig,
   channelNotes,
@@ -241,6 +242,28 @@ describe('several threads at once', () => {
       kind: 'plan',
       threadId: one.id,
     });
+  });
+
+  it("posts the card in the direct message when the plan reaches outside the item's project", async () => {
+    api.identities[TOKEN]!.token.scopes = ['projects:write', 'projects:delete', 'chat:read'];
+    const c = await start({ BUILDIT_TOOLSETS: 'items,destructive' });
+    api.sessions.assignItem(TOKEN, one);
+    await notes(c, 1);
+    api.plansOutsideThread = true;
+    const r = await c.client.callTool({
+      name: 'propose_delete_item',
+      arguments: { item: 'DEMO-42', card_thread: 'DEMO-12' },
+    });
+    expect(r.isError).toBeFalsy();
+    const handle = (r.structuredContent as { handle: string }).handle;
+    expect(session().cards.get(uuidV5(`plan:${handle}`))).toMatchObject({
+      kind: 'plan',
+      threadId: null,
+    });
+    expect(textOf(r)).toContain(CARD_IN_DM_NOTE);
+    const step = (r.structuredContent as { next_step: string }).next_step;
+    expect(step.startsWith(CARD_STEP)).toBe(true);
+    expect(step).toContain(CARD_IN_DM_NOTE);
   });
 });
 

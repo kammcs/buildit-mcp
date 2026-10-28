@@ -232,6 +232,10 @@ function planOutput(r: CreatePlanResponse): ToolOutput<PlanOut> {
 export const CARD_STEP =
   'The preview is posted in buildIt.Social for the person to approve. Don\'t call apply_plan: the person applies or cancels it there, and the result arrives as a <channel> message with event="plan_resolved".';
 
+/** What the result adds when the card went to the direct message instead of the item's thread. */
+export const CARD_IN_DM_NOTE =
+  "The card was posted in your direct message with the person, not in the item's thread: the plan reaches outside the item's project, and an item's thread takes only cards for its own project. Tell the person in the item's thread that the approval waits in their direct message.";
+
 /** What a session's result says when its card couldn't be posted. */
 export function cardFailedStep(code: string): string {
   return `The approval card couldn't be posted in buildIt.Social (${sanitizeLabel(code, 60)}), and this session can't apply plans itself. Tell the person; propose again in a moment, or they can make the change in the app.`;
@@ -269,13 +273,14 @@ async function propose(
       text: out.text.replace(CONFIRM_STEP, step),
     };
   }
-  const structured = { ...out.structured, expires_at: carded.expiresAt, next_step: CARD_STEP };
+  const step = carded.inDm ? `${CARD_STEP} ${CARD_IN_DM_NOTE}` : CARD_STEP;
+  const structured = { ...out.structured, expires_at: carded.expiresAt, next_step: step };
   const text = out.text
     .replace(
       `(valid until ${out.structured.expires_at}).`,
       `(the card is open until ${carded.expiresAt}).`,
     )
-    .replace(CONFIRM_STEP, CARD_STEP);
+    .replace(CONFIRM_STEP, step);
   return { structured, text };
 }
 
@@ -289,22 +294,34 @@ async function postCard(
   ctx: ToolContext,
   handle: string,
   threadId: string | undefined,
-): Promise<{ expiresAt: string } | { failed: string } | undefined> {
+): Promise<{ expiresAt: string; inDm: boolean } | { failed: string } | undefined> {
   if (!ctx.api.sessionToken) return undefined;
   const state = ctx.channel;
-  try {
-    const r = await postPlanCard(
+  const post = (thread: string | undefined) =>
+    postPlanCard(
       ctx.api,
       {
         handle,
         id: uuidV5(`plan:${handle}`),
-        ...(threadId === undefined ? {} : { thread_id: threadId }),
+        ...(thread === undefined ? {} : { thread_id: thread }),
       },
       ctx.apiOptions,
     );
+  try {
+    let inDm = false;
+    let r;
+    try {
+      r = await post(threadId);
+    } catch (err) {
+      // An item's thread takes only plans for its own project: this one goes to the direct message.
+      if (!(err instanceof ApiError && err.code === 'plan_outside_thread')) throw err;
+      ctx.logger.info('plan card moved to the direct message', { code: err.code });
+      r = await post(undefined);
+      inDm = true;
+    }
     state?.typing?.stop(threadId);
     ctx.logger.info('plan card posted', { message_id: r.message.id });
-    return { expiresAt: r.plan.expires_at };
+    return { expiresAt: r.plan.expires_at, inDm };
   } catch (err) {
     const code = err instanceof ApiError ? err.code : 'error';
     ctx.logger.info('plan card not posted', { code });

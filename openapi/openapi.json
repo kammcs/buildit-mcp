@@ -10213,7 +10213,7 @@
           "session"
         ],
         "summary": "Post a plan for the owner to apply",
-        "description": "Posts a plan of this token (create_plan's handle) in the agent's direct message as a card the owner applies or cancels themselves: the server writes the card from the stored preview (the action, its summary, up to 20 of its effects, the projects), never from the request. The plan then lasts 60 minutes and can't be applied with apply_plan (409 plan_awaits_owner): on the owner's tap the server applies it as the owner, through the agent, checking that nothing changed since the preview (else nothing is applied). The outcome (applied, cancelled, stale, failed or expired) arrives as a card.closed event with data.plan. It needs the action's scopes, as create_plan. A retry with the same handle and id answers the first card (created: false); a plan already posted under another id is 409 plan_card_exists. With an item's id as `thread_id`, the card goes in that item's thread, as post_session_message's (only the owner can apply it there too); it expires if the item is taken from the agent. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
+        "description": "Posts a plan of this token (create_plan's handle) in the agent's direct message as a card the owner applies or cancels themselves: the server writes the card from the stored preview (the action, its summary, up to 20 of its effects, the projects), never from the request. The plan then lasts 60 minutes and can't be applied with apply_plan (409 plan_awaits_owner): on the owner's tap the server applies it as the owner, through the agent, checking that nothing changed since the preview (else nothing is applied). The outcome (applied, cancelled, stale, failed or expired) arrives as a card.closed event with data.plan. It needs the action's scopes, as create_plan. A retry with the same handle and id answers the first card (created: false); a plan already posted under another id is 409 plan_card_exists. With an item's id as `thread_id`, the card goes in that item's thread, as post_session_message's (only the owner can apply it there too); it expires if the item is taken from the agent. Everyone in the item's channel reads that card, so a plan reaching items or projects outside the item's project is 422 plan_outside_thread there (post it in the direct message instead), and the card never shows a key or title from another project. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -10374,7 +10374,8 @@
           "card_invalid",
           "plan_card_exists",
           "thread_not_bound",
-          "outside_reach"
+          "outside_reach",
+          "plan_outside_thread"
         ],
         "x-buildit-auth": "session",
         "x-buildit-hints": {
@@ -10796,7 +10797,7 @@
         }
       },
       "Error422": {
-        "description": "An error: validation, image_layout_invalid, ambiguous, transition_not_allowed, field_required, bulk_too_large, limit_reached, card_invalid, thread_required. The operation's x-buildit-errors lists the codes it can answer.",
+        "description": "An error: validation, image_layout_invalid, ambiguous, transition_not_allowed, field_required, bulk_too_large, limit_reached, card_invalid, thread_required, plan_outside_thread. The operation's x-buildit-errors lists the codes it can answer.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"
@@ -14600,6 +14601,47 @@
                     "required": [
                       "thread_id",
                       "reason"
+                    ]
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "details"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "const": "plan_outside_thread"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "hint": {
+                    "description": "The code's stable one-line hint: what to do next.",
+                    "type": "string"
+                  },
+                  "details": {
+                    "type": "object",
+                    "properties": {
+                      "thread_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$",
+                        "description": "The item's id (its thread)."
+                      },
+                      "key": {
+                        "type": "string",
+                        "description": "The first item or project key outside the thread's project."
+                      }
+                    },
+                    "required": [
+                      "thread_id",
+                      "key"
                     ]
                   }
                 },
@@ -21970,6 +22012,12 @@
       "when": "A session can't reach the item's thread (any more): the session ended (session_ended), the item's project isn't one of the session's or it lacks projects:read (session_projects), Projects is off for the org (projects_off), its owner isn't in the project's channel (not_in_channel), or the project or its channel is archived (archived).",
       "message": "This session can't reach that item's thread. Stop working on it, or ask the person to connect a session for its project.",
       "hint": "Stop work on that item; the person can connect a session that reaches its project."
+    },
+    "plan_outside_thread": {
+      "status": 422,
+      "when": "post_plan_card in an item's thread for a plan that reaches items or projects outside that item's project: everyone in the item's channel reads the card, so it can't show them.",
+      "message": "This plan reaches outside the item's project, so its card can't go in this item's thread. Post it in the direct message (leave thread_id out), or propose a plan for this project only.",
+      "hint": "Post the plan's card in the direct message, or keep the plan to the thread's project."
     }
   }
 }

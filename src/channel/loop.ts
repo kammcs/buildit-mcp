@@ -201,6 +201,12 @@ type ItemEvent = Extract<
   { type: 'work_item.assigned' | 'work_item.unassigned' | 'app.mentioned' | 'message.posted' }
 >;
 
+/** Whether a message was written through an agent's token (`via_agent` set). */
+function viaAgent(message: object): boolean {
+  const via = (message as { via_agent?: unknown }).via_agent;
+  return typeof via === 'string' && via.trim() !== '';
+}
+
 /** Who wrote a message the owner forwarded (undefined: the owner's own message). */
 interface ForwardOrigin {
   /** The original author's name (sanitized), when the server names one. */
@@ -526,8 +532,9 @@ export class ChannelLoop {
       logger.warn('channel event dropped', { event_id: event.id, reason: 'shape' });
       return;
     }
-    // Only the owner may direct the session: anyone else's message, or one without a sender, is dropped.
-    if (user?.id !== info.owner.id) {
+    // Only the owner may direct the session: anyone else's message, one without a sender, or
+    // one written through an agent's token (an agent's words, never the owner's), is dropped.
+    if (user?.id !== info.owner.id || viaAgent(message)) {
       logger.warn('channel event dropped', { event_id: event.id, reason: 'not_owner' });
       return;
     }
@@ -633,8 +640,9 @@ export class ChannelLoop {
         logger.warn('channel event dropped', { event_id: event.id, reason: 'shape' });
         return;
       }
-      // Only the owner directs the session: a colleague's mention or reply is never an event.
-      if (user?.id !== info.owner.id) {
+      // Only the owner directs the session: a colleague's mention or reply is never an event,
+      // nor one written through an agent's token.
+      if (user?.id !== info.owner.id || viaAgent(message)) {
         logger.warn('channel event dropped', { event_id: event.id, reason: 'not_owner' });
         return;
       }

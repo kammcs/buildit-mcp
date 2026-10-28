@@ -1045,6 +1045,22 @@ export const ErrorSchema = z.strictObject({
         ]),
       }),
     }),
+    z.strictObject({
+      code: z.literal('plan_outside_thread'),
+      message: z.string().min(1),
+      hint: z.string().optional(),
+      details: z.strictObject({
+        thread_id: z
+          .string()
+          .regex(
+            new RegExp(
+              '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$',
+              'u',
+            ),
+          ),
+        key: z.string(),
+      }),
+    }),
   ]),
 });
 export type Error = z.infer<typeof ErrorSchema>;

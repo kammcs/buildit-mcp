@@ -886,6 +886,12 @@ export const ErrorSchema = z.looseObject({
         ]),
       }),
     }),
+    z.looseObject({
+      code: z.literal('plan_outside_thread'),
+      message: z.string(),
+      hint: z.string().optional(),
+      details: z.looseObject({ thread_id: z.string(), key: z.string() }),
+    }),
   ]),
 });
 export type Error = z.infer<typeof ErrorSchema>;

@@ -84,6 +84,7 @@ export const ERROR_STATUS = {
   thread_not_bound: 403,
   thread_required: 422,
   outside_reach: 403,
+  plan_outside_thread: 422,
 } as const;
 export type ErrorCode = keyof typeof ERROR_STATUS;
 
@@ -152,6 +153,8 @@ export const ERROR_HINTS: Readonly<Partial<Record<ErrorCode, string>>> = {
   thread_required: "Send thread_id (the item's id), or post in the direct message instead.",
   outside_reach:
     'Stop work on that item; the person can connect a session that reaches its project.',
+  plan_outside_thread:
+    "Post the plan's card in the direct message, or keep the plan to the thread's project.",
 };
 
 /** Every scope each plan action needs, all of them (the operations whose scope is 'plan_action' check them). */
@@ -1534,6 +1537,7 @@ export const OPERATIONS = {
       'plan_card_exists',
       'thread_not_bound',
       'outside_reach',
+      'plan_outside_thread',
     ],
     hasBody: true,
     statuses: [200, 201],

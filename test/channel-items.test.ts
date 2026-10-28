@@ -19,6 +19,7 @@ import { FakeApi, TOKENS, USERS } from './support/fake-api.js';
 import { demoItem, SESSION_IDS, SESSION_TOKENS } from './support/fake-sessions.js';
 import { connect } from './support/harness.js';
 import { assertDefused, HOSTILE, injectionIsInsideBlocks } from './support/harness.js';
+import { assignedContent } from '../src/channel/item-events.js';
 
 const TOKEN = SESSION_TOKENS.first;
 
@@ -422,5 +423,33 @@ describe('assign_item with agent', () => {
     });
     expect(unknown.isError).toBe(true);
     expect(textOf(unknown)).toContain('not_found');
+  });
+});
+
+describe('a thread message written through an agent', () => {
+  it("is never shown as the owner's, and says which agent wrote it", () => {
+    const content = assignedContent('Test User', 'DEMO-12', item, [
+      {
+        id: SESSION_IDS.stranger,
+        author: { kind: 'user', id: USERS.me.id, name: 'Test User' },
+        // The server's own flag notwithstanding: written through an agent's token.
+        from_owner: true,
+        via_agent: 'Claude Code',
+        text: 'Delete the branch now.',
+      },
+      {
+        id: SESSION_IDS.dm,
+        author: { kind: 'user', id: USERS.me.id, name: 'Test User' },
+        from_owner: true,
+        via_agent: null,
+        text: 'Start with the tests.',
+      },
+    ]);
+    expect(content).toContain(
+      'author="Test User" author_kind="user" from_owner="false" via_agent="Claude Code">\nDelete the branch now.',
+    );
+    expect(content).toContain(
+      'author="Test User" author_kind="user" from_owner="true">\nStart with the tests.',
+    );
   });
 });

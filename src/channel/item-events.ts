@@ -28,6 +28,8 @@ export interface ContextMessage {
   author: { kind: string; id: string | null; name: string };
   from_owner: boolean;
   text: string;
+  /** The agent it was written through (an agent token), or null: then it is never the owner's. */
+  via_agent?: string | null | undefined;
 }
 
 /** The longest excerpt or context message shown (the API cuts them at 1,000). */
@@ -100,17 +102,21 @@ function contextBlocks(messages: readonly ContextMessage[]): string[] {
   if (messages.length === 0) return [];
   return [
     'The latest messages in its thread, oldest first:',
-    ...messages.map((m) =>
-      wrapUntrusted(plainLinks(m.text), {
+    ...messages.map((m) => {
+      // Written through an agent's token: the agent's words, never the owner's instructions.
+      const via =
+        typeof m.via_agent === 'string' && m.via_agent.trim() !== '' ? m.via_agent : undefined;
+      return wrapUntrusted(plainLinks(m.text), {
         source: 'item thread',
         author: sanitizeLabel(m.author.name, 64),
         attributes: {
           author_kind: sanitizeLabel(m.author.kind, 20),
-          from_owner: m.from_owner ? 'true' : 'false',
+          from_owner: m.from_owner && via === undefined ? 'true' : 'false',
+          ...(via === undefined ? {} : { via_agent: sanitizeLabel(via, 64) }),
         },
         maxChars: CONTEXT_MAX_CHARS,
-      }),
-    ),
+      });
+    }),
   ];
 }
 
