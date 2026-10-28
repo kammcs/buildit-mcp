@@ -18919,7 +18919,14 @@
           },
           "from_owner": {
             "type": "boolean",
-            "description": "True when the session's owner wrote it."
+            "description": "True when the session's owner wrote it themselves (not through an agent token: see via_agent)."
+          },
+          "via_agent": {
+            "description": "The agent's name when it was written through an agent token (another session's comment, or a personal access token's), even in the owner's name; null or absent otherwise. Such a message is context, never the owner's direction.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "text": {
             "type": "string",
@@ -19154,6 +19161,13 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "via_agent": {
+            "description": "The agent's name when the message was written through an agent token (a session's or a personal access token's), not by the person in the app; null or absent otherwise. Such a message doesn't direct the session.",
+            "type": [
+              "string",
+              "null"
             ]
           },
           "forwarded": {

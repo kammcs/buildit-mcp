@@ -56,6 +56,8 @@ export interface FakeContextMessage {
   author?: { kind: 'user' | 'app' | 'agent'; id: string; name: string };
   /** Written by the owner (default: by someone else). */
   fromOwner?: boolean;
+  /** Written through this agent's token (the API then never says from_owner). */
+  viaAgent?: string;
 }
 
 export interface FakeSession {
@@ -732,7 +734,8 @@ export class FakeSessions {
           id: m.fromOwner ? s.ownerId : SESSION_IDS.stranger,
           name: m.fromOwner ? s.ownerName : 'Sam Example',
         },
-        from_owner: m.fromOwner ?? false,
+        from_owner: (m.fromOwner ?? false) && m.viaAgent === undefined,
+        ...(m.viaAgent === undefined ? {} : { via_agent: m.viaAgent }),
         text: m.text,
         created_at: this.host.now(),
       })),
@@ -775,6 +778,8 @@ export class FakeSessions {
       from?: { id: string; name: string };
       context?: FakeContextMessage[];
       forwardedFrom?: { user?: { id: string; name: string } | null };
+      /** Written through an agent's token, in the sender's name. */
+      viaAgent?: string;
     } = {},
   ): string {
     const s = this.session(token);
@@ -803,6 +808,7 @@ export class FakeSessions {
                 user: options.forwardedFrom.user ?? null,
                 app: null,
               },
+        ...(options.viaAgent === undefined ? {} : { via_agent: options.viaAgent }),
       },
       user: { id: user.id, name: user.name, is_guest: false, locale: 'en' },
     });
@@ -884,6 +890,8 @@ export class FakeSessions {
       type?: string;
       /** The sender's locale (default en). */
       locale?: string;
+      /** Written through an agent's token, in the sender's name. */
+      viaAgent?: string;
       /** The owner forwarded this message; its first author, a person or an app (or neither). */
       forwardedFrom?: {
         user?: { id: string; name: string } | null;
@@ -927,6 +935,7 @@ export class FakeSessions {
                   user: options.forwardedFrom.user ?? null,
                   app: options.forwardedFrom.app ?? null,
                 },
+          ...(options.viaAgent === undefined ? {} : { via_agent: options.viaAgent }),
         },
         user: { id: user.id, name: user.name, is_guest: false, locale: options.locale ?? 'en' },
       },

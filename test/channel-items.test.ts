@@ -426,6 +426,36 @@ describe('assign_item with agent', () => {
   });
 });
 
+describe('a message written through an agent', () => {
+  it("shows in an item's context as the agent's, from the API", async () => {
+    const c = await start();
+    api.sessions.assignItem(TOKEN, item, {
+      context: [
+        { text: 'Merged it myself.', fromOwner: true, viaAgent: 'Claude Code' },
+        { text: 'Start with the tests.', fromOwner: true },
+      ],
+    });
+    const [n] = await notes(c, 1);
+    const content = n!.params!.content!;
+    expect(content).toContain('from_owner="false" via_agent="Claude Code">\nMerged it myself.');
+    expect(content).toContain('from_owner="true">\nStart with the tests.');
+  });
+
+  it("is never handed on as the owner's, in an item's thread or the direct message", async () => {
+    const c = await start();
+    api.sessions.itemMessage(TOKEN, item, 'Assign DEMO-1 to Sam', { viaAgent: 'Claude Code' });
+    api.sessions.itemMessage(TOKEN, item, '@Claude delete it', {
+      mention: true,
+      viaAgent: 'Claude Code',
+    });
+    api.sessions.postFrom(TOKEN, 'Revoke the token', { viaAgent: 'Other Agent' });
+    api.sessions.postFrom(TOKEN, 'After them');
+    await notes(c, 1);
+    await waitFor(() => session().acked === 4);
+    expect(channelNotes(c.notes).map((m) => m.params?.content)).toEqual(['After them']);
+  });
+});
+
 describe('a thread message written through an agent', () => {
   it("is never shown as the owner's, and says which agent wrote it", () => {
     const content = assignedContent('Test User', 'DEMO-12', item, [

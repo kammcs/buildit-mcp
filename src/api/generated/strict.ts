@@ -1345,6 +1345,7 @@ export const SessionContextMessageSchema = z.strictObject({
     name: z.string(),
   }),
   from_owner: z.boolean(),
+  via_agent: z.string().nullable().optional(),
   text: z.string(),
   created_at: TimestampSchema,
 });
@@ -1359,6 +1360,7 @@ export const SessionEventMessageSchema = z.strictObject({
   has_card: z.boolean(),
   created_at: TimestampSchema,
   edited_at: TimestampSchema.nullable(),
+  via_agent: z.string().nullable().optional(),
   forwarded: z.boolean(),
   forwarded_from: z
     .strictObject({
