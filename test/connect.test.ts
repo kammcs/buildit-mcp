@@ -213,6 +213,8 @@ describe('connect', () => {
     });
     expect(await runConnect(options(), h.io)).toBe(1);
     expect(h.err()).toContain('denied');
+    // The same answer covers an agent turned off, or an owner who left, after the approval.
+    expect(h.err()).toContain('the agent was turned off or deleted');
     expect(await h.store.get(sessionKey(dir, api.url))).toBeUndefined();
   });
 
@@ -258,6 +260,36 @@ describe('connect', () => {
     const h = harness();
     expect(await runConnect(options(), h.io)).toBe(1);
     expect(h.err()).toContain('Could not start connecting');
+    expect(h.err()).toContain('started from this network in the last hour');
+    expect(h.err()).toContain('about 60 minutes');
+  });
+
+  it('waits out a short Retry-After on start once, then goes on', async () => {
+    api.enqueueError(
+      '/v1/connect/start',
+      'rate_limited',
+      { retry_after: 30, bucket: 'connect_pending_per_address' },
+      { headers: { 'Retry-After': '30' } },
+    );
+    const h = harness((n) => {
+      if (n === 2) api.sessions.approve();
+    });
+    expect(await runConnect(options(), h.io)).toBe(0);
+    expect(h.out()).toContain('asks to wait 30 s');
+    expect(h.waits).toEqual([30_000, 5000]);
+    expect(api.count('/v1/connect/start')).toBe(2);
+  });
+
+  it('explains too many codes waiting from this network', async () => {
+    api.enqueueError('/v1/connect/start', 'rate_limited', {
+      retry_after: 600,
+      bucket: 'connect_pending_per_address',
+    });
+    const h = harness();
+    expect(await runConnect(options(), h.io)).toBe(1);
+    expect(h.err()).toContain('too many connections from this network are waiting for approval');
+    expect(h.err()).toContain('about 10 minutes');
+    expect(api.count('/v1/connect/start')).toBe(1);
   });
 });
 

@@ -8556,7 +8556,7 @@
           "session"
         ],
         "summary": "Start connecting a session",
-        "description": "Asks to connect a Claude Code session to one of the user's personal agents, for the projects named. Needs no token. Show the user `user_code` and `verification_uri_complete`: they approve it in buildIt.Social, choosing the agent, the projects and the scopes, within `expires_in` seconds. Then poll connect_poll with `device_code` every `interval` seconds. At most 10 starts an hour per client address.",
+        "description": "Asks to connect a Claude Code session to one of the user's personal agents, for the projects named. Needs no token. Show the user `user_code` and `verification_uri_complete`: they approve it in buildIt.Social, choosing the agent, the projects and the scopes, within `expires_in` seconds. Then poll connect_poll with `device_code` every `interval` seconds. At most 10 starts an hour, and 5 waiting for approval, per client address (429 rate_limited); a start refused for the waiting ones can be retried when the first of them expires (Retry-After).",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -12659,7 +12659,8 @@
                           "user_requests_per_minute",
                           "session_polls_per_minute",
                           "connect_starts_per_hour",
-                          "connect_pending_grants"
+                          "connect_pending_grants",
+                          "connect_pending_per_address"
                         ],
                         "description": "The limit that is used up. v1 may add buckets: handle an unknown one by retry_after alone."
                       }
@@ -18747,7 +18748,7 @@
     },
     "access_denied": {
       "status": 400,
-      "when": "connect_poll: the user denied the request, or the session was revoked before its token was collected.",
+      "when": "connect_poll: the user denied the request; or, before its token was collected, the session was revoked, the agent was turned off or deleted, or its owner is no longer an active member.",
       "message": "The user denied this connection. Stop polling.",
       "hint": "Stop polling; start a new connection only if the user asks for one."
     },

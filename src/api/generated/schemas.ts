@@ -703,6 +703,7 @@ export const ErrorSchema = z.looseObject({
           'session_polls_per_minute',
           'connect_starts_per_hour',
           'connect_pending_grants',
+          'connect_pending_per_address',
         ]),
       }),
     }),

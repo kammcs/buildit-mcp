@@ -164,17 +164,30 @@ export async function runConnect(options: ConnectOptions, io: CommandIO): Promis
   }
 
   const api = apiFor(options, io);
+  const body = {
+    client: CONNECT_CLIENT,
+    machine: io.machine ?? machineName(),
+    label: options.label,
+    projects: options.projects,
+  };
   let start;
   try {
-    start = await connectStart(api, {
-      client: CONNECT_CLIENT,
-      machine: io.machine ?? machineName(),
-      label: options.label,
-      projects: options.projects,
-    });
+    start = await connectStart(api, body);
   } catch (err) {
-    io.err(`Could not start connecting: ${describeError(err)}\n`);
-    return 1;
+    // A short rate limit is waited out once (the client already retried one of 10 s or less).
+    const wait = rateLimitWait(err);
+    if (wait === undefined || wait > MAX_START_WAIT_S) {
+      io.err(`Could not start connecting: ${startRefusal(err, wait)}\n`);
+      return 1;
+    }
+    io.out(`buildIt.Social asks to wait ${Math.ceil(wait)} s before connecting; waiting...\n`);
+    await sleep(Math.ceil(wait) * 1000);
+    try {
+      start = await connectStart(api, body);
+    } catch (again) {
+      io.err(`Could not start connecting: ${startRefusal(again, rateLimitWait(again))}\n`);
+      return 1;
+    }
   }
 
   const link = safeLink(start.verification_uri_complete) ?? safeLink(start.verification_uri);
@@ -245,7 +258,9 @@ export async function runConnect(options: ConnectOptions, io: CommandIO): Promis
           intervalMs = interval !== undefined ? interval * 1000 : intervalMs + 5000;
           continue;
         case POLL_CODES.denied:
-          io.err('The connection was denied in buildIt.Social. Nothing was saved.\n');
+          io.err(
+            'The connection was denied in buildIt.Social, or it can no longer be used: the agent was turned off or deleted, or its owner is no longer a member of the org. Nothing was saved.\n',
+          );
           return 1;
         case POLL_CODES.expired:
           io.err('The code expired or was already used. Run "buildit-mcp connect" again.\n');
@@ -260,6 +275,42 @@ export async function runConnect(options: ConnectOptions, io: CommandIO): Promis
           return 1;
       }
     }
+  }
+}
+
+/** The longest Retry-After that connect waits out before starting. */
+const MAX_START_WAIT_S = 60;
+
+/** The seconds a rate limit asks to wait, when the error is one. */
+function rateLimitWait(err: unknown): number | undefined {
+  if (!(err instanceof ApiError) || (err.code !== 'rate_limited' && err.status !== 429)) {
+    return undefined;
+  }
+  return err.retryAfterSeconds ?? 60;
+}
+
+function bucketOf(err: unknown): string | undefined {
+  if (!(err instanceof ApiError) || err.details === null || typeof err.details !== 'object') {
+    return undefined;
+  }
+  const bucket = (err.details as Record<string, unknown>).bucket;
+  return typeof bucket === 'string' ? bucket : undefined;
+}
+
+/** Why connect_start refused, in plain words, with how long to wait when it said. */
+function startRefusal(err: unknown, wait: number | undefined): string {
+  if (wait === undefined) return describeError(err);
+  const minutes = Math.max(1, Math.ceil(wait / 60));
+  const later = `Try again in about ${minutes} minute${minutes === 1 ? '' : 's'}.`;
+  switch (bucketOf(err)) {
+    case 'connect_pending_per_address':
+      return `too many connections from this network are waiting for approval. Approve or deny the codes already shown (or let them expire), then run connect again. ${later}`;
+    case 'connect_starts_per_hour':
+      return `too many connections were started from this network in the last hour. ${later}`;
+    case 'connect_pending_grants':
+      return `buildIt.Social has too many connections waiting for approval right now. ${later}`;
+    default:
+      return `too many requests. ${later}`;
   }
 }
 
