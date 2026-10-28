@@ -14,6 +14,7 @@ import {
   runConnect,
   runDisconnect,
   runStatus,
+  nextSteps,
   serverCommand,
   type CommandIO,
 } from '../src/cli/commands.js';
@@ -139,6 +140,10 @@ describe('connect', () => {
     );
     expect(h.asked).toEqual(['Is this you? [y/N] ']);
     expect(h.out()).toContain('claude --dangerously-load-development-channels server:buildit');
+    // The plugin first (recommended), then the plain server.
+    expect(h.out()).toContain('The buildit plugin (recommended)');
+    expect(h.out()).toContain('plugin:buildit@');
+    expect(h.out().indexOf('plugin:buildit@')).toBeLessThan(h.out().indexOf('server:buildit'));
     expect(h.out()).not.toContain(SESSION_TOKENS.first);
     expect(await h.store.get(sessionKey(dir, api.url))).toBe(SESSION_TOKENS.first);
     // Polled at the server's interval.
@@ -386,6 +391,27 @@ describe('the claude mcp add line', () => {
     expect(serverCommand('linux', '/src/buildit-mcp/dist/index.js')).toBe(
       'claude mcp add buildit -- node "/src/buildit-mcp/dist/index.js" --channel',
     );
+  });
+
+  it('gives both ways to start: the plugin (recommended), then the plain server', () => {
+    const npx = nextSteps('linux', '/opt/cache/.npm/_npx/abc/node_modules/.bin/buildit-mcp').join(
+      '\n',
+    );
+    expect(npx).toContain('claude plugin marketplace add kammcs/buildit-mcp');
+    expect(npx).toContain('claude plugin install buildit@buildit-mcp');
+    expect(npx).toContain(
+      'claude --dangerously-load-development-channels plugin:buildit@buildit-mcp',
+    );
+    expect(npx).toContain('<checkout>/plugin-local');
+    expect(npx).toContain('claude mcp add buildit -- npx -y @kammcs/buildit-mcp@latest --channel');
+    expect(npx.indexOf('plugin:buildit@')).toBeLessThan(npx.indexOf('server:buildit'));
+    // From a local build, the checkout's own plugin-local.
+    const local = nextSteps('linux', '/src/buildit-mcp/dist/index.js').join('\n');
+    expect(local).toMatch(
+      /--plugin-dir \S*buildit-mcp[\\/]plugin-local --dangerously-load-development-channels plugin:buildit@inline/,
+    );
+    expect(local).not.toContain('marketplace add');
+    expect(local).toContain('node "/src/buildit-mcp/dist/index.js" --channel');
   });
 });
 

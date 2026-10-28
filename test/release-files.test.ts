@@ -113,6 +113,8 @@ describe('the Claude Code plugin', () => {
 
   it('passes the settings to the server, with the defaults the server has', () => {
     expect(plugin.mcpServers.buildit?.env).toEqual({
+      // Every toolset: approvals need destructive and admin (the session's scopes still apply).
+      BUILDIT_TOOLSETS: 'all',
       BUILDIT_ASK_TIMEOUT_MINUTES: '${user_config.ask_timeout_minutes}',
       BUILDIT_QUESTIONS_IN_APP: '${user_config.questions_in_app}',
     });

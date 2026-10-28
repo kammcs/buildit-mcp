@@ -12,6 +12,7 @@
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/../dist/index.js", "--channel"],
       "env": {
+        "BUILDIT_TOOLSETS": "all",
         "BUILDIT_ASK_TIMEOUT_MINUTES": "${user_config.ask_timeout_minutes}",
         "BUILDIT_QUESTIONS_IN_APP": "${user_config.questions_in_app}"
       }

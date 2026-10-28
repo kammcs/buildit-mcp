@@ -278,6 +278,58 @@ describe('ask from the hook', () => {
     expect(c.logs.join('\n')).toContain('"reason":"not_owner"');
   });
 
+  describe('called again for the same question (the same tool_use_id)', () => {
+    it('returns the answers already given, without a new card', async () => {
+      api.sessions.open(TOKEN);
+      const c = await start();
+      await ready();
+      const first = hookAsk(c, [color, targets]);
+      const ids = cardIds(uuidV5('toolu_test_1'), 2);
+      for (const id of ids) await cardOf(id);
+      api.sessions.answerCard(TOKEN, ids[0]!, { inputs: { q1: 'o2' } });
+      api.sessions.answerCard(TOKEN, ids[1]!, { inputs: { q1: ['o1'] } });
+      const answers = { 'Which color?': 'Green', 'Which targets?': 'Windows' };
+      expect(hookOut(await first).updatedInput?.answers).toEqual(answers);
+      // The accepted cards' own closes arrive later: the repeat isn't fooled by them.
+      await waitFor(() => ids.every((id) => session().cards.get(id)?.closedBy === 'app'));
+      await new Promise((r) => setTimeout(r, 100));
+      const again = await hookAsk(c, [color, targets]);
+      expect(hookOut(again)).toMatchObject({ permissionDecision: 'allow' });
+      expect(hookOut(again).updatedInput?.answers).toEqual(answers);
+      expect(session().messages).toHaveLength(2);
+    });
+
+    it('waits along with a call still waiting, and both get the answer', async () => {
+      api.sessions.open(TOKEN);
+      const c = await start();
+      await ready();
+      const first = hookAsk(c, [color]);
+      const id = uuidV5('toolu_test_1');
+      await cardOf(id);
+      const second = hookAsk(c, [color]);
+      await new Promise((r) => setTimeout(r, 100));
+      api.sessions.answerCard(TOKEN, id, { inputs: { q1: 'o1' } });
+      const [a, b] = await Promise.all([first, second]);
+      for (const r of [a, b]) {
+        expect(hookOut(r).updatedInput?.answers).toEqual({ 'Which color?': 'Blue' });
+      }
+      expect(session().messages).toHaveLength(1);
+    });
+
+    it('still says dismissed for a card dismissed before', async () => {
+      api.sessions.open(TOKEN);
+      const c = await start();
+      await ready();
+      const first = hookAsk(c, [color]);
+      const id = uuidV5('toolu_test_1');
+      await cardOf(id);
+      api.sessions.closeCardBy(TOKEN, id, 'owner');
+      expect(hookOut(await first).permissionDecisionReason).toContain('dismissed this question');
+      const again = await hookAsk(c, [color]);
+      expect(hookOut(again).permissionDecisionReason).toContain('dismissed this question');
+    });
+  });
+
   it("writes the card in the owner's language", async () => {
     api.sessions.open(TOKEN);
     const c = await start();
@@ -427,7 +479,7 @@ describe('ask from Claude', () => {
       arguments: { questions: [color], wait_s: 60 },
     });
     expect(r.isError).toBeFalsy();
-    expect(textOf(r)).toContain('Nobody answered this question in buildIt.Social within 1 minutes');
+    expect(textOf(r)).toContain('Nobody answered this question in buildIt.Social within 1 minute,');
     expect(r.structuredContent).toMatchObject({ status: 'no_answer', reason: 'timeout' });
   });
 

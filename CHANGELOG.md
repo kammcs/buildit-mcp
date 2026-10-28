@@ -19,6 +19,10 @@ Built on version 1.6.0 of the agent API's contract. Questions, approval cards an
 - **Approvals as cards.** In channel mode a `propose_*` tool also posts the preview as a card with Apply and Cancel, worded by buildIt.Social from its own preview. buildIt.Social applies the change on your tap, as you through your agent; `apply_plan` refuses such a plan (`plan_awaits_owner`), and Claude learns the outcome as a `<channel>` message with `event="plan_resolved"` (applied, cancelled, stale, failed or expired). If the card can't be posted, the usual preview-then-confirm flow stands.
 - **One channel per folder:** the first channel server in a folder takes a lock; another one serves its tools without the channel, and its `reply` and `ask` say which is the channel.
 - An agent session never applies plans: every `propose_*` with a session token posts its card, `apply_plan` explains `plan_card_required`, and the descriptions and channel instructions say so. A plan outcome `unknown` tells Claude to check the items.
+- Channel mode turns every toolset on unless `BUILDIT_TOOLSETS` says otherwise (the plugin sets `all`), so the `propose_*` tools are there for approvals; the session's scopes still apply.
+- A repeated hook call for a question already answered (the same `tool_use_id`) returns the answers, and one that runs alongside a call still waiting gets the same answer; neither posts a new card.
+- `connect` ends with both ways to start Claude Code: the plugin (recommended, or `plugin-local` from a checkout) and the plain `claude mcp add ... --channel` server.
+- `--api-url` (and `BUILDIT_API_URL`) given as a bare host gets the agent API's path, `/functions/v1/agent-api`, and says so once.
 - Event types this version doesn't know are skipped instead of failing the page of events.
 - `turn_ended`, a tool only the plugin's `Stop` hook calls.
 

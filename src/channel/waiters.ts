@@ -44,9 +44,36 @@ export function eventMessageId(event: SessionEvent): string | undefined {
   return typeof id === 'string' ? id : undefined;
 }
 
-/** The waiters of one session, by card message id. */
+/** How many cards' outcomes are remembered for a repeated ask. */
+const REMEMBERED = 500;
+
+/** A map that forgets its oldest entries past a size. */
+class Bounded<V> {
+  private readonly map = new Map<string, V>();
+  get(key: string): V | undefined {
+    return this.map.get(key);
+  }
+  set(key: string, value: V): void {
+    this.map.delete(key);
+    this.map.set(key, value);
+    if (this.map.size > REMEMBERED) {
+      const oldest = this.map.keys().next().value;
+      if (oldest !== undefined) this.map.delete(oldest);
+    }
+  }
+}
+
+/**
+ * The waiters of one session, by card message id (several may wait for one
+ * card: the hook can run twice for one question), and what the session's
+ * cards became: the answers accepted, and how each card closed. A repeated
+ * ask for a card that was already answered returns those answers instead
+ * of waiting for events that were handed on (and acknowledged) before.
+ */
 export class CardWaiters {
-  private readonly waiters = new Map<string, CardWaiter>();
+  private readonly waiters = new Map<string, Set<CardWaiter>>();
+  private readonly answers = new Bounded<Record<string, string>>();
+  private readonly closings = new Bounded<string>();
   private ended = false;
 
   constructor(private readonly stepMs: number = WAITER_STEP_MS) {}
@@ -56,12 +83,20 @@ export class CardWaiters {
     return this.ended;
   }
 
-  /** Registers the waiter for a card; the returned function unregisters it. */
+  /** Registers a waiter for a card; the returned function unregisters it. */
   register(messageId: string, waiter: CardWaiter): () => void {
-    this.waiters.set(messageId, waiter);
+    let set = this.waiters.get(messageId);
+    if (set === undefined) {
+      set = new Set();
+      this.waiters.set(messageId, set);
+    }
+    set.add(waiter);
     if (this.ended) waiter.end();
     return () => {
-      if (this.waiters.get(messageId) === waiter) this.waiters.delete(messageId);
+      const current = this.waiters.get(messageId);
+      if (current === undefined) return;
+      current.delete(waiter);
+      if (current.size === 0) this.waiters.delete(messageId);
     };
   }
 
@@ -74,20 +109,44 @@ export class CardWaiters {
     return this.waiters.size;
   }
 
+  /** Remembers the answers accepted for a card. */
+  rememberAnswers(messageId: string, answers: Record<string, string>): void {
+    this.answers.set(messageId, answers);
+  }
+
+  /** The answers accepted for a card, if this process saw them. */
+  answersOf(messageId: string): Record<string, string> | undefined {
+    return this.answers.get(messageId);
+  }
+
+  /** How a card closed (its closed_by), if this process saw it. */
+  closedBy(messageId: string): string | undefined {
+    return this.closings.get(messageId);
+  }
+
   /**
-   * Hands the event to its card's waiter and waits until it is handled, or
-   * for at most stepMs. False when no waiter waits for that card.
+   * Hands the event to its card's waiters and waits until they have handled
+   * it, or for at most stepMs. A card.closed is remembered first. False when
+   * no waiter waits for that card.
    */
   async deliver(event: SessionEvent): Promise<boolean> {
     const id = eventMessageId(event);
-    const waiter = id === undefined ? undefined : this.waiters.get(id);
-    if (waiter === undefined) return false;
+    if (id === undefined) return false;
+    if (event.type === 'card.closed') {
+      const by = (event.data as Record<string, unknown>).closed_by;
+      this.closings.set(id, typeof by === 'string' ? by : 'app');
+    }
+    const set = this.waiters.get(id);
+    if (set === undefined || set.size === 0) return false;
     let timer: NodeJS.Timeout | undefined;
     const late = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, this.stepMs);
     });
     try {
-      await Promise.race([waiter.handle(event).catch(() => undefined), late]);
+      await Promise.race([
+        Promise.all([...set].map((w) => w.handle(event).catch(() => undefined))),
+        late,
+      ]);
     } finally {
       clearTimeout(timer);
     }
@@ -97,7 +156,7 @@ export class CardWaiters {
   /** The session ended for good: every waiter is told, and later ones at once. */
   endAll(): void {
     this.ended = true;
-    for (const waiter of [...this.waiters.values()]) waiter.end();
+    for (const set of [...this.waiters.values()]) for (const waiter of [...set]) waiter.end();
   }
 }
 

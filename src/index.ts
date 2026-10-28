@@ -40,6 +40,9 @@ async function main(): Promise<void> {
   }
 
   if (action.kind === 'connect' || action.kind === 'disconnect' || action.kind === 'status') {
+    if (action.options.apiUrlNote !== undefined) {
+      process.stdout.write(`${action.options.apiUrlNote}\n`);
+    }
     // A terminal command says what happened in plain text; logs stay quiet.
     const store = await openTokenStore({
       warn: (message) => process.stderr.write(`${SERVER_NAME}: ${message}\n`),

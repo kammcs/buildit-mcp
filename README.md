@@ -266,7 +266,7 @@ Once it is approved, the command says who approved it and for which projects, as
 
 - `--project` takes up to 10 project keys (repeat it, or separate keys with commas). The session reaches only those projects, and never more than you can.
 - `--label <name>` names the session in buildIt.Social (1 to 40 characters; the folder's name by default). The agent's messages show as "agent · label".
-- `--folder <path>` connects another folder than the working directory; `--api-url` another buildIt.Social deployment.
+- `--folder <path>` connects another folder than the working directory. `--api-url <url>` connects to another buildIt.Social deployment: its agent API's address, such as `https://buildit.example.com/functions/v1/agent-api`; a bare host such as `https://buildit.example.com` gets `/functions/v1/agent-api` added (the command says so).
 - `--yes` saves without asking. It is for scripts only, and unsafe whenever anyone else could have seen the code.
 - No personal access token is involved: the session has a token of its own (`buildit_ags_...`), which the CLI keeps and never prints. It expires after 30 days unused.
 
@@ -347,7 +347,7 @@ claude --dangerously-load-development-channels plugin:buildit@buildit-mcp
 | Question wait (minutes)     | 60      | How long a question card waits for an answer, 1 to 60. The card closes a minute before the hook's one-hour limit at most. |
 | Questions in buildIt.Social | on      | Off: Claude's `AskUserQuestion` questions stay in the terminal. Approvals and "is writing" are unaffected.                |
 
-The plugin passes them to the server as `BUILDIT_ASK_TIMEOUT_MINUTES` and `BUILDIT_QUESTIONS_IN_APP`. It hooks `AskUserQuestion` (`PreToolUse`, an `mcp_tool` hook calling the server's `ask` tool with a one-hour timeout) and Claude's turn ending (`Stop`, calling `turn_ended`, which only stops "is writing"; it isn't a tool for Claude). Tested with Claude Code 2.1.312, where a hook of this kind waited more than ten minutes as it should.
+The plugin passes them to the server as `BUILDIT_ASK_TIMEOUT_MINUTES` and `BUILDIT_QUESTIONS_IN_APP`, and turns every toolset on (`BUILDIT_TOOLSETS=all`), since approvals need the `destructive` and `admin` tools; `--channel` does the same when `BUILDIT_TOOLSETS` isn't set. The session's own scopes and projects still limit what works. It hooks `AskUserQuestion` (`PreToolUse`, an `mcp_tool` hook calling the server's `ask` tool with a one-hour timeout) and Claude's turn ending (`Stop`, calling `turn_ended`, which only stops "is writing"; it isn't a tool for Claude). Tested with Claude Code 2.1.312, where a hook of this kind waited more than ten minutes as it should.
 
 #### Try it from a checkout
 

@@ -21,7 +21,7 @@ import {
   pluginConfigured,
 } from '../src/cli/claude-config.js';
 import { runStatus } from '../src/cli/commands.js';
-import { parseCli } from '../src/config.js';
+import { apiUrlNote, parseApiUrl, parseCli } from '../src/config.js';
 import { createLogger } from '../src/log.js';
 import { FileTokenStore } from '../src/secrets/keychain.js';
 import { hookWaitSeconds, HOOK_TIMEOUT_S } from '../src/transports/stdio.js';
@@ -118,6 +118,25 @@ const event = (messageId: string, type: SessionEvent['type'] = 'card.closed'): S
   }) as unknown as SessionEvent;
 
 describe('card waiters', () => {
+  it('hand an event to every waiter of a card, and remember answers and closings', async () => {
+    const waiters = new CardWaiters();
+    const one = new CardInbox();
+    const two = new CardInbox();
+    const offOne = waiters.register('m1', one);
+    waiters.register('m1', two);
+    const delivered = waiters.deliver(event('m1'));
+    const [a, b] = await Promise.all([one.next(Date.now() + 1000), two.next(Date.now() + 1000)]);
+    (a as { done: () => void }).done();
+    (b as { done: () => void }).done();
+    expect(await delivered).toBe(true);
+    expect(waiters.closedBy('m1')).toBe('app');
+    offOne();
+    expect(waiters.has('m1')).toBe(true);
+    waiters.rememberAnswers('m1', { 'Q?': 'A' });
+    expect(waiters.answersOf('m1')).toEqual({ 'Q?': 'A' });
+    expect(waiters.answersOf('m2')).toBeUndefined();
+  });
+
   it('hand an event to its card and wait until it is handled', async () => {
     const waiters = new CardWaiters();
     const inbox = new CardInbox();
@@ -185,6 +204,49 @@ describe('the events page', () => {
     });
     const page = await listSessionEvents(api, { limit: 10 });
     expect(page).toMatchObject({ events: [], cursor: 1, skipped: 1 });
+  });
+});
+
+describe('toolsets in channel mode', () => {
+  it('are all on by default (approvals need destructive and admin), unless set', () => {
+    const run = (argv: string[], env: Record<string, string>) => {
+      const action = parseCli(argv, { BUILDIT_TOKEN: 'buildit_ags_x', ...env });
+      if (action.kind !== 'run') throw new Error('expected run');
+      return action.config.toolsets;
+    };
+    expect(run(['--channel'], {})).toEqual(
+      expect.arrayContaining(['destructive', 'admin', 'items']),
+    );
+    expect(run(['--channel'], { BUILDIT_TOOLSETS: 'items' })).toEqual(['items']);
+    expect(run([], { BUILDIT_TOKEN: 'buildit_pat_x' })).not.toContain('destructive');
+  });
+});
+
+describe('the API address', () => {
+  it('gets the agent API path for a bare host, and says so once', () => {
+    expect(parseApiUrl('https://buildit.example.com')).toBe(
+      'https://buildit.example.com/functions/v1/agent-api',
+    );
+    expect(parseApiUrl('https://buildit.example.com/')).toBe(
+      'https://buildit.example.com/functions/v1/agent-api',
+    );
+    expect(parseApiUrl('https://buildit.example.com/functions/v1/agent-api/')).toBe(
+      'https://buildit.example.com/functions/v1/agent-api',
+    );
+    expect(apiUrlNote('https://buildit.example.com')).toContain(
+      'uses https://buildit.example.com/functions/v1/agent-api',
+    );
+    expect(apiUrlNote('https://buildit.example.com/functions/v1/agent-api')).toBeUndefined();
+    const action = parseCli(
+      ['connect', '--project', 'DEMO', '--api-url', 'https://buildit.example.com'],
+      {},
+    );
+    if (action.kind !== 'connect') throw new Error('expected connect');
+    expect(action.options.apiUrl).toBe('https://buildit.example.com/functions/v1/agent-api');
+    expect(action.options.apiUrlNote).toContain('has no path');
+    const run = parseCli(['--channel', '--api-url', 'https://buildit.example.com'], {});
+    if (run.kind !== 'run') throw new Error('expected run');
+    expect(run.config.warnings.filter((w) => w.includes('has no path'))).toHaveLength(1);
   });
 });
 

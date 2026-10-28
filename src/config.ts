@@ -92,6 +92,8 @@ export interface SessionCommandOptions {
   folder: string;
   /** Whether --api-url was given (disconnect and status otherwise use the API saved for the folder). */
   apiUrlFlag?: boolean;
+  /** Said once when the API address was a bare host and got the agent API's path. */
+  apiUrlNote?: string;
 }
 
 export interface ConnectOptions extends SessionCommandOptions {
@@ -143,7 +145,8 @@ Options (each also has an environment variable):
   --api-url <url>           BUILDIT_API_URL           Agent API base URL
                                                       (default ${DEFAULT_API_URL})
   --toolsets <list>         BUILDIT_TOOLSETS          Comma-separated toolsets, or "all"
-                                                      (default ${DEFAULT_TOOLSETS.join(',')};
+                                                      (default ${DEFAULT_TOOLSETS.join(',')}, or all
+                                                      with --channel;
                                                       known: ${TOOLSET_NAMES.join(', ')})
   --read-only               BUILDIT_READ_ONLY=true    Only list tools that change nothing
   --exclude-tools <list>    BUILDIT_EXCLUDE_TOOLS     Comma-separated tool names to hide
@@ -311,6 +314,23 @@ export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(host.toLowerCase());
 }
 
+/** The agent API's path on a buildIt.Social host. */
+export const AGENT_API_PATH = '/functions/v1/agent-api';
+
+/**
+ * The note shown once when an API address is a bare host (no path), which
+ * parseApiUrl completes with the agent API's path; undefined otherwise.
+ */
+export function apiUrlNote(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    if (new URL(raw.trim()).pathname !== '/') return undefined;
+  } catch {
+    return undefined;
+  }
+  return `The API address ${raw.trim()} has no path, so buildit-mcp uses ${parseApiUrl(raw)}, the agent API on that host.`;
+}
+
 export function parseApiUrl(raw: string): string {
   let url: URL;
   try {
@@ -330,6 +350,8 @@ export function parseApiUrl(raw: string): string {
       'BUILDIT_API_URL must use https:// (plain http:// is only allowed for localhost).',
     );
   }
+  // A bare host means its agent API.
+  if (url.pathname === '/') url.pathname = AGENT_API_PATH;
   return url.toString().replace(/\/+$/, '');
 }
 
@@ -473,19 +495,35 @@ function parseSessionCommand(
   }
   if (values.help === true) return { kind: 'help', command };
   const apiFlag = values['api-url'];
-  const apiUrl = parseApiUrl(
-    (typeof apiFlag === 'string' ? apiFlag : nonEmpty(env.BUILDIT_API_URL)) ?? DEFAULT_API_URL,
-  );
+  const apiRaw =
+    (typeof apiFlag === 'string' ? apiFlag : nonEmpty(env.BUILDIT_API_URL)) ?? DEFAULT_API_URL;
+  const apiUrl = parseApiUrl(apiRaw);
+  const note = apiUrlNote(apiRaw);
   const folder = folderOf(values.folder, env, cwd);
   if (command !== 'connect') {
-    return { kind: command, options: { apiUrl, folder, apiUrlFlag: typeof apiFlag === 'string' } };
+    return {
+      kind: command,
+      options: {
+        apiUrl,
+        folder,
+        apiUrlFlag: typeof apiFlag === 'string',
+        ...(note === undefined ? {} : { apiUrlNote: note }),
+      },
+    };
   }
   const projectFlags = values.project;
   const projects = parseProjects(Array.isArray(projectFlags) ? projectFlags : []);
   const label = sessionLabel(typeof values.label === 'string' ? values.label : undefined, folder);
   return {
     kind: 'connect',
-    options: { apiUrl, folder, projects, label, yes: values.yes === true },
+    options: {
+      apiUrl,
+      folder,
+      projects,
+      label,
+      yes: values.yes === true,
+      ...(note === undefined ? {} : { apiUrlNote: note }),
+    },
   };
 }
 
@@ -559,9 +597,19 @@ export function parseCli(
     );
   }
 
-  const apiUrl = parseApiUrl(str('api-url', 'BUILDIT_API_URL') ?? DEFAULT_API_URL);
+  const apiRaw = str('api-url', 'BUILDIT_API_URL') ?? DEFAULT_API_URL;
+  const apiUrl = parseApiUrl(apiRaw);
+  const apiNote = apiUrlNote(apiRaw);
+  if (apiNote !== undefined) warnings.push(apiNote);
   const toolsetsRaw = str('toolsets', 'BUILDIT_TOOLSETS');
-  const toolsets = toolsetsRaw === undefined ? [...DEFAULT_TOOLSETS] : parseToolsets(toolsetsRaw);
+  // Channel mode turns every toolset on by default: approvals need destructive and admin (the
+  // session's own scopes still limit what works).
+  const toolsets =
+    toolsetsRaw === undefined
+      ? channelMode
+        ? [...TOOLSET_NAMES]
+        : [...DEFAULT_TOOLSETS]
+      : parseToolsets(toolsetsRaw);
   const readOnly =
     values['read-only'] === true || parseBoolean('BUILDIT_READ_ONLY', env.BUILDIT_READ_ONLY, false);
   const excludeRaw = str('exclude-tools', 'BUILDIT_EXCLUDE_TOOLS');

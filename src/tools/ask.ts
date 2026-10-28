@@ -32,7 +32,7 @@ import { ApiError } from '../api/client.js';
 import { answerSessionResponse, closeSessionCard, postSessionMessage } from '../channel/api.js';
 import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import type { ChannelState } from '../channel/loop.js';
-import { CardInbox, eventMessageId } from '../channel/waiters.js';
+import { CardInbox, eventMessageId, type CardWaiters } from '../channel/waiters.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolContext, type ToolDefinition } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
@@ -487,7 +487,7 @@ export type NoAnswer = 'timeout' | 'dismissed' | 'session_ended' | 'closed';
 export function noAnswerText(reason: NoAnswer, minutes: number): string {
   switch (reason) {
     case 'timeout':
-      return `Nobody answered this question in buildIt.Social within ${minutes} minutes, so the card was closed. Don't ask it again now: make a safe assumption and say which one you made, or stop and tell the person what you need.`;
+      return `Nobody answered this question in buildIt.Social within ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}, so the card was closed. Don't ask it again now: make a safe assumption and say which one you made, or stop and tell the person what you need.`;
     case 'dismissed':
       return "The person dismissed this question in buildIt.Social without answering. Don't ask it again now: make a safe assumption and say which one you made, or stop and say what you need.";
     case 'session_ended':
@@ -771,6 +771,7 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
         const outcome = await waitForAnswers({
           ctx,
           inbox,
+          memory: state.waiters,
           cards,
           locale,
           deadline: started + waitS * scale,
@@ -819,6 +820,8 @@ async function closeCard(ctx: ToolContext, messageId: string): Promise<void> {
 interface WaitInit {
   ctx: ToolContext;
   inbox: CardInbox;
+  /** What the session's cards became (a repeated ask finds its answers there). */
+  memory: CardWaiters;
   cards: PostedCard[];
   locale: Locale;
   deadline: number;
@@ -837,13 +840,40 @@ function closedReason(closedBy: unknown, split: boolean): NoAnswer {
 /**
  * Takes the cards' events until every card has an answer, a card closes
  * before its answer, or the wait ends; then closes the cards still open.
+ * A card answered before (the hook can run twice for one question, the
+ * second time after the first accepted the answer) counts with the answers
+ * remembered for it; one that closed before without an answer ends the ask.
  */
 async function waitForAnswers(init: WaitInit): Promise<Outcome> {
-  const { ctx, inbox, cards, locale } = init;
+  const { ctx, inbox, memory, cards, locale } = init;
   const answered = new Map<string, Record<string, string>>();
   const closeOpen = async (): Promise<void> => {
     for (const card of cards) if (!answered.has(card.id)) await closeCard(ctx, card.id);
   };
+  const complete = (): Outcome | undefined =>
+    answered.size === cards.length
+      ? {
+          status: 'answered',
+          answers: Object.assign({}, ...cards.map((c) => answered.get(c.id))) as Record<
+            string,
+            string
+          >,
+        }
+      : undefined;
+  for (const card of cards) {
+    const known = memory.answersOf(card.id);
+    if (known !== undefined) answered.set(card.id, known);
+  }
+  const already = complete();
+  if (already !== undefined) return already;
+  for (const card of cards) {
+    const by = answered.has(card.id) ? undefined : memory.closedBy(card.id);
+    if (by !== undefined) {
+      answered.set(card.id, {});
+      await closeOpen();
+      return { status: 'no_answer', reason: closedReason(by, cards.length > 1) };
+    }
+  }
   for (;;) {
     const next = await inbox.next(init.deadline, ctx.signal, init.now);
     if (next === 'timeout') {
@@ -861,6 +891,14 @@ async function waitForAnswers(init: WaitInit): Promise<Outcome> {
       // An answered card's own close (accepting closes it), or another card's event.
       if (card === undefined || answered.has(card.id)) continue;
       if (event.type === 'card.closed') {
+        // Another call for the same card may have accepted its answer.
+        const known = memory.answersOf(card.id);
+        if (known !== undefined) {
+          answered.set(card.id, known);
+          const outcome = complete();
+          if (outcome !== undefined) return outcome;
+          continue;
+        }
         const by = (event.data as Record<string, unknown>).closed_by;
         answered.set(card.id, {});
         await closeOpen();
@@ -885,21 +923,22 @@ async function waitForAnswers(init: WaitInit): Promise<Outcome> {
           ctx.apiOptions,
         );
       } catch (err) {
-        if (isRefusal(err, 'response_changed', 'card_closed')) continue;
+        if (isRefusal(err, 'response_changed', 'card_closed')) {
+          const known = memory.answersOf(card.id);
+          if (known === undefined) continue;
+          answered.set(card.id, known);
+          const outcome = complete();
+          if (outcome !== undefined) return outcome;
+          continue;
+        }
         // The person answered; the answer stands even if it couldn't be marked.
         ctx.logger.info('ask answer not marked accepted', { code: codeOf(err) });
         await closeCard(ctx, card.id);
       }
+      memory.rememberAnswers(card.id, decoded.answers);
       answered.set(card.id, decoded.answers);
-      if (answered.size === cards.length) {
-        return {
-          status: 'answered',
-          answers: Object.assign({}, ...cards.map((c) => answered.get(c.id))) as Record<
-            string,
-            string
-          >,
-        };
-      }
+      const outcome = complete();
+      if (outcome !== undefined) return outcome;
     } finally {
       done();
     }

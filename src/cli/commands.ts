@@ -8,6 +8,7 @@
  * move the cursor or disguise itself in the terminal.
  */
 import { hostname } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { ApiError, ApiClient } from '../api/client.js';
 import {
@@ -127,12 +128,34 @@ export function nextSteps(
   platform: NodeJS.Platform = process.platform,
   entry: string | undefined = process.argv[1],
 ): string[] {
+  const local = localCheckout(entry);
+  const quote = (path: string): string => (/\s/.test(path) ? `"${path}"` : path);
   return [
-    'Next, in this folder:',
-    `  ${serverCommand(platform, entry)}`,
-    '  claude --dangerously-load-development-channels server:buildit',
-    'Messages you send to the agent in buildIt.Social then arrive in that Claude Code session.',
+    'Next, in this folder, start Claude Code with buildIt.Social, in one of two ways:',
+    "- The buildit plugin (recommended): your messages, and Claude's questions and approvals as cards in buildIt.Social.",
+    ...(local === undefined
+      ? [
+          '    claude plugin marketplace add kammcs/buildit-mcp',
+          '    claude plugin install buildit@buildit-mcp',
+          '    claude --dangerously-load-development-channels plugin:buildit@buildit-mcp',
+          '  From a checkout of buildit-mcp (after npm ci && npm run build in it):',
+          '    claude --plugin-dir <checkout>/plugin-local --dangerously-load-development-channels plugin:buildit@inline',
+        ]
+      : [
+          '  From this checkout (its plugin-local runs this build):',
+          `    claude --plugin-dir ${quote(join(local, 'plugin-local'))} --dangerously-load-development-channels plugin:buildit@inline`,
+        ]),
+    '- Or a plain channel server (messages and reply only):',
+    `    ${serverCommand(platform, entry)}`,
+    '    claude --dangerously-load-development-channels server:buildit',
+    'Use one of them, not both. Messages you send to the agent in buildIt.Social then arrive in that Claude Code session.',
   ];
+}
+
+/** The checkout a local build runs from (its dist/index.js), or undefined when run through npx. */
+function localCheckout(entry: string | undefined): string | undefined {
+  if (entry === undefined || /[\\/](_npx|node_modules)[\\/]/.test(entry)) return undefined;
+  return dirname(dirname(entry));
 }
 
 /**

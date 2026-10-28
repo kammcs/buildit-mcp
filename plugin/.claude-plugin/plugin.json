@@ -3,19 +3,27 @@
   "version": "0.5.0",
   "license": "MIT",
   "description": "Talk to this Claude Code session from buildIt.Social: messages, questions as cards, approvals.",
-  "author": { "name": "Kamm Creative Solutions" },
+  "author": {
+    "name": "Kamm Creative Solutions"
+  },
   "homepage": "https://github.com/kammcs/buildit-mcp#readme",
   "mcpServers": {
     "buildit": {
       "command": "npx",
       "args": ["-y", "@kammcs/buildit-mcp@0.5.0", "--channel"],
       "env": {
+        "BUILDIT_TOOLSETS": "all",
         "BUILDIT_ASK_TIMEOUT_MINUTES": "${user_config.ask_timeout_minutes}",
         "BUILDIT_QUESTIONS_IN_APP": "${user_config.questions_in_app}"
       }
     }
   },
-  "channels": [{ "server": "buildit", "displayName": "buildIt.Social" }],
+  "channels": [
+    {
+      "server": "buildit",
+      "displayName": "buildIt.Social"
+    }
+  ],
   "userConfig": {
     "ask_timeout_minutes": {
       "type": "number",
