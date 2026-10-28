@@ -13,16 +13,15 @@
  *   usual (questions in the app turned off, no channel session, questions
  *   it can't read, or a post that failed).
  *
- * The card is always a form, as Claude Code lists choices: per question its
- * full text (Markdown), then a required choice labelled with its header,
- * whose options carry their descriptions (the app shows them as rows, the
- * label beside its details), multi-select where the question allows
- * several, and an optional multi-line "Other" field for an answer of the
- * person's own. Nothing is cut below the card schema's limits. A question
- * set that doesn't fit one card (16 KB, 25 elements) is asked as one card
- * per question, in order, and the answers come back together. Answers are
- * once-only, private to the owner, and confirmed; accepting one closes its
- * card. The cards close at their deadline on the server too, and when the
+ * Each question is its own card, in order, in the same thread, as Claude
+ * Code lists choices: its full text (Markdown), then a choice labelled with
+ * its header, whose options carry their descriptions (the app shows them as
+ * rows, the label beside its details), multi-select where the question
+ * allows several, then a multi-line "Other" field for an answer of the
+ * person's own; a choice or Other text is enough. Nothing is cut below the
+ * card schema's limits. The answers come back together once every card is
+ * answered. Answers are once-only, private to the owner, and confirmed;
+ * accepting one closes its card. The cards close at their deadline on the server too, and when the
  * wait ends here for any reason.
  */
 import { createHash } from 'node:crypto';
@@ -104,7 +103,7 @@ export function parseQuestions(value: unknown): Question[] | undefined {
 
 export type Locale = 'en' | 'es-419' | 'fr-CA' | 'sr-Cyrl' | 'sr-Latn';
 
-type WordKey = 'other' | 'own_answer' | 'send' | 'answer_each' | 'has_questions' | 'asks';
+type WordKey = 'other' | 'own_answer' | 'send' | 'answer_each' | 'asks_title' | 'of' | 'asks';
 
 const WORDS: Record<WordKey, Record<Locale, string>> = {
   other: {
@@ -129,18 +128,25 @@ const WORDS: Record<WordKey, Record<Locale, string>> = {
     'sr-Latn': 'Pošalji',
   },
   answer_each: {
-    en: 'Choose an option or type an answer for each question',
-    'es-419': 'Elige una opción o escribe una respuesta para cada pregunta',
-    'fr-CA': 'Choisissez une option ou écrivez une réponse pour chaque question',
-    'sr-Cyrl': 'Изаберите опцију или упишите одговор за свако питање',
-    'sr-Latn': 'Izaberite opciju ili upišite odgovor za svako pitanje',
+    en: 'Choose an option or type your own answer',
+    'es-419': 'Elige una opción o escribe tu propia respuesta',
+    'fr-CA': 'Choisissez une option ou écrivez votre propre réponse',
+    'sr-Cyrl': 'Изаберите опцију или упишите свој одговор',
+    'sr-Latn': 'Izaberite opciju ili upišite svoj odgovor',
   },
-  has_questions: {
-    en: '{agent} has questions',
-    'es-419': '{agent} tiene preguntas',
-    'fr-CA': '{agent} a des questions',
-    'sr-Cyrl': '{agent} има питања',
-    'sr-Latn': '{agent} ima pitanja',
+  asks_title: {
+    en: '{agent} asks',
+    'es-419': '{agent} pregunta',
+    'fr-CA': '{agent} demande',
+    'sr-Cyrl': '{agent} пита',
+    'sr-Latn': '{agent} pita',
+  },
+  of: {
+    en: 'Question {n} of {total}',
+    'es-419': 'Pregunta {n} de {total}',
+    'fr-CA': 'Question {n} sur {total}',
+    'sr-Cyrl': 'Питање {n} од {total}',
+    'sr-Latn': 'Pitanje {n} od {total}',
   },
   asks: {
     en: '{agent} asks:',
@@ -161,8 +167,11 @@ export function cardLocale(tag: string | null | undefined): Locale {
   return 'en';
 }
 
-function word(key: WordKey, locale: Locale, agent = ''): string {
-  return WORDS[key][locale].replace('{agent}', agent);
+function word(key: WordKey, locale: Locale, agent = '', n = 0, total = 0): string {
+  return WORDS[key][locale]
+    .replace('{agent}', agent)
+    .replace('{n}', String(n))
+    .replace('{total}', String(total));
 }
 
 // ---------------------------------------------------------------------------
@@ -259,8 +268,8 @@ const PRIVATE_MAX_BYTES = 2048;
 const CLOSES_MAX_S = 86_400;
 
 export interface QuestionCard {
-  /** The questions it asks (all of them, or one when the set is split). */
-  questions: Question[];
+  /** The question it asks. */
+  question: Question;
   /** The message body: the fallback, and the push. */
   text: string;
   card: Record<string, unknown>;
@@ -286,28 +295,22 @@ function responses(closesAt: string): Record<string, unknown> {
 }
 
 /** The option-id → label map, cut to fit; undefined when it can't fit. */
-function privateMap(questions: readonly Question[]): Record<string, unknown> | undefined {
+function privateMap(q: Question): Record<string, unknown> | undefined {
   for (const max of [80, 40, 20, 10]) {
-    const map: Record<string, Record<string, string>> = {};
-    questions.forEach((q, i) => {
-      map[`q${i + 1}`] = Object.fromEntries(
-        q.options.map((o, j) => [`o${j + 1}`, cleanLine(o.label, max)]),
-      );
-    });
-    const value = { v: 1, map };
+    const value = {
+      v: 1,
+      map: {
+        q1: Object.fromEntries(q.options.map((o, j) => [`o${j + 1}`, cleanLine(o.label, max)])),
+      },
+    };
     if (Buffer.byteLength(JSON.stringify(value), 'utf8') <= PRIVATE_MAX_BYTES) return value;
   }
   return undefined;
 }
 
-/** The message body: "<agent> asks: <question>", or one line per question. */
-function fallbackText(questions: readonly Question[], ctx: CardContext): string {
-  const asks = word('asks', ctx.locale, ctx.agent);
-  const text =
-    questions.length === 1
-      ? `${asks} ${cleanLine(questions[0]?.question ?? '', 2000)}`
-      : [asks, ...questions.map((q) => `- ${cleanLine(q.question, 500)}`)].join('\n');
-  return cutTo(text, 4000);
+/** The message body (the fallback, and the push): "<agent> asks: <question>". */
+function fallbackText(q: Question, ctx: CardContext): string {
+  return cutTo(`${word('asks', ctx.locale, ctx.agent)} ${cleanLine(q.question, 3800)}`, 4000);
 }
 
 /** The card's size as the schema counts it: its JSON without `private`, and its elements. */
@@ -329,18 +332,25 @@ const fits = (card: Record<string, unknown>): boolean => {
   return size.bytes <= CARD_MAX_BYTES && size.elements <= CARD_MAX_ELEMENTS;
 };
 
-/** The form for these questions, nothing cut below the schema's limits. */
-function formCard(questions: readonly Question[], ctx: CardContext): Record<string, unknown> {
-  const body = questions.flatMap((q) =>
-    splitText(cleanText(q.question), TEXT_MAX).map((text) => ({ type: 'text', text })),
-  );
-  const inputs = questions.flatMap((q, i) => [
+/**
+ * The card for question n of total, nothing cut below the schema's limits:
+ * its text, its choice, Other, Send. Neither input is required: a choice or
+ * Other text is enough (checked when the answer comes).
+ */
+function formCard(
+  q: Question,
+  n: number,
+  total: number,
+  ctx: CardContext,
+): Record<string, unknown> {
+  const body = splitText(cleanText(q.question), TEXT_MAX).map((text) => ({ type: 'text', text }));
+  const inputs = [
     {
       type: 'choice',
-      id: `q${i + 1}`,
+      id: 'q1',
       label: cleanLine(q.header, 150),
       ...(q.multiSelect === true ? { multiple: true } : {}),
-      required: true,
+      required: false,
       options: q.options.map((o, j) => {
         const description =
           o.description === undefined ? '' : cleanText(o.description, DESCRIPTION_MAX);
@@ -353,17 +363,21 @@ function formCard(questions: readonly Question[], ctx: CardContext): Record<stri
     },
     {
       type: 'text_input',
-      id: `q${i + 1}_other`,
+      id: 'q1_other',
       label: word('other', ctx.locale),
       placeholder: word('own_answer', ctx.locale),
       multiline: true,
       max_length: OTHER_MAX,
+      required: false,
     },
-  ]);
-  const priv = privateMap(questions);
+  ];
+  const priv = privateMap(q);
   return {
     v: 1,
-    header: { title: cleanLine(word('has_questions', ctx.locale, ctx.agent), 150) },
+    header: {
+      title: cleanLine(word('asks_title', ctx.locale, ctx.agent), 150),
+      ...(total > 1 ? { subtitle: word('of', ctx.locale, '', n, total) } : {}),
+    },
     ...(body.length > 0 ? { body } : {}),
     inputs,
     actions: [{ type: 'submit', label: word('send', ctx.locale) }],
@@ -400,34 +414,18 @@ function shrink(card: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
- * The cards for a question set: one form for all of them when it fits the
- * card's limits (16 KB, 25 elements), else one per question, in order.
+ * The cards for a question set: one per question, in order (so each
+ * question sits beside its choices). A question that alone is over the
+ * card's limits (16 KB, 25 elements) has its longest texts shortened.
  */
 export function buildQuestionCards(
   questions: readonly Question[],
   ctx: CardContext,
 ): QuestionCard[] {
-  const whole = formCard(questions, ctx);
-  if (fits(whole)) {
-    return [{ questions: [...questions], text: fallbackText(questions, ctx), card: whole }];
-  }
-  return questions.map((q) => {
-    const card = formCard([q], ctx);
-    return {
-      questions: [q],
-      text: fallbackText([q], ctx),
-      card: fits(card) ? card : shrink(card),
-    };
+  return questions.map((q, i) => {
+    const card = formCard(q, i + 1, questions.length, ctx);
+    return { question: q, text: fallbackText(q, ctx), card: fits(card) ? card : shrink(card) };
   });
-}
-
-/** The card for questions that fit one (tests and callers that know they fit). */
-export function buildQuestionCard(questions: readonly Question[], ctx: CardContext): QuestionCard {
-  return {
-    questions: [...questions],
-    text: fallbackText(questions, ctx),
-    card: formCard(questions, ctx),
-  };
 }
 
 /** The time a card posted now closes: wait + 60 s, at most a day. */
@@ -656,7 +654,7 @@ const codeOf = (err: unknown): string => (err instanceof ApiError ? err.code : '
 /** One posted card and the questions it asks. */
 interface PostedCard {
   id: string;
-  questions: Question[];
+  question: Question;
 }
 
 /** The ask tool for one channel session. */
@@ -729,7 +727,7 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
       const ids = cardIds(firstId, built.length);
       const cards: PostedCard[] = built.map((b, i) => ({
         id: ids[i] ?? firstId,
-        questions: b.questions,
+        question: b.question,
       }));
       const threadId = args.thread_id ?? state.lastThreadId;
 
@@ -873,7 +871,7 @@ async function waitForAnswers(init: WaitInit): Promise<Outcome> {
       const responseId = response?.id;
       const revision = response?.revision;
       if (typeof responseId !== 'string' || typeof revision !== 'number') continue;
-      const decoded = decodeAnswer(card.questions, response?.answer);
+      const decoded = decodeAnswer([card.question], response?.answer);
       if (decoded.kind === 'reject') {
         await reject(ctx, responseId, revision, decoded.note, locale);
         continue;

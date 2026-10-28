@@ -225,28 +225,34 @@ describe('ask from the hook', () => {
     });
   });
 
-  it('asks several questions as a form, refusing an incomplete answer with a note', async () => {
+  it('asks each question as its own card, refusing an empty answer with a note', async () => {
     api.sessions.open(TOKEN);
     const c = await start();
     await ready();
     const pending = hookAsk(c, [color, targets]);
-    const id = uuidV5('toolu_test_1');
-    const card = await cardOf(id);
-    expect(api.sessions.message(TOKEN, id)!.text).toBe(
-      'Claude asks:\n- Which color?\n- Which targets?',
-    );
-    api.sessions.answerCard(TOKEN, id, { inputs: { q1: 'o1' } });
-    await waitFor(() => card.responses[0]?.status === 'rejected');
-    expect(card.responses[0]?.note).toBe('Choose an option or type an answer for each question');
-    expect(card.closedAt).toBeNull();
-    api.sessions.answerCard(TOKEN, id, {
-      inputs: { q1: 'o1', q2: ['o2', 'o1'], q2_other: 'FreeBSD' },
+    const [first, second] = cardIds(uuidV5('toolu_test_1'), 2);
+    const one = await cardOf(first!);
+    const two = await cardOf(second!);
+    expect(session().messages.map((m) => m.text)).toEqual([
+      'Claude asks: Which color?',
+      'Claude asks: Which targets?',
+    ]);
+    expect(api.sessions.message(TOKEN, second!)!.card!.header).toEqual({
+      title: 'Claude asks',
+      subtitle: 'Question 2 of 2',
     });
+    api.sessions.answerCard(TOKEN, second!, { inputs: {} });
+    await waitFor(() => two.responses[0]?.status === 'rejected');
+    expect(two.responses[0]?.note).toBe('Choose an option or type your own answer');
+    expect(two.closedAt).toBeNull();
+    api.sessions.answerCard(TOKEN, second!, { inputs: { q1: ['o2', 'o1'], q1_other: 'FreeBSD' } });
+    api.sessions.answerCard(TOKEN, first!, { inputs: { q1: 'o1' } });
     const r = await pending;
     expect(hookOut(r).updatedInput?.answers).toEqual({
       'Which color?': 'Blue',
       'Which targets?': 'Windows, macOS, FreeBSD',
     });
+    expect([one.closedBy, two.closedBy]).toEqual(['app', 'app']);
   });
 
   it("drops anyone else's answer, and waits again when the answer changed meanwhile", async () => {
@@ -283,7 +289,7 @@ describe('ask from the hook', () => {
     await cardOf(id);
     const message = api.sessions.message(TOKEN, id)!;
     expect(message.text.startsWith('Claude pregunta:')).toBe(true);
-    expect(message.card!.header).toEqual({ title: 'Claude tiene preguntas' });
+    expect(message.card!.header).toEqual({ title: 'Claude pregunta', subtitle: 'Pregunta 1 de 2' });
     api.sessions.closeCardBy(TOKEN, id, 'owner');
     await pending;
   });
