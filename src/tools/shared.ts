@@ -186,6 +186,7 @@ export const ItemOutSchema = z.object({
   status_category: z.string().describe('not_started, started, done or canceled.'),
   priority: z.string(),
   assignee: PersonSchema.nullable(),
+  assignee_agent: z.string().nullable().describe("The assignee's agent working on it."),
   parent: z.string().nullable().describe("The parent's key."),
   labels: z.array(z.string()),
   estimate: z.number().nullable(),
@@ -211,6 +212,7 @@ export function itemOut(i: ItemSummary): ItemOut {
     status_category: i.status.category,
     priority: i.priority,
     assignee: i.assignee ? person(i.assignee) : null,
+    assignee_agent: i.assignee_agent ? label(i.assignee_agent.name, PERSON_NAME_CHARS) : null,
     parent: i.parent?.key ?? null,
     labels: i.labels.map((l) => label(l.name, 40)),
     estimate: i.estimate,
@@ -506,6 +508,14 @@ export function historyOut(h: HistoryEvent): HistoryOut {
 // Text
 // ---------------------------------------------------------------------------
 
+/** Who an item is assigned to, in lines: "@Sam", "assignee Claude · for Sam", or "unassigned". */
+export function assigneeText(i: Pick<ItemOut, 'assignee' | 'assignee_agent'>): string {
+  if (i.assignee_agent && i.assignee) {
+    return `assignee ${i.assignee_agent} · for ${i.assignee.name}`;
+  }
+  return i.assignee ? `@${i.assignee.name}` : 'unassigned';
+}
+
 /** One line about an item, for lists (it carries the title, so lists are wrapped). */
 export function itemLine(i: ItemOut): string {
   const parts = [
@@ -513,7 +523,7 @@ export function itemLine(i: ItemOut): string {
     i.type,
     `${i.status} (${i.status_category})`,
     ...(i.priority !== 'none' ? [i.priority] : []),
-    i.assignee ? `@${i.assignee.name}` : 'unassigned',
+    assigneeText(i),
     ...(i.estimate !== null ? [`est ${i.estimate}`] : []),
     ...(i.parent ? [`parent ${i.parent}`] : []),
     ...(i.sprint ? [i.sprint] : []),

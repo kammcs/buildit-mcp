@@ -7,7 +7,9 @@
  * drive the person's side: `approve` or `deny` a code, post a message
  * from the owner (or someone else, or one the owner forwarded) into the
  * session's events with `postFrom`, answer or close the session's cards
- * (`answerCard`, `closeCardBy`), and `revoke` or `expire` a session.
+ * (`answerCard`, `closeCardBy`), assign a work item to the agent and take
+ * it off (`assignItem`, `unassignItem`), mention it or reply in an item's
+ * thread (`itemMessage`), and `revoke` or `expire` a session.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -28,7 +30,33 @@ export const SESSION_IDS = {
   installation: u(7002),
   dm: u(7003),
   stranger: u(7004),
+  /** The DEMO project's channel, where its items' threads are. */
+  demoChannel: u(7005),
+  demoProject: u(7006),
 } as const;
+
+/** A work item as the fake's item events name it (made up). */
+export interface FakeEventItem {
+  id: string;
+  key: string;
+  title: string;
+  description?: string;
+  truncated?: boolean;
+}
+
+/** A made-up DEMO item for item events. */
+export function demoItem(n: number, init: Partial<FakeEventItem> = {}): FakeEventItem {
+  return { id: u(7100 + n), key: `DEMO-${n}`, title: `Item ${n}`, ...init };
+}
+
+/** One message of an item's thread, for an event's context. */
+export interface FakeContextMessage {
+  id?: string;
+  text: string;
+  author?: { kind: 'user' | 'app' | 'agent'; id: string; name: string };
+  /** Written by the owner (default: by someone else). */
+  fromOwner?: boolean;
+}
 
 export interface FakeSession {
   id: string;
@@ -44,6 +72,8 @@ export interface FakeSession {
   heartbeats: string[];
   messages: {
     id: string;
+    /** Its conversation: the DM, or an item's project channel. */
+    conversation_id?: string;
     text: string;
     thread_id: string | null;
     reply_to_id: string | null;
@@ -61,6 +91,8 @@ export interface FakeSession {
   expiredAt?: string;
   /** Ended by DELETE /v1/session. */
   selfRevoked?: boolean;
+  /** The items whose threads this session works in, by item id. */
+  items: Set<string>;
 }
 
 /** One of the session's cards in the fake: open or closed, and its answers. */
@@ -223,6 +255,7 @@ export class SessionRefusal extends Error {
       | 'expired_token'
       | 'validation'
       | 'thread_other_session'
+      | 'thread_not_bound'
       | 'idempotency_conflict'
       | 'card_invalid'
       | 'card_closed'
@@ -400,6 +433,11 @@ export class FakeSessions {
     if (threadId !== null && this.otherSessionThreads.has(threadId)) {
       throw new SessionRefusal('thread_other_session', { thread_id: threadId });
     }
+    // An item's thread: only one this session works in.
+    const inItem = threadId !== null && this.itemIds.has(threadId);
+    if (inItem && !s.items.has(threadId)) {
+      throw new SessionRefusal('thread_not_bound', { thread_id: threadId });
+    }
     const existing = s.messages.find((m) => m.id === id);
     if (existing) {
       if (existing.text !== text) throw new SessionRefusal('idempotency_conflict');
@@ -415,6 +453,7 @@ export class FakeSessions {
     }
     const message = {
       id,
+      conversation_id: inItem ? SESSION_IDS.demoChannel : SESSION_IDS.dm,
       text,
       thread_id: threadId,
       reply_to_id: replyTo,
@@ -607,6 +646,149 @@ export class FakeSessions {
 
   /** Threads that belong to another session of the agent (replies there are refused). */
   readonly otherSessionThreads = new Set<string>();
+  /** Every item id the fake's item events named (their threads are items' threads). */
+  private readonly itemIds = new Set<string>();
+
+  /** The item event's shared data: the channel, project and item. */
+  private itemData(item: FakeEventItem, withExcerpt: boolean): Record<string, unknown> {
+    this.itemIds.add(item.id);
+    return {
+      channel: { id: SESSION_IDS.demoChannel, name: 'demo' },
+      project: { id: SESSION_IDS.demoProject, key: item.key.split('-')[0] ?? 'DEMO' },
+      item: {
+        id: item.id,
+        key: item.key,
+        title: item.title,
+        type: { id: u(7201), key: 'story', name: 'Story' },
+        status: { id: u(7202), key: 'todo', name: 'To do', category: 'not_started' },
+        created_at: '2026-10-07T12:00:00.000Z',
+        ...(withExcerpt
+          ? {
+              description_excerpt: item.description ?? '',
+              description_truncated: item.truncated ?? false,
+            }
+          : {}),
+      },
+    };
+  }
+
+  private assignment(s: FakeSession): Record<string, unknown> {
+    return {
+      agent: { id: SESSION_IDS.agent, name: 'Claude' },
+      owner: { id: s.ownerId, name: s.ownerName },
+      by: { id: s.ownerId, name: s.ownerName, is_guest: false, locale: 'en' },
+      at: this.host.now(),
+    };
+  }
+
+  private context(s: FakeSession, messages: FakeContextMessage[]): Record<string, unknown> {
+    return {
+      untrusted: true,
+      messages: messages.map((m) => ({
+        id: m.id ?? randomUUID(),
+        author: m.author ?? {
+          kind: 'user',
+          id: m.fromOwner ? s.ownerId : SESSION_IDS.stranger,
+          name: m.fromOwner ? s.ownerName : 'Sam Example',
+        },
+        from_owner: m.fromOwner ?? false,
+        text: m.text,
+        created_at: this.host.now(),
+      })),
+    };
+  }
+
+  /**
+   * The owner assigns an item to the agent, routed to this session: it
+   * works in the item's thread from now on (`owner` false: an assignment
+   * naming someone else as the owner, which the session must drop).
+   */
+  assignItem(
+    token: string,
+    item: FakeEventItem,
+    options: { context?: FakeContextMessage[]; owner?: { id: string; name: string } } = {},
+  ): void {
+    const s = this.session(token);
+    s.items.add(item.id);
+    const assignment = this.assignment(s);
+    if (options.owner) assignment.owner = options.owner;
+    this.event(s, 'work_item.assigned', {
+      ...this.itemData(item, true),
+      assignment,
+      context: this.context(s, options.context ?? []),
+      user: { id: s.ownerId, name: s.ownerName, is_guest: false, locale: 'en' },
+    });
+  }
+
+  /**
+   * A message in an item's thread: app.mentioned (`mention`) or
+   * message.posted, from the owner unless `from` says otherwise; the
+   * session then works in that thread. Returns the message id.
+   */
+  itemMessage(
+    token: string,
+    item: FakeEventItem,
+    text: string,
+    options: {
+      mention?: boolean;
+      from?: { id: string; name: string };
+      context?: FakeContextMessage[];
+      forwardedFrom?: { user?: { id: string; name: string } | null };
+    } = {},
+  ): string {
+    const s = this.session(token);
+    s.items.add(item.id);
+    const user = options.from ?? { id: s.ownerId, name: s.ownerName };
+    const messageId = randomUUID();
+    this.event(s, options.mention ? 'app.mentioned' : 'message.posted', {
+      ...this.itemData(item, true),
+      assignment: this.assignment(s),
+      context: this.context(s, options.context ?? []),
+      message: {
+        id: messageId,
+        thread_id: item.id,
+        reply_to_id: null,
+        text,
+        mentions: [],
+        has_card: false,
+        created_at: this.host.now(),
+        edited_at: null,
+        forwarded: options.forwardedFrom !== undefined,
+        forwarded_from:
+          options.forwardedFrom === undefined
+            ? null
+            : {
+                message_id: randomUUID(),
+                user: options.forwardedFrom.user ?? null,
+                app: null,
+              },
+      },
+      user: { id: user.id, name: user.name, is_guest: false, locale: 'en' },
+    });
+    return messageId;
+  }
+
+  /**
+   * The agent is taken off the item: the session no longer works in its
+   * thread, its open cards there close (their events go dead on the
+   * server, so none arrive), and the session gets work_item.unassigned.
+   */
+  unassignItem(token: string, item: FakeEventItem, reason = 'unassigned'): void {
+    const s = this.session(token);
+    s.items.delete(item.id);
+    for (const card of s.cards.values()) {
+      if (card.threadId === item.id && !card.closedAt) {
+        card.closedAt = this.host.now();
+        card.closedBy = 'unassigned';
+      }
+    }
+    this.event(s, 'work_item.unassigned', {
+      ...this.itemData(item, false),
+      assignment: this.assignment(s),
+      reason,
+      user: { id: s.ownerId, name: s.ownerName, is_guest: false, locale: 'en' },
+    });
+  }
 
   /** Approves the pending code (the latest by default), handing out `token`. */
   approve(userCode?: string, token: string = SESSION_TOKENS.first, projects?: string[]): void {
@@ -641,6 +823,7 @@ export class FakeSessions {
       cards: new Map(),
       typings: [],
       typingRefusals: 0,
+      items: new Set(),
     };
     this.sessions.set(token, session);
     return session;
@@ -862,7 +1045,7 @@ export class FakeSessions {
   private messageOut(s: FakeSession, m: FakeSession['messages'][number]) {
     return {
       id: m.id,
-      conversation_id: SESSION_IDS.dm,
+      conversation_id: m.conversation_id ?? SESSION_IDS.dm,
       thread_id: m.thread_id,
       reply_to_id: m.reply_to_id,
       text: m.text,

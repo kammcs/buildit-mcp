@@ -59,6 +59,37 @@ const DescriptionInput = z
     `GitHub-flavored Markdown. Mention people as @email or @[Display Name]. Images by URL are refused. ${IMAGE_LAYOUT_NOTE}`,
   );
 
+/** What agent fields take: "mine", or your own agent's name or id. */
+const AgentInput = z
+  .string()
+  .min(1)
+  .max(200)
+  .describe('"mine", or your personal agent\'s name: it works on the item for you.');
+
+/** Why a session can't assign its own agent, and what it may do instead. */
+export const AGENT_SELF_ASSIGN_NOTE =
+  "A Claude Code session can't assign items to its own agent: only the person can, in buildIt.Social. You may hand an item back with agent: null.";
+const AGENT_ASSIGNEE_NOTE =
+  'You can assign only your own personal agent, in a project whose channel you are in: "mine" or its name.';
+
+/** An agent refusal (forbidden with an agent reason) with its explanation, else the error itself. */
+function agentRefusal(err: unknown): unknown {
+  if (!(err instanceof ApiError) || err.code !== 'forbidden') return err;
+  const reason = (err.details as { reason?: unknown } | undefined)?.reason;
+  if (reason === 'agent_self_assign') return err.withNote(AGENT_SELF_ASSIGN_NOTE);
+  if (reason === 'agent_assignee') return err.withNote(AGENT_ASSIGNEE_NOTE);
+  return err;
+}
+
+/** An item write, with agent refusals explained. */
+async function writeItem<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    throw agentRefusal(err);
+  }
+}
+
 /** A short text block for an item that just changed: facts, then the line (with its title) wrapped. */
 function changedText(headline: string, item: z.infer<typeof ItemOutSchema>): string {
   return [
@@ -80,6 +111,7 @@ export const createItemTool = defineTool({
 - Give project (a key such as DEMO), or parent: a story's parent is an epic, a subtask's parent is a story or task, and the project then comes from the parent.
 - type, status, labels, sprint, fix_release and custom fields are names from describe_project. Without type, the project's default type at the parent's child level is used; without status, the workflow's initial status.
 - assignee: "me", an email or an exact display name. Mention people in the description as @email or @[Display Name].
+- assignee_agent: your agent works on it for you (you are then the assignee); a channel-mode session can't set it.
 - position: {"before": "DEMO-3"} or {"after": "DEMO-3"}; default is last.
 - idempotency_key: retrying with the same key returns the first item instead of creating a second; one is generated and returned if you leave it out.
 Returns the new item's key and versions.`,
@@ -101,6 +133,7 @@ Returns the new item's key and versions.`,
     description: DescriptionInput.optional(),
     status: NameInput('A status name; default: the initial status.').optional(),
     assignee: UserRefInput.optional(),
+    assignee_agent: AgentInput.optional(),
     priority: PriorityInput.optional(),
     labels: z.array(z.string().min(1).max(40)).max(100).optional().describe('Label names.'),
     estimate: EstimateInput.optional(),
@@ -135,34 +168,37 @@ Returns the new item's key and versions.`,
       throw new ToolInputError('position takes exactly one of before or after.');
     }
     const key = args.idempotency_key ?? randomUUID();
-    const r = await ctx.call('create_item', {
-      body: {
-        ...(args.project !== undefined ? { project: args.project } : {}),
-        ...(args.parent !== undefined ? { parent: itemRef(args.parent) } : {}),
-        ...(args.type !== undefined ? { type: args.type } : {}),
-        title: args.title,
-        ...(args.description !== undefined ? { description: args.description } : {}),
-        ...(args.status !== undefined ? { status: args.status } : {}),
-        ...(args.assignee !== undefined ? { assignee: args.assignee } : {}),
-        ...(args.priority !== undefined ? { priority: args.priority } : {}),
-        ...(args.labels !== undefined ? { labels: args.labels } : {}),
-        ...(args.estimate !== undefined ? { estimate: args.estimate } : {}),
-        ...(args.start_date !== undefined ? { start_date: args.start_date } : {}),
-        ...(args.due_date !== undefined ? { due_date: args.due_date } : {}),
-        ...(args.sprint !== undefined ? { sprint: args.sprint } : {}),
-        ...(args.fix_release !== undefined ? { fix_release: args.fix_release } : {}),
-        ...(args.initiative !== undefined ? { initiative: args.initiative } : {}),
-        ...(args.custom !== undefined ? { custom: args.custom } : {}),
-        ...(args.position
-          ? {
-              position: args.position.before
-                ? { before: itemRef(args.position.before) }
-                : { after: itemRef(args.position.after ?? '') },
-            }
-          : {}),
-        idempotency_key: key,
-      },
-    });
+    const r = await writeItem(() =>
+      ctx.call('create_item', {
+        body: {
+          ...(args.project !== undefined ? { project: args.project } : {}),
+          ...(args.parent !== undefined ? { parent: itemRef(args.parent) } : {}),
+          ...(args.type !== undefined ? { type: args.type } : {}),
+          title: args.title,
+          ...(args.description !== undefined ? { description: args.description } : {}),
+          ...(args.status !== undefined ? { status: args.status } : {}),
+          ...(args.assignee !== undefined ? { assignee: args.assignee } : {}),
+          ...(args.assignee_agent !== undefined ? { assignee_agent: args.assignee_agent } : {}),
+          ...(args.priority !== undefined ? { priority: args.priority } : {}),
+          ...(args.labels !== undefined ? { labels: args.labels } : {}),
+          ...(args.estimate !== undefined ? { estimate: args.estimate } : {}),
+          ...(args.start_date !== undefined ? { start_date: args.start_date } : {}),
+          ...(args.due_date !== undefined ? { due_date: args.due_date } : {}),
+          ...(args.sprint !== undefined ? { sprint: args.sprint } : {}),
+          ...(args.fix_release !== undefined ? { fix_release: args.fix_release } : {}),
+          ...(args.initiative !== undefined ? { initiative: args.initiative } : {}),
+          ...(args.custom !== undefined ? { custom: args.custom } : {}),
+          ...(args.position
+            ? {
+                position: args.position.before
+                  ? { before: itemRef(args.position.before) }
+                  : { after: itemRef(args.position.after ?? '') },
+              }
+            : {}),
+          idempotency_key: key,
+        },
+      }),
+    );
     const item = itemOut(r.item);
     const headline = r.created
       ? `Created ${item.key} (${item.type}, ${item.status}).`
@@ -205,6 +241,7 @@ const UpdateInput = z.object({
   ).optional(),
   parent: ItemRefInput.nullable().optional().describe('A new parent, or null to detach.'),
   assignee: UserRefInput.nullable().optional().describe('A person, or null to unassign.'),
+  assignee_agent: AgentInput.nullable().optional(),
   priority: PriorityInput.optional(),
   labels: z.array(z.string().min(1).max(40)).max(100).optional().describe('Replaces all labels.'),
   add_labels: z.array(z.string().min(1).max(40)).max(100).optional(),
@@ -253,6 +290,7 @@ function updateBody(args: z.infer<typeof UpdateInput>): UpdateItemBody {
       ? { parent: args.parent === null ? null : itemRef(args.parent) }
       : {}),
     ...(args.assignee !== undefined ? { assignee: args.assignee } : {}),
+    ...(args.assignee_agent !== undefined ? { assignee_agent: args.assignee_agent } : {}),
     ...(args.priority !== undefined ? { priority: args.priority } : {}),
     ...(args.labels !== undefined ? { labels: args.labels } : {}),
     ...(args.add_labels !== undefined ? { add_labels: args.add_labels } : {}),
@@ -279,6 +317,7 @@ export const updateItemTool = defineTool({
 - Description: description_append adds Markdown at the end and never overwrites anyone's edit (prefer it); description_replace replaces it all and needs the description_version from get_item.
 - if_version (from get_item or search_items) refuses the update if someone changed the item since you read it.
 - Labels: labels replaces all; add_labels and remove_labels change some.
+- assignee_agent: as in create_item; null takes the agent off (a channel-mode session may only do that).
 - To change the status use transition_item; to only assign, assign_item is simpler.
 Returns the item with its new versions.`,
   scopes: scopesOf('update_item'),
@@ -293,7 +332,9 @@ Returns the item with its new versions.`,
   outputSchema: z.object({ item: ItemOutSchema }),
   async run(args, ctx) {
     const body = updateBody(args);
-    const r = await ctx.call('update_item', { path: { key: itemRef(args.item) }, body });
+    const r = await writeItem(() =>
+      ctx.call('update_item', { path: { key: itemRef(args.item) }, body }),
+    );
     const item = itemOut(r.item);
     return { structured: { item }, text: changedText(`Updated ${item.key}.`, item) };
   },
@@ -308,7 +349,7 @@ export const assignItemTool = defineTool({
   toolset: 'items',
   title: 'Assign an item',
   description:
-    'Assigns one item to a person, or unassigns it. assignee is "me", an email, or an exact display name among the project\'s members (find_users lists them); null or "none" unassigns. A display name shared by two people fails with the candidates to choose from. Returns the item.',
+    'Assigns one item to a person or to your agent, or unassigns it. assignee is "me", an email, or an exact display name among the project\'s members (find_users lists them); null or "none" unassigns. A display name shared by two people fails with the candidates to choose from. agent ("mine" or its name) has your agent work on it for you, assigned to you; null takes the agent off. Only the person can assign their agent: in channel mode you can\'t, but may hand an item back with agent: null. Returns the item.',
   scopes: scopesOf('update_item'),
   annotations: {
     title: 'Assign an item',
@@ -319,9 +360,10 @@ export const assignItemTool = defineTool({
   },
   inputSchema: z.object({
     item: ItemRefInput,
-    assignee: UserRefInput.nullable().describe(
-      '"me", an email or a display name; null or "none" to unassign.',
-    ),
+    assignee: UserRefInput.nullable()
+      .optional()
+      .describe('"me", an email or a display name; null or "none" to unassign.'),
+    agent: AgentInput.nullable().optional(),
     if_version: z
       .number()
       .int()
@@ -331,22 +373,41 @@ export const assignItemTool = defineTool({
   }),
   outputSchema: z.object({ item: ItemOutSchema }),
   async run(args, ctx) {
+    if (args.assignee === undefined && args.agent === undefined) {
+      throw new ToolInputError('Give assignee (a person), agent ("mine"), or both.');
+    }
     const assignee =
-      args.assignee === null || args.assignee.trim().toLowerCase() === 'none'
-        ? null
-        : args.assignee;
-    const r = await ctx.call('update_item', {
-      path: { key: itemRef(args.item) },
-      body: {
-        assignee,
-        ...(args.if_version !== undefined ? { if_version: args.if_version } : {}),
-      },
-    });
+      args.assignee === undefined
+        ? undefined
+        : args.assignee === null || args.assignee.trim().toLowerCase() === 'none'
+          ? null
+          : args.assignee;
+    if (
+      typeof args.agent === 'string' &&
+      assignee !== undefined &&
+      (assignee === null || assignee.trim().toLowerCase() !== 'me')
+    ) {
+      throw new ToolInputError(
+        'An agent works for its owner: with agent, leave assignee out or pass "me".',
+      );
+    }
+    const r = await writeItem(() =>
+      ctx.call('update_item', {
+        path: { key: itemRef(args.item) },
+        body: {
+          ...(assignee !== undefined ? { assignee } : {}),
+          ...(args.agent !== undefined ? { assignee_agent: args.agent } : {}),
+          ...(args.if_version !== undefined ? { if_version: args.if_version } : {}),
+        },
+      }),
+    );
     const item = itemOut(r.item);
-    // The assignee's name is people-written: the item's line (in a block) shows it.
-    const headline = item.assignee
-      ? `${item.key} is assigned; the item now:`
-      : `${item.key} is unassigned.`;
+    // The names are people-written: the item's line (in a block) shows them.
+    const headline = item.assignee_agent
+      ? `${item.key} is assigned to the agent, working for its owner; the item now:`
+      : item.assignee
+        ? `${item.key} is assigned; the item now:`
+        : `${item.key} is unassigned.`;
     return { structured: { item }, text: changedText(headline, item) };
   },
 });

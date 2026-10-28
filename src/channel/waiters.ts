@@ -11,7 +11,9 @@
  *
  * A waiter is registered by the card message's id before the card is
  * posted (the id is chosen by the server), so an answer that arrives in the
- * first poll after the post still finds it.
+ * first poll after the post still finds it. It names the card's thread too,
+ * so the waiters of a work item's thread can be told to stop when the
+ * session is taken off the item (`closeThread`).
  */
 import type { SessionEvent } from '../api/generated/schemas.js';
 
@@ -19,7 +21,7 @@ import type { SessionEvent } from '../api/generated/schemas.js';
 export const WAITER_STEP_MS = 10_000;
 
 /** Why waiting stopped without an event. */
-export type WaitEnd = 'timeout' | 'aborted' | 'session_ended';
+export type WaitEnd = 'timeout' | 'aborted' | 'session_ended' | 'closed';
 
 /** One event handed to a waiter, and the callback that says it was handled. */
 export interface Delivery {
@@ -34,6 +36,8 @@ export interface CardWaiter {
   handle(event: SessionEvent): Promise<void>;
   /** The session ended for good: no more events will come. */
   end(): void;
+  /** The card's thread closed to this session (unassigned): stop waiting. */
+  close(): void;
 }
 
 /** The card message's id that an event is about, if it names one. */
@@ -72,6 +76,8 @@ class Bounded<V> {
  */
 export class CardWaiters {
   private readonly waiters = new Map<string, Set<CardWaiter>>();
+  /** The thread of each card waited on (by message id), as registered. */
+  private readonly threads = new Map<string, string>();
   private readonly answers = new Bounded<Record<string, string>>();
   private readonly closings = new Bounded<string>();
   private ended = false;
@@ -83,20 +89,27 @@ export class CardWaiters {
     return this.ended;
   }
 
-  /** Registers a waiter for a card; the returned function unregisters it. */
-  register(messageId: string, waiter: CardWaiter): () => void {
+  /**
+   * Registers a waiter for a card, in its thread (undefined: a top-level
+   * card); the returned function unregisters it.
+   */
+  register(messageId: string, waiter: CardWaiter, threadId?: string): () => void {
     let set = this.waiters.get(messageId);
     if (set === undefined) {
       set = new Set();
       this.waiters.set(messageId, set);
     }
     set.add(waiter);
+    if (threadId !== undefined) this.threads.set(messageId, threadId);
     if (this.ended) waiter.end();
     return () => {
       const current = this.waiters.get(messageId);
       if (current === undefined) return;
       current.delete(waiter);
-      if (current.size === 0) this.waiters.delete(messageId);
+      if (current.size === 0) {
+        this.waiters.delete(messageId);
+        this.threads.delete(messageId);
+      }
     };
   }
 
@@ -153,6 +166,24 @@ export class CardWaiters {
     return true;
   }
 
+  /**
+   * The session no longer works in this thread (it was unassigned from the
+   * item): every card waited on there is remembered as closed, and its
+   * waiters stop with `closed`. The server closes the cards itself.
+   */
+  closeThread(threadId: string): number {
+    let closed = 0;
+    for (const [messageId, thread] of [...this.threads]) {
+      if (thread !== threadId) continue;
+      this.closings.set(messageId, 'unassigned');
+      for (const waiter of [...(this.waiters.get(messageId) ?? [])]) {
+        waiter.close();
+        closed++;
+      }
+    }
+    return closed;
+  }
+
   /** The session ended for good: every waiter is told, and later ones at once. */
   endAll(): void {
     this.ended = true;
@@ -168,6 +199,7 @@ export class CardInbox implements CardWaiter {
   private readonly queue: Delivery[] = [];
   private wake: (() => void) | undefined;
   private ended = false;
+  private closed = false;
 
   handle(event: SessionEvent): Promise<void> {
     return new Promise((resolve) => {
@@ -181,10 +213,15 @@ export class CardInbox implements CardWaiter {
     this.wake?.();
   }
 
+  close(): void {
+    this.closed = true;
+    this.wake?.();
+  }
+
   /**
    * The next event, or why there is none: the deadline passed (`timeout`),
-   * the signal aborted, or the session ended. Events already queued come
-   * first.
+   * the signal aborted, the session ended, or the card's thread closed to
+   * the session (`closed`). Events already queued come first.
    */
   async next(
     deadline: number,
@@ -196,6 +233,7 @@ export class CardInbox implements CardWaiter {
       if (queued !== undefined) return queued;
       if (signal?.aborted) return 'aborted';
       if (this.ended) return 'session_ended';
+      if (this.closed) return 'closed';
       const left = deadline - now();
       if (left <= 0) return 'timeout';
       await new Promise<void>((resolve) => {

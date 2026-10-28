@@ -9,6 +9,7 @@ import { defineTool } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
 import {
   apiAtLeast,
+  assigneeText,
   commentOut,
   CommentOutSchema,
   commentText,
@@ -244,6 +245,7 @@ const ChildOut = ItemOutSchema.pick({
   status: true,
   status_category: true,
   assignee: true,
+  assignee_agent: true,
   estimate: true,
 });
 
@@ -575,6 +577,7 @@ The result carries version and description_version: pass them to update_item (if
         status: o.status,
         status_category: o.status_category,
         assignee: o.assignee,
+        assignee_agent: o.assignee_agent,
         estimate: o.estimate,
       };
     });
@@ -604,7 +607,7 @@ The result carries version and description_version: pass them to update_item (if
     ];
     const fields = [
       `${i.key} · ${i.type} (${i.level}) · ${i.status} (${i.status_category}) · priority ${i.priority}`,
-      `assignee ${personText(i.assignee)} · reporter ${personText(i.reporter)}`,
+      `assignee ${i.assignee_agent && i.assignee ? `${i.assignee_agent} · for ${personText(i.assignee)}` : personText(i.assignee)} · reporter ${personText(i.reporter)}`,
       [
         `labels ${i.labels.join(', ') || 'none'}`,
         `sprint ${i.sprint ?? 'none'}`,
@@ -638,7 +641,7 @@ The result carries version and description_version: pass them to update_item (if
           wrapLines(
             children.map(
               (c) =>
-                `${c.key} · ${c.type} · ${c.status} (${c.status_category}) · ${c.assignee ? `@${c.assignee.name}` : 'unassigned'}${c.estimate !== null ? ` · est ${c.estimate}` : ''} — ${c.title}`,
+                `${c.key} · ${c.type} · ${c.status} (${c.status_category}) · ${assigneeText(c)}${c.estimate !== null ? ` · est ${c.estimate}` : ''} — ${c.title}`,
             ),
             'item_list',
           ),

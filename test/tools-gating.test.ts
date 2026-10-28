@@ -255,8 +255,9 @@ describe('the tool list', () => {
     expect(JSON.stringify(tools).length).toBeLessThan(160_000);
     const defaults = await client(TOKENS.full, { toolsets: DEFAULT_TOOLSETS });
     // About 16,000 tokens: 60,000 until get_item's feedback block (62,000),
-    // then search_items' link and activity filters and find_users without a project.
-    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(64_000);
+    // then search_items' link and activity filters and find_users without a project (64,000),
+    // then the items' agent assignee (assign_item's agent, assignee_agent).
+    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(65_500);
   });
 });
 

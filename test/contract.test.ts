@@ -105,6 +105,7 @@ describe('tolerant parsing', () => {
       title: 'A title',
       priority: 'critical',
       assignee: null,
+      assignee_agent: null,
       reporter: null,
       parent: null,
       initiative: null,
