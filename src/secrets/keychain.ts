@@ -80,6 +80,31 @@ export function sessionKey(
     .digest('hex');
 }
 
+/**
+ * The store key under which `connect` records the API a folder's session
+ * belongs to (not a secret), so channel mode, status and disconnect find the
+ * session without --api-url.
+ */
+export function sessionApiKey(
+  folder: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return `api-${createHash('sha256')
+    .update(`api\n${folderIdentity(folder, platform)}`)
+    .digest('hex')}`;
+}
+
+/** The API URL `connect` saved for the folder, if any (and still a valid URL). */
+export async function savedApiUrl(store: TokenStore, folder: string): Promise<string | undefined> {
+  const saved = await store.get(sessionApiKey(folder));
+  if (saved === undefined) return undefined;
+  try {
+    return new URL(saved).protocol.startsWith('http') ? saved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The keychain's name on this platform, for messages. */
 export function keyringName(platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') return 'Windows Credential Manager';

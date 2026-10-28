@@ -28,7 +28,16 @@ const OutputSchema = z.object({
       .describe('A test org (true); null when the API is older than 1.2.0.'),
   }),
   token: z.object({
-    name: z.string().nullable(),
+    name: z
+      .string()
+      .nullable()
+      .describe("The token's name; for an agent session, the session's label."),
+    kind: z
+      .string()
+      .nullable()
+      .describe(
+        'pat: a personal access token; session: an agent session (channel mode); null when the API is older.',
+      ),
     expires_at: z.string().nullable(),
   }),
   scopes: z.array(z.string()).describe('As granted; a write scope also allows reading.'),
@@ -155,6 +164,7 @@ export const whoamiTool = defineTool({
       },
       token: {
         name: nullableLabel(me.token.name, NAME_CHARS),
+        kind: me.token.kind === undefined ? null : sanitizeLabel(me.token.kind, 20),
         expires_at: me.token.expires_at,
       },
       scopes: [...me.token.scopes].sort(),
@@ -195,7 +205,9 @@ export const whoamiTool = defineTool({
     const names = [
       `User: ${s.user.name ?? s.user.id}${s.user.email ? ` (${s.user.email})` : ''}`,
       `Org: ${s.org.name ?? s.org.id}`,
-      ...(s.token.name ? [`Token: ${s.token.name}`] : []),
+      ...(s.token.name
+        ? [`${s.token.kind === 'session' ? 'Session' : 'Token'}: ${s.token.name}`]
+        : []),
     ];
     if (s.projects.length > 0) {
       const shown = s.projects
@@ -207,7 +219,7 @@ export const whoamiTool = defineTool({
       names.push(`Channels the token is limited to: ${s.limits.channels.join(', ')}`);
     }
     const lines = [
-      `Signed in to buildIt.Social with a personal access token${s.token.expires_at ? ` (expires ${s.token.expires_at})` : ''}. Who and where, as people named them:`,
+      `Signed in to buildIt.Social with ${s.token.kind === 'session' ? "an agent session's token (it acts as the session's owner)" : 'a personal access token'}${s.token.expires_at ? ` (expires ${s.token.expires_at})` : ''}. Who and where, as people named them:`,
       wrapLines(names, 'names'),
       `Scopes: ${s.scopes.length > 0 ? s.scopes.join(', ') : 'none'}.`,
       `Limits: ${

@@ -248,7 +248,9 @@ It works only with the **Claude Code CLI** (not Claude Desktop), because it uses
 
 ### 1. Install or upgrade
 
-Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer. From a clone, use `node /path/to/buildit-mcp/dist/index.js` in place of `npx -y @kammcs/buildit-mcp@latest` below.
+Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer.
+
+> **Until 0.4.0 is on npm**, `@latest` is an older release without channel mode, so use a local build: `git clone https://github.com/kammcs/buildit-mcp.git`, then `npm ci && npm run build` in it, and use `node /path/to/buildit-mcp/dist/index.js` wherever the steps below say `npx -y @kammcs/buildit-mcp@latest`. `connect` run that way prints the matching `claude mcp add` line.
 
 ### 2. Connect the folder
 
@@ -260,7 +262,7 @@ npx -y @kammcs/buildit-mcp@latest connect --project DEMO
 
 It prints a link and a code. Open the link, sign in to buildIt.Social if you need to, and check that the app shows the same code. The approval screen says what is connecting ("Claude Code on your computer's name"), as which of your agents and to which projects. The scopes are chosen there, not by the CLI: the screen pre-checks the usual ones, and you can untick any you don't want to give. Then approve. Approve only a code you started yourself. The code works for 10 minutes.
 
-Once it is approved, the command says who approved it and for which projects, as approved: "Connected as Claude (your name) in your org, project DEMO", and asks **"Is this you? [y/N]"**. Whoever approves a code gets the session, so check the name: only `y` saves the token, in your OS keychain for this folder. Any other answer (or no answer, without a terminal) saves nothing and cancels the session at once, since someone else may have approved your code; run `connect` again for a new code.
+Once it is approved, the command says who approved it and for which projects, as approved: `Connected as Claude (your name) in your org, project DEMO; session "your-folder".`, and asks **"Is this you? [y/N]"**. Whoever approves a code gets the session, so check the name: only `y` saves the token, in your OS keychain for this folder. Any other answer (or no answer, without a terminal) saves nothing and cancels the session at once, since someone else may have approved your code; run `connect` again for a new code.
 
 - `--project` takes up to 10 project keys (repeat it, or separate keys with commas). The session reaches only those projects, and never more than you can.
 - `--label <name>` names the session in buildIt.Social (1 to 40 characters; the folder's name by default). The agent's messages show as "agent · label".
@@ -272,7 +274,7 @@ Once it is approved, the command says who approved it and for which projects, as
 
 ### 3. Add the server to Claude Code, with `--channel`
 
-In the same folder:
+`connect` ends by printing the exact line for this step: copy it. In the same folder, it is:
 
 ```sh
 claude mcp add buildit -- npx -y @kammcs/buildit-mcp@latest --channel
@@ -284,7 +286,9 @@ On Windows, from PowerShell:
 claude mcp add buildit -- cmd /c npx -y "@kammcs/buildit-mcp@latest" --channel
 ```
 
-This adds it for this folder only (`--scope local`, the default), which is what you want: each folder has its own session. No `BUILDIT_TOKEN` is needed, since the server reads the token `connect` saved for the folder Claude Code starts it in. A local entry named `buildit` wins over a user-scope `buildit` entry (with a personal access token) in this folder. If the server can't tell the folder (some setups start it elsewhere), add `--folder /path/to/folder` after `--channel`.
+(From a local build, `claude mcp add buildit -- node "/path/to/buildit-mcp/dist/index.js" --channel`.)
+
+This adds it for this folder only (`--scope local`, the default), which is what you want: each folder has its own session. No `BUILDIT_TOKEN` or `--api-url` is needed: the server reads the token `connect` saved for the folder Claude Code starts it in, and talks to the deployment `connect` used. A `BUILDIT_TOKEN` personal access token in your user environment, from the [usual setup](#claude-code), is fine: channel mode ignores it (and says so in its log) and uses the folder's session; only a session token in `BUILDIT_TOKEN` (`buildit_ags_...`) is used instead. Likewise `BUILDIT_API_URL` is ignored in favour of the deployment `connect` saved; `--api-url` on this line overrides it. A local entry named `buildit` wins over a user-scope `buildit` entry (with a personal access token) in this folder. If the server can't tell the folder (some setups start it elsewhere), add `--folder /path/to/folder` after `--channel`.
 
 ### 4. Start Claude Code with the channel
 
@@ -303,17 +307,17 @@ Claude Code shows a warning about development channels first: choose "I am using
 - A message you forward from someone else reaches Claude marked as their text (`forwarded="true"`, inside an `untrusted_content` block), so Claude treats it as information, not as instructions.
 - Messages sent while the session isn't running wait in buildIt.Social (for up to 7 days) and arrive when you start Claude Code again in that folder, which resumes the same session and its threads.
 - With several folders connected, the app shows each session and lets you choose where a message goes; a thread stays with the session that started it, and a thread of a session that ended can be handed to another.
-- To stop a session for good, revoke it in buildIt.Social (Settings → Agents): the running server stops at its next poll and clears the folder's saved token.
+- To stop a session for good, revoke it in buildIt.Social (Settings → Agents), or run `disconnect`. The running server finds out at its next poll (or call) and clears the folder's saved token, but keeps running: Claude keeps its tools, which now answer that the session has ended and how to reconnect, and `reply` goes from the list. Run `connect` again in the folder and restart Claude Code.
 
 ### Where the token is kept
 
 | System  | Store                                                                                                                                                |
 | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Windows | Windows Credential Manager (a generic credential of the service `buildit-mcp`)                                                                       |
+| Windows | Windows Credential Manager: generic credentials named `<hash>.buildit-mcp`                                                                           |
 | macOS   | The login keychain (service `buildit-mcp`). macOS may ask once whether Node.js may read it, and again after Node.js is updated: choose Always Allow. |
 | Linux   | The Secret Service (GNOME Keyring, KWallet), which needs a desktop session                                                                           |
 
-Each folder and deployment has its own entry, named by a hash of the folder's real path and the API's address. The keychain is reached through the optional `@napi-rs/keyring` package, which npm installs with buildit-mcp where it has a build for the system. When there is no usable keychain (a headless Linux, WSL, a system without a build), the token goes to a file readable only by you, and the CLI says so: `%APPDATA%\buildit-mcp\sessions.json` on Windows, `~/Library/Application Support/buildit-mcp/sessions.json` on macOS, `~/.config/buildit-mcp/sessions.json` elsewhere (`$XDG_CONFIG_HOME` if set). Set `BUILDIT_TOKEN_STORE=file` to use the file directly. `BUILDIT_TOKEN` set to a session token overrides the store.
+Each folder and deployment has its own entry, named by a hash of the folder's real path and the API's address. The keychain is reached through the optional `@napi-rs/keyring` package, which npm installs with buildit-mcp where it has a build for the system. When there is no usable keychain (a headless Linux, WSL, a system without a build), the token goes to a file readable only by you, and the CLI says so: `%APPDATA%\buildit-mcp\sessions.json` on Windows, `~/Library/Application Support/buildit-mcp/sessions.json` on macOS, `~/.config/buildit-mcp/sessions.json` elsewhere (`$XDG_CONFIG_HOME` if set). Set `BUILDIT_TOKEN_STORE=file` to use the file directly. `BUILDIT_TOKEN` set to a session token overrides the store. Next to each token, `connect` records which deployment the folder's session belongs to (an `api-<hash>` entry, not a secret).
 
 ### Troubleshooting
 
@@ -321,7 +325,7 @@ Each folder and deployment has its own entry, named by a hash of the folder's re
 - **Messages don't arrive:** check that Claude Code was started with `--dangerously-load-development-channels server:buildit`, and that `/mcp` shows `buildit` connected. "Blocked by org policy" means your Team or Enterprise org hasn't turned channels on. Sessions signed in through Bedrock, Agent Platform or Foundry can't use channels. For details, start Claude Code with `--debug` and read `~/.claude/debug/<session-id>.txt`; add `-e BUILDIT_LOG_LEVEL=debug` to the `claude mcp add` command for the server's own logs (they never contain tokens or message text).
 - **The code expired, or the connection was denied:** run `connect` again for a new code. "Denied" also covers an agent turned off or deleted, or an owner who left the org, after the approval.
 - **"Too many connections ... waiting for approval"** or **"... started from this network in the last hour"**: `connect` waits out a short pause by itself; for a longer one, approve or deny the codes already shown (or let them expire after 10 minutes), then try again when it says.
-- **"The session has ended"** in Claude Code, or "the session was revoked or has expired" in the logs: the session ended (revoked in the app, or unused for 30 days), and its saved token was cleared. Claude gets one last channel message saying so. Run `connect` again.
+- **"This buildIt.Social session has ended"** from every tool, or "the session was revoked or has expired" in the logs: the session ended (revoked in the app, disconnected, or unused for 30 days), and its saved token was cleared. Claude gets one last channel message saying so, and the server stays up so Claude can tell you. Run `connect --project <KEY>` again in the folder, approve it, then restart Claude Code.
 - **The session is paused:** the org turned agents in the app off, or your membership was suspended. The server keeps trying every minute and resumes when it is allowed again.
 - **macOS keeps asking for the keychain:** choose Always Allow; it asks again when the Node.js binary changes.
 - **WSL:** it can't reach Windows Credential Manager, so the token goes to the file in your Linux home. Run `connect` inside WSL if Claude Code runs there.

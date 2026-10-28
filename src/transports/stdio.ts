@@ -316,12 +316,26 @@ export function startStdio(
   const channel = config.channel !== undefined;
   const state = new ChannelState();
   const extraTools = channel ? channelTools(policy, state) : [];
+  // Once a channel's session has ended, the listing stays as it last was
+  // (without reply), so Claude keeps its tools, which then say why.
+  let lastKnown: ListedTools | undefined;
+  const isEnded = (): boolean => state.ended !== undefined;
+  const frozen = (): ListedTools => {
+    const base = lastKnown ?? {
+      ...listedByPolicy(catalog, policy),
+      identity: 'unverified' as const,
+    };
+    return { ...base, tools: base.tools.filter((t) => !extraTools.includes(t)) };
+  };
   const identity = new StdioIdentity(
     async () => {
+      if (isEnded()) return frozen();
       const listed = await resolveListedTools(identityFromApi(api), catalog, policy, logger);
-      return extraTools.length > 0
-        ? { ...listed, tools: [...listed.tools, ...extraTools] }
-        : listed;
+      const shown =
+        extraTools.length > 0 ? { ...listed, tools: [...listed.tools, ...extraTools] } : listed;
+      if (shown.identity === 'known') lastKnown = shown;
+      // The session may have ended while the identity was read.
+      return isEnded() ? frozen() : shown;
     },
     logger,
     options.now,
@@ -363,6 +377,14 @@ export function startStdio(
         api,
         logger,
         channel,
+        ...(channel
+          ? {
+              sessionEnded: () => state.ended,
+              onSessionOver: (code: string) => {
+                void loop?.end(code as EndReason);
+              },
+            }
+          : {}),
         ...(listed.identity === 'known' ? {} : { toolsListTtlMs: DEGRADED_LIST_TTL_MS }),
       });
       identity.attach(switchable);
@@ -376,7 +398,19 @@ export function startStdio(
             logger: logger.child({ component: 'channel' }),
             state,
             notify: (params) => mcp.notification({ method: CHANNEL_NOTIFICATION, params }),
-            ...(options.onSessionEnded ? { onEnded: options.onSessionEnded } : {}),
+            onEnded: async (reason) => {
+              if (state.ended !== undefined) {
+                // The server stays up: Claude keeps its tools (which now say the session
+                // ended), without reply.
+                switchable.show(frozen());
+                try {
+                  switchable.server.sendToolListChanged();
+                } catch {
+                  // A client that is gone can't be told.
+                }
+              }
+              await options.onSessionEnded?.(reason);
+            },
             ...options.channelLoop,
           });
           void loop.start();

@@ -232,6 +232,11 @@ export class ApiClient {
    */
   served: ServedApi | undefined;
 
+  /** Whether this client's token is an agent session token (it is refused for good once the session ends). */
+  get sessionToken(): boolean {
+    return this.token?.startsWith('buildit_ags_') === true;
+  }
+
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.token = options.token;

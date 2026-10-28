@@ -19,15 +19,10 @@ import {
   SESSION_ENDED_CODES,
   type SessionInfo,
 } from '../channel/api.js';
-import {
-  DEFAULT_API_URL,
-  FORBIDDEN_CHARS,
-  type ConnectOptions,
-  type SessionCommandOptions,
-} from '../config.js';
+import { FORBIDDEN_CHARS, type ConnectOptions, type SessionCommandOptions } from '../config.js';
 import { isTokenRefused, isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
-import { sessionKey, type TokenStore } from '../secrets/keychain.js';
+import { savedApiUrl, sessionApiKey, sessionKey, type TokenStore } from '../secrets/keychain.js';
 
 /** The name a session's client shows in buildIt.Social ("Claude Code on <machine>"). */
 export const CONNECT_CLIENT = 'Claude Code';
@@ -42,6 +37,8 @@ export interface CommandIO {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   machine?: string;
+  /** For tests: the script this command runs as (process.argv[1]), for the next-step commands. */
+  entry?: string;
   /** Asks the person a question and returns their answer ('' when there is no one to ask). */
   ask?: (question: string) => Promise<string>;
 }
@@ -116,18 +113,39 @@ function sessionLines(info: SessionInfo): string[] {
 }
 
 /** The commands to start Claude Code with this folder's session, after connecting. */
-export function nextSteps(options: SessionCommandOptions, platform = process.platform): string[] {
-  const apiFlag = options.apiUrl === DEFAULT_API_URL ? '' : ` --api-url ${options.apiUrl}`;
-  const command =
-    platform === 'win32'
-      ? `claude mcp add buildit -- cmd /c npx -y @kammcs/buildit-mcp@latest --channel${apiFlag}`
-      : `claude mcp add buildit -- npx -y @kammcs/buildit-mcp@latest --channel${apiFlag}`;
+export function nextSteps(
+  platform: NodeJS.Platform = process.platform,
+  entry: string | undefined = process.argv[1],
+): string[] {
   return [
     'Next, in this folder:',
-    `  ${command}`,
+    `  ${serverCommand(platform, entry)}`,
     '  claude --dangerously-load-development-channels server:buildit',
     'Messages you send to the agent in buildIt.Social then arrive in that Claude Code session.',
   ];
+}
+
+/**
+ * The `claude mcp add` line for this folder, run the way this command was:
+ * through npx, or a local build's dist/index.js (before a release is on
+ * npm). The server finds the API connect saved, so the line needs no
+ * --api-url.
+ */
+export function serverCommand(
+  platform: NodeJS.Platform = process.platform,
+  entry: string | undefined = process.argv[1],
+): string {
+  const viaNpx = entry === undefined || /[\\/](_npx|node_modules)[\\/]/.test(entry);
+  if (!viaNpx) return `claude mcp add buildit -- node "${entry}" --channel`;
+  return platform === 'win32'
+    ? 'claude mcp add buildit -- cmd /c npx -y "@kammcs/buildit-mcp@latest" --channel'
+    : 'claude mcp add buildit -- npx -y @kammcs/buildit-mcp@latest --channel';
+}
+
+/** The API a command works with: --api-url, else the one connect saved for the folder. */
+async function apiUrlOf(options: SessionCommandOptions, store: TokenStore): Promise<string> {
+  if (options.apiUrlFlag === true) return options.apiUrl;
+  return (await savedApiUrl(store, options.folder)) ?? options.apiUrl;
 }
 
 /**
@@ -237,13 +255,14 @@ export async function runConnect(options: ConnectOptions, io: CommandIO): Promis
         return 1;
       }
       await io.store.set(key, done.token);
+      await io.store.set(sessionApiKey(options.folder), options.apiUrl);
       io.out(
         [
           io.store.kind === 'keyring'
             ? `The session token is saved in ${io.store.location}, for this folder.`
             : `The session token is saved in ${io.store.location} (readable only by your user account), for this folder.`,
           '',
-          ...nextSteps(options),
+          ...nextSteps(process.platform, io.entry ?? process.argv[1]),
         ].join('\n') + '\n',
       );
       return 0;
@@ -323,10 +342,8 @@ function intervalOf(details: unknown): number | undefined {
 }
 
 /** buildit-mcp disconnect: says the session is offline and forgets its token here. */
-export async function runDisconnect(
-  options: SessionCommandOptions,
-  io: CommandIO,
-): Promise<number> {
+export async function runDisconnect(given: SessionCommandOptions, io: CommandIO): Promise<number> {
+  const options = { ...given, apiUrl: await apiUrlOf(given, io.store) };
   const key = sessionKey(options.folder, options.apiUrl);
   const token = await io.store.get(key);
   if (token === undefined) {
@@ -336,6 +353,9 @@ export async function runDisconnect(
   // Best effort: the session ends in buildIt.Social too, before its token is forgotten here.
   const failed = await cancel(apiFor(options, io, token));
   await io.store.delete(key);
+  if ((await savedApiUrl(io.store, options.folder)) === options.apiUrl) {
+    await io.store.delete(sessionApiKey(options.folder));
+  }
   io.out(
     failed === undefined
       ? 'Disconnected: the session is cancelled in buildIt.Social, and this folder no longer has a saved token.\n'
@@ -359,7 +379,8 @@ async function cancel(api: ApiClient): Promise<string | undefined> {
 }
 
 /** buildit-mcp status: the folder's saved session, as buildIt.Social sees it. */
-export async function runStatus(options: SessionCommandOptions, io: CommandIO): Promise<number> {
+export async function runStatus(given: SessionCommandOptions, io: CommandIO): Promise<number> {
+  const options = { ...given, apiUrl: await apiUrlOf(given, io.store) };
   const key = sessionKey(options.folder, options.apiUrl);
   const token = await io.store.get(key);
   const header = [`Folder:   ${options.folder}`, `API:      ${options.apiUrl}`];

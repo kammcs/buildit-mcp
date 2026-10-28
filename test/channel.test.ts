@@ -105,7 +105,7 @@ const recordingSleep = (ms: number): Promise<void> => {
 };
 
 async function start(
-  options: { config?: Config; auto?: boolean; recordWaits?: boolean } = {},
+  options: { config?: Config; auto?: boolean; recordWaits?: boolean; slow?: boolean } = {},
 ): Promise<{
   client: Client;
   notes: Notification[];
@@ -125,7 +125,7 @@ async function start(
       stdout,
       channelLoop: options.recordWaits
         ? { intervalMs: 5000, sleep: recordingSleep }
-        : { intervalMs: 20 },
+        : { intervalMs: options.slow ? 60_000 : 20 },
       onSessionEnded: (reason) => {
         ended.push(reason);
       },
@@ -318,6 +318,45 @@ describe('channel mode', () => {
     expect(session.heartbeats).toContain('online');
   });
 
+  it('stays up when the session ends: tools say so, reply goes, the list changes', async () => {
+    const session = api.sessions.open(SESSION_TOKENS.first);
+    const { client, notes, ended } = await start();
+    await waitFor(() => session.heartbeats.includes('online'));
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain('reply');
+    api.sessions.revoke(SESSION_TOKENS.first);
+    await waitFor(() => ended.length === 1);
+    await waitFor(() => notes.some((n) => n.method === 'notifications/tools/list_changed'));
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).not.toContain('reply');
+    for (const name of ['search_items', 'whoami']) {
+      const r = await client.callTool({
+        name,
+        arguments: name === 'search_items' ? { projects: ['DEMO'] } : {},
+      });
+      expect(r.isError).toBe(true);
+      const text = JSON.stringify(r.content);
+      expect(text).toContain('This buildIt.Social session has ended (it was revoked)');
+      expect(text).toContain('buildit-mcp connect --project <KEY>');
+      expect(text).not.toContain('Agent tokens');
+    }
+  });
+
+  it('gives reconnect advice, not personal-token advice, when a call finds the session ended', async () => {
+    const session = api.sessions.open(SESSION_TOKENS.first);
+    const { client, ended } = await start({ slow: true });
+    await waitFor(() => session.heartbeats.includes('online'));
+    api.sessions.revoke(SESSION_TOKENS.first);
+    // The loop sleeps for a minute: the reply finds out first.
+    const r = await client.callTool({ name: 'reply', arguments: { text: 'Done.' } });
+    expect(r.isError).toBe(true);
+    const text = JSON.stringify(r.content);
+    expect(text).toContain('session has ended (it was revoked)');
+    expect(text).not.toContain('Agent tokens');
+    await waitFor(() => ended.length === 1);
+    expect(ended).toEqual(['token_revoked']);
+    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('reply');
+  });
+
   it('stops when the session is revoked, and tells Claude why', async () => {
     const session = api.sessions.open(SESSION_TOKENS.first, 'demo-folder');
     const { ended, logs, notes } = await start();
@@ -371,9 +410,10 @@ describe('channel mode', () => {
     expect(session.heartbeats).toEqual(['online', 'offline']);
   });
 
-  it('stops for a personal access token (channel mode needs a session token)', async () => {
+  it('stops polling for a personal access token (channel mode needs a session token)', async () => {
+    // The configuration ignores one in BUILDIT_TOKEN; a token handed in directly is refused by the API.
     const { ended, notes } = await start({
-      config: channelConfig({ BUILDIT_TOKEN: 'buildit_pat_test_full_access' }),
+      config: { ...channelConfig(), token: 'buildit_pat_test_full_access' },
     });
     await waitFor(() => ended.length === 1);
     expect(ended).toEqual(['session_token_required']);

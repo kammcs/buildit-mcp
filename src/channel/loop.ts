@@ -61,6 +61,8 @@ const ENDED_NOTICES: Partial<Record<EndReason, string>> = {
 /** What the loop and the reply tool share: the session, and the thread of the latest message. */
 export class ChannelState {
   session: SessionInfo | undefined;
+  /** Why the session ended for good, once it has (the tools then say so). */
+  ended: 'token_revoked' | 'token_expired' | 'token_invalid' | undefined;
   /** The thread the latest message came in, which reply uses when it names none. */
   lastThreadId: string | undefined;
 }
@@ -356,10 +358,8 @@ export class ChannelLoop {
     const { logger } = this.options;
     if (err instanceof ToolInputError) {
       // callOperation's answer when the deployment doesn't serve the session operations.
-      this.ended = true;
-      this.stopper.abort();
-      logger.error('this buildIt.Social server does not serve agent sessions yet; stopping');
-      await this.options.onEnded?.('not_served');
+      logger.error('this buildIt.Social server does not serve agent sessions yet');
+      await this.end('not_served');
       return undefined;
     }
     if (!(err instanceof ApiError)) {
@@ -373,16 +373,7 @@ export class ChannelLoop {
         ? err.code
         : undefined;
     if (ended !== undefined) {
-      this.ended = true;
-      this.stopper.abort();
-      logger.warn(
-        ended === 'session_token_required'
-          ? 'channel mode needs a session token from "buildit-mcp connect"; stopping'
-          : 'the session is no longer accepted; stopping',
-        { code: err.code },
-      );
-      await this.noticeEnded(ended);
-      await this.options.onEnded?.(ended);
+      await this.end(ended);
       return undefined;
     }
     this.failures++;
@@ -397,6 +388,28 @@ export class ChannelLoop {
     }
     logger.warn('channel poll refused; trying again later', { code: err.code });
     return Math.max(SUSPENDED_WAIT_MS / 2, this.backoff(interval));
+  }
+
+  /**
+   * Ends the session for good (once): stops polling, records why, sends the
+   * last notice and tells `onEnded`. The loop calls it on a refused token;
+   * a tool call that finds the token refused calls it too.
+   */
+  async end(reason: EndReason): Promise<void> {
+    if (this.ended) return;
+    this.ended = true;
+    this.stopper.abort();
+    if (reason === 'token_revoked' || reason === 'token_expired' || reason === 'token_invalid') {
+      this.options.state.ended = reason;
+    }
+    this.options.logger.warn(
+      reason === 'session_token_required'
+        ? 'channel mode needs a session token from "buildit-mcp connect"; polling stopped'
+        : 'the session is no longer accepted; polling stopped, the server stays up',
+      { code: reason },
+    );
+    await this.noticeEnded(reason);
+    await this.options.onEnded?.(reason);
   }
 
   /**

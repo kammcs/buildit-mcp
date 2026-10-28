@@ -41,8 +41,17 @@ export interface HttpConfig {
 export interface ChannelConfig {
   /** The folder whose saved session is used (--folder, BUILDIT_FOLDER, else the working directory). */
   folder: string;
-  /** `env`: BUILDIT_TOKEN; `store`: the token `connect` saved for the folder (read at startup). */
+  /**
+   * `env`: a session token in BUILDIT_TOKEN; `store`: the token `connect`
+   * saved for the folder (read at startup). A personal access token in
+   * BUILDIT_TOKEN is ignored in channel mode.
+   */
   tokenSource: 'env' | 'store';
+  /**
+   * Whether --api-url was given. Without it, the API that `connect` saved
+   * for the folder wins over BUILDIT_API_URL and the default.
+   */
+  apiUrlFlag: boolean;
 }
 
 export interface Config {
@@ -69,6 +78,8 @@ export interface Config {
 export interface SessionCommandOptions {
   apiUrl: string;
   folder: string;
+  /** Whether --api-url was given (disconnect and status otherwise use the API saved for the folder). */
+  apiUrlFlag?: boolean;
 }
 
 export interface ConnectOptions extends SessionCommandOptions {
@@ -417,7 +428,9 @@ function parseSessionCommand(
     (typeof apiFlag === 'string' ? apiFlag : nonEmpty(env.BUILDIT_API_URL)) ?? DEFAULT_API_URL,
   );
   const folder = folderOf(values.folder, env, cwd);
-  if (command !== 'connect') return { kind: command, options: { apiUrl, folder } };
+  if (command !== 'connect') {
+    return { kind: command, options: { apiUrl, folder, apiUrlFlag: typeof apiFlag === 'string' } };
+  }
   const projectFlags = values.project;
   const projects = parseProjects(Array.isArray(projectFlags) ? projectFlags : []);
   const label = sessionLabel(typeof values.label === 'string' ? values.label : undefined, folder);
@@ -526,18 +539,23 @@ export function parseCli(
   let channel: ChannelConfig | undefined;
   const rawToken = env.BUILDIT_TOKEN;
   if (channelMode) {
-    channel = { folder: folderOf(values.folder, env, cwd), tokenSource: 'store' };
-    if (rawToken !== undefined && rawToken.trim() !== '') {
-      token = rawToken.trim();
-      channel.tokenSource = 'env';
-      if (/\s/.test(token)) {
+    channel = {
+      folder: folderOf(values.folder, env, cwd),
+      tokenSource: 'store',
+      apiUrlFlag: typeof values['api-url'] === 'string',
+    };
+    const envToken = rawToken?.trim() ?? '';
+    if (envToken.startsWith('buildit_ags_')) {
+      if (/\s/.test(envToken)) {
         throw new ConfigError('BUILDIT_TOKEN contains whitespace; check that it was copied whole.');
       }
-      if (!token.startsWith('buildit_ags_')) {
-        warnings.push(
-          'BUILDIT_TOKEN does not start with "buildit_ags_": channel mode needs a session token, which "buildit-mcp connect" saves for the folder.',
-        );
-      }
+      token = envToken;
+      channel.tokenSource = 'env';
+    } else if (envToken !== '') {
+      // A user-level personal access token from the usual setup: the folder's session wins.
+      warnings.push(
+        'BUILDIT_TOKEN is not a session token, so channel mode ignores it and uses the session that "buildit-mcp connect" saved for the folder.',
+      );
     }
   } else if (mode === 'stdio') {
     if (rawToken === undefined || rawToken.trim() === '') {

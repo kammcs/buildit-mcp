@@ -16,7 +16,13 @@ import {
 } from '@modelcontextprotocol/server';
 
 import { ApiError, type ApiClient } from './api/client.js';
-import { describeApiError, ToolInputError, toolErrorResult } from './errors.js';
+import {
+  describeApiError,
+  SESSION_OVER_CODES,
+  sessionEndedResult,
+  ToolInputError,
+  toolErrorResult,
+} from './errors.js';
 import { isTokenRefused, isTransientFailure, type KnownIdentity } from './identity.js';
 import { scrubString, type Logger } from './log.js';
 import { PROMPT_CATALOG, RESOURCE_CATALOG } from './toolsets/catalog.js';
@@ -68,6 +74,10 @@ export interface CreateServerOptions {
   toolsListTtlMs?: number;
   /** Declare the Claude Code channel capability and explain channel messages (stdio --channel). */
   channel?: boolean;
+  /** The code that ended the session, once it has ended: every tool call then says so. */
+  sessionEnded?: () => string | undefined;
+  /** Told when a call finds the session token refused for good (to end the session). */
+  onSessionOver?: (code: string) => void;
 }
 
 export const DEFAULT_TOOLS_LIST_TTL_MS = 5 * 60_000;
@@ -110,7 +120,8 @@ export function createSwitchableMcpServer(options: CreateServerOptions): Switcha
     {
       capabilities: {
         ...(options.channel === true ? { experimental: { [CHANNEL_CAPABILITY]: {} } } : {}),
-        tools: { listChanged: false },
+        // A channel drops reply from its tools when its session ends, and says so.
+        tools: { listChanged: options.channel === true },
         ...(resources.length > 0 ? { resources: { listChanged: false } } : {}),
         ...(prompts.length > 0 ? { prompts: { listChanged: false } } : {}),
       },
@@ -253,6 +264,11 @@ function registerTool(
     async (args: unknown, ctx): Promise<CallToolResult> => {
       const started = Date.now();
       const logger = options.logger.child({ tool: tool.name });
+      const ended = options.sessionEnded?.();
+      if (ended !== undefined) {
+        logger.info('tool call', { status: 'error', code: 'session_ended', duration_ms: 0 });
+        return sessionEndedResult(ended);
+      }
       const context = createToolContext({
         api: options.api,
         logger,
@@ -277,6 +293,15 @@ function registerTool(
           duration_ms: Date.now() - started,
           ...(code === 'internal' ? { error: err } : {}),
         });
+        if (
+          err instanceof ApiError &&
+          options.api.sessionToken &&
+          SESSION_OVER_CODES.has(err.code)
+        ) {
+          // A session is reconnected with connect, not with a new personal access token.
+          options.onSessionOver?.(err.code);
+          return sessionEndedResult(err.code);
+        }
         return toolErrorResult(err);
       }
     },

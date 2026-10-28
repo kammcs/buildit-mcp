@@ -219,11 +219,19 @@ describe('channel mode', () => {
   it('reads the token from the store unless BUILDIT_TOKEN is set', () => {
     const fromStore = run(['--channel'], {});
     expect(fromStore.token).toBeUndefined();
-    expect(fromStore.channel).toEqual({ folder: resolve(process.cwd()), tokenSource: 'store' });
+    expect(fromStore.channel).toEqual({
+      folder: resolve(process.cwd()),
+      tokenSource: 'store',
+      apiUrlFlag: false,
+    });
     const fromEnv = parseCli(['--channel', '--folder', 'sub'], { BUILDIT_TOKEN: SESSION }, cwd);
     if (fromEnv.kind !== 'run') throw new Error('expected run');
     expect(fromEnv.config.token).toBe(SESSION);
-    expect(fromEnv.config.channel).toEqual({ folder: join(cwd, 'sub'), tokenSource: 'env' });
+    expect(fromEnv.config.channel).toEqual({
+      folder: join(cwd, 'sub'),
+      tokenSource: 'env',
+      apiUrlFlag: false,
+    });
     expect(fromEnv.config.warnings).toEqual([]);
   });
 
@@ -235,8 +243,23 @@ describe('channel mode', () => {
     );
     if (action.kind !== 'run') throw new Error('expected run');
     expect(action.config.channel?.folder).toBe(resolve('/elsewhere'));
-    expect(action.config.warnings.join(' ')).toContain('session token');
+    // A user-level personal access token is ignored: the folder's saved session wins.
+    expect(action.config.token).toBeUndefined();
+    expect(action.config.channel?.tokenSource).toBe('store');
+    expect(action.config.warnings.join(' ')).toContain('ignores it');
     expect(action.config.warnings.join(' ')).not.toContain(TOKEN);
+  });
+
+  it('notes whether --api-url was given (the saved API wins otherwise)', () => {
+    const withFlag = run(['--channel', '--api-url', 'https://api.example.com/v'], {});
+    expect(withFlag.channel?.apiUrlFlag).toBe(true);
+    const fromEnv = run(['--channel'], { BUILDIT_API_URL: 'https://api.example.com/v' });
+    expect(fromEnv.channel?.apiUrlFlag).toBe(false);
+    expect(fromEnv.apiUrl).toBe('https://api.example.com/v');
+  });
+
+  it('keeps a personal access token outside channel mode', () => {
+    expect(run([], { BUILDIT_TOKEN: TOKEN }).token).toBe(TOKEN);
   });
 
   it('runs over stdio only', () => {
@@ -311,7 +334,7 @@ describe('the session commands', () => {
     expect(parseCli(['disconnect'], { BUILDIT_API_URL: 'https://api.example.com/x' }, cwd)).toEqual(
       {
         kind: 'disconnect',
-        options: { apiUrl: 'https://api.example.com/x', folder: cwd },
+        options: { apiUrl: 'https://api.example.com/x', folder: cwd, apiUrlFlag: false },
       },
     );
     expect(parseCli(['status', '--folder', '/other'], {}, cwd)).toMatchObject({

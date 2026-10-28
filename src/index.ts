@@ -7,9 +7,9 @@
 import { createInterface } from 'node:readline/promises';
 
 import { runConnect, runDisconnect, runStatus, type CommandIO } from './cli/commands.js';
-import { COMMAND_USAGE, ConfigError, parseCli, USAGE } from './config.js';
+import { COMMAND_USAGE, ConfigError, parseApiUrl, parseCli, USAGE } from './config.js';
 import { createLogger } from './log.js';
-import { openTokenStore, sessionKey } from './secrets/keychain.js';
+import { openTokenStore, savedApiUrl, sessionKey } from './secrets/keychain.js';
 import { CATALOG } from './toolsets/catalog.js';
 import { unknownToolNames } from './toolsets/registry.js';
 import { startHttp } from './transports/http.js';
@@ -75,9 +75,25 @@ async function main(): Promise<void> {
   let { config } = action;
   const early: string[] = [];
   let clearSaved: (() => Promise<void>) | undefined;
-  if (config.channel !== undefined && config.token === undefined) {
-    // Channel mode without BUILDIT_TOKEN: the token connect saved for the folder.
+  if (config.channel !== undefined) {
+    // Channel mode: the API connect saved for the folder, unless --api-url says otherwise.
     const store = await openTokenStore({ warn: (message) => early.push(message) });
+    const saved = config.channel.apiUrlFlag
+      ? undefined
+      : await savedApiUrl(store, config.channel.folder);
+    if (saved !== undefined) {
+      try {
+        config = { ...config, apiUrl: parseApiUrl(saved) };
+      } catch {
+        early.push(
+          'The API saved for this folder is not valid; using BUILDIT_API_URL or the default.',
+        );
+      }
+    }
+  }
+  if (config.channel !== undefined && config.token === undefined) {
+    // Channel mode without a session token in BUILDIT_TOKEN: the token connect saved for the folder.
+    const store = await openTokenStore({ warn: () => undefined });
     const key = sessionKey(config.channel.folder, config.apiUrl);
     const token = await store.get(key);
     if (token === undefined) {

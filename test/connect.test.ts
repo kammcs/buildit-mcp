@@ -14,6 +14,7 @@ import {
   runConnect,
   runDisconnect,
   runStatus,
+  serverCommand,
   type CommandIO,
 } from '../src/cli/commands.js';
 import type { ConnectOptions } from '../src/config.js';
@@ -21,6 +22,7 @@ import { createLogger } from '../src/log.js';
 import {
   FileTokenStore,
   KeyringTokenStore,
+  savedApiUrl,
   sessionKey,
   type KeyringFactory,
   type TokenStore,
@@ -324,6 +326,39 @@ describe('disconnect, when the session already ended or the API is away', () => 
     expect(await runDisconnect({ apiUrl: api.url, folder: dir }, h2.io)).toBe(0);
     expect(h2.out()).toContain('could not be cancelled in buildIt.Social (unavailable)');
     expect(await h2.store.get(sessionKey(dir, api.url))).toBeUndefined();
+  });
+});
+
+describe('the API a folder is connected to', () => {
+  it('is saved by connect and used by status and disconnect without --api-url', async () => {
+    const h = harness((n) => {
+      if (n === 1) api.sessions.approve();
+    });
+    expect(await runConnect(options(), h.io)).toBe(0);
+    expect(await savedApiUrl(h.store, dir)).toBe(api.url);
+    // Another BUILDIT_API_URL (or the default) doesn't matter: the saved one wins.
+    const elsewhere = { apiUrl: 'https://api.example.com/functions/v1/agent-api', folder: dir };
+    expect(await runStatus(elsewhere, h.io)).toBe(0);
+    expect(h.out()).toContain(`API:      ${api.url}`);
+    // --api-url still picks another deployment explicitly.
+    expect(await runStatus({ ...elsewhere, apiUrlFlag: true }, h.io)).toBe(1);
+    expect(await runDisconnect(elsewhere, h.io)).toBe(0);
+    expect(await h.store.get(sessionKey(dir, api.url))).toBeUndefined();
+    expect(await savedApiUrl(h.store, dir)).toBeUndefined();
+  });
+});
+
+describe('the claude mcp add line', () => {
+  it('runs the server the way connect ran: npx, or a local build', () => {
+    expect(serverCommand('linux', '/opt/cache/.npm/_npx/abc/node_modules/.bin/buildit-mcp')).toBe(
+      'claude mcp add buildit -- npx -y @kammcs/buildit-mcp@latest --channel',
+    );
+    expect(serverCommand('win32', undefined)).toBe(
+      'claude mcp add buildit -- cmd /c npx -y "@kammcs/buildit-mcp@latest" --channel',
+    );
+    expect(serverCommand('linux', '/src/buildit-mcp/dist/index.js')).toBe(
+      'claude mcp add buildit -- node "/src/buildit-mcp/dist/index.js" --channel',
+    );
   });
 });
 

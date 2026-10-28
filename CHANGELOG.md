@@ -10,15 +10,19 @@ Built on version 1.5.0 of the agent API's contract. Channel mode and the session
 
 - **Talk to Claude Code from buildIt.Social.** `buildit-mcp --channel` (`BUILDIT_CHANNEL=true`) makes the server a Claude Code channel for a session of your personal agent: your messages to the agent in the app arrive in the running Claude Code session as `<channel>` events (with `thread_id`, `message_id` and `session`), and Claude answers in the same thread with the new `reply` tool. Only your own messages are passed on; a message you forwarded from someone else is passed on marked as their text (`forwarded="true"`, inside an `untrusted_content` block). The server declares `experimental["claude/channel"]` and stays on the 2025 handshake, since Claude Code doesn't register a channel on 2026-07-28. Start Claude Code with `--dangerously-load-development-channels server:buildit` until the channel is on its approved list. See [Talk to Claude Code from buildIt.Social](README.md#talk-to-claude-code-from-builditsocial).
 - **`reply`** (channel mode only): text up to 4,000 characters, in the thread named or the one the latest message came in, with an idempotency key. Not listed in read-only mode.
-- The server polls the session's events at the server's interval, acknowledges them only after handing them on, drops repeats, backs off when the API is busy or away, pauses while the session is suspended, says the session is offline when it stops, and stops for good (clearing the saved token) when the session is revoked or expires, with one last channel message that tells Claude the session ended and to have the person run `connect` again.
+- The server polls the session's events at the server's interval, acknowledges them only after handing them on, drops repeats, backs off when the API is busy or away, pauses while the session is suspended, says the session is offline when it stops, and, when the session is revoked or expires, stops polling and clears the saved token, with one last channel message that tells Claude the session ended. The server stays up: `reply` leaves the tool list (`notifications/tools/list_changed`), and every tool answers that the session ended and how to reconnect (`connect`, approve, restart Claude Code), never personal-token advice.
+
+- In channel mode the folder's saved session wins: a personal access token in `BUILDIT_TOKEN` (from the usual setup) is ignored with a log note, and only a session token there is used; the deployment `connect` saved is used unless `--api-url` is given, over `BUILDIT_API_URL`.
 
 ### Commands
 
 - `buildit-mcp connect --project <KEY> [--label <name>] [--folder <path>] [--api-url <url>]` connects a folder with a device code that you approve in the app, and saves the session token (`buildit_ags_...`) in the OS keychain: Windows Credential Manager, the macOS Keychain or the Secret Service, through the optional `@napi-rs/keyring` package. Without a usable keychain it uses a file readable only by you, and says so (`BUILDIT_TOKEN_STORE=file` picks the file). Once approved, it names the agent, its owner and the org and asks "Is this you? [y/N]": only `y` saves the token, since whoever approves a code gets the session; any other answer cancels the session at once. The projects shown are the ones approved. `--yes` skips the question, for scripts only. A short rate limit on starting is waited out once; a longer one is explained (too many codes waiting from your network, too many started this hour).
+- `connect` ends by printing the `claude mcp add` line for the folder, as `connect` itself was run (npx, or a local build). `status` and `disconnect` use the deployment `connect` saved unless `--api-url` is given.
 - `buildit-mcp status` shows the folder's session; `buildit-mcp disconnect` cancels it (`DELETE /v1/session`) and forgets its token.
 
 ### Other
 
+- `whoami` says whether the token is a personal access token or an agent session (`token.kind`), and shows the session's label.
 - Logs scrub session tokens as well as personal access tokens; gitleaks catches session tokens.
 - Rate-limit errors name the session and connect limits.
 

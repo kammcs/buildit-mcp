@@ -14,6 +14,12 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { FakeApi, TOKENS } from './support/fake-api.js';
+import {
+  defaultTokenFile,
+  FileTokenStore,
+  sessionApiKey,
+  sessionKey,
+} from '../src/secrets/keychain.js';
 import { SESSION_TOKENS } from './support/fake-sessions.js';
 
 const BIN = fileURLToPath(new URL('../dist/index.js', import.meta.url));
@@ -198,6 +204,64 @@ describe('stdio (built binary)', () => {
 });
 
 describe('stdio channel mode (built binary)', () => {
+  it("uses the folder's saved session and API over a personal access token, and stays up when it ends", async () => {
+    api.sessions.interval = 1;
+    const home = mkdtempSync(join(tmpdir(), 'buildit-mcp-home-'));
+    try {
+      const env = { APPDATA: home, HOME: home, XDG_CONFIG_HOME: home, BUILDIT_TOKEN_STORE: 'file' };
+      // What connect leaves behind, in the fallback file of this (made-up) home.
+      const store = new FileTokenStore(defaultTokenFile(env));
+      await store.set(sessionKey(home, api.url), SESSION_TOKENS.second);
+      await store.set(sessionApiKey(home), api.url);
+      const session = api.sessions.open(SESSION_TOKENS.second, 'saved-folder');
+
+      // A user-level personal access token and another API, as the usual setup leaves them.
+      const { client, stderr } = await connect(TOKENS.full, {
+        env: {
+          ...env,
+          BUILDIT_CHANNEL: 'true',
+          BUILDIT_FOLDER: home,
+          BUILDIT_API_URL: 'https://api.example.com/functions/v1/agent-api',
+        },
+      });
+      const notes: { method: string }[] = [];
+      client.fallbackNotificationHandler = (n) => {
+        notes.push(n);
+        return Promise.resolve();
+      };
+      expect((await client.listTools()).tools.map((t) => t.name)).toContain('reply');
+      let until = Date.now() + 8000;
+      while (!session.heartbeats.includes('online') && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(session.heartbeats).toContain('online');
+      expect(stderr()).toContain('ignores it');
+
+      // The session ends: the process stays, the tools say why, reply goes.
+      api.sessions.revoke(SESSION_TOKENS.second);
+      until = Date.now() + 8000;
+      while (
+        !notes.some((n) => n.method === 'notifications/tools/list_changed') &&
+        Date.now() < until
+      ) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('reply');
+      const call = await client.callTool({
+        name: 'search_items',
+        arguments: { projects: ['DEMO'] },
+      });
+      expect(call.isError).toBe(true);
+      expect(JSON.stringify(call.content)).toContain('This buildIt.Social session has ended');
+      // The saved token is cleared.
+      expect(await store.get(sessionKey(home, api.url))).toBeUndefined();
+      expect(stderr()).not.toContain(SESSION_TOKENS.second);
+      expect(stderr()).not.toContain(TOKENS.full);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("registers as a channel on the 2025 handshake and pushes the owner's messages", async () => {
     api.sessions.interval = 1;
     const session = api.sessions.open(SESSION_TOKENS.zero, 'demo-folder');
