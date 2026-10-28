@@ -3,12 +3,16 @@
  * package.json: the MCP Registry's server.json and the Claude Desktop
  * bundle's manifest.
  */
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 const read = (path: string): unknown =>
   JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'));
+const readJsonAt = (path: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
 
 const pkg = read('package.json') as { name: string; version: string; mcpName: string };
 
@@ -107,6 +111,8 @@ describe('the Claude Code plugin', () => {
       '-y',
       `${pkg.name}@${pkg.version}`,
       '--channel',
+      // The plugin's server takes the folder's channel over from one added with claude mcp add.
+      '--from-plugin',
     ]);
     expect(plugin.channels).toEqual([expect.objectContaining({ server: 'buildit' })]);
   });
@@ -122,20 +128,40 @@ describe('the Claude Code plugin', () => {
     expect(plugin.userConfig.questions_in_app?.default).toBe(true);
   });
 
-  it("has a local-build twin that runs the checkout's dist/ with the same hooks and settings", () => {
-    const local = read('plugin-local/.claude-plugin/plugin.json') as Record<string, unknown>;
-    const published = plugin as unknown as Record<string, unknown>;
-    // Named buildit with a server buildit, so the hooks' plugin:buildit:buildit resolve.
-    for (const key of new Set([...Object.keys(local), ...Object.keys(published)])) {
-      if (key === 'description' || key === 'mcpServers') continue;
-      expect(local[key], key).toEqual(published[key]);
+  it("makes a local marketplace whose plugin runs the checkout's dist/ with the same hooks and settings", async () => {
+    const { DEV_MARKETPLACE, devCommands, writeDevMarketplace } =
+      await import('../scripts/dev-marketplace.js');
+    const out = mkdtempSync(join(tmpdir(), 'buildit-dev-marketplace-'));
+    try {
+      const checkout = resolve(import.meta.dirname, '..');
+      const { version } = writeDevMarketplace(checkout, out);
+      expect(version).toBe(`${pkg.version}-local`);
+      const market = readJsonAt(join(out, '.claude-plugin', 'marketplace.json'));
+      expect(market).toMatchObject({
+        name: DEV_MARKETPLACE,
+        plugins: [{ name: 'buildit', source: './buildit', version }],
+      });
+      const local = readJsonAt(join(out, 'buildit', '.claude-plugin', 'plugin.json'));
+      const published = plugin as unknown as Record<string, unknown>;
+      // Named buildit with a server buildit, so the hooks' plugin:buildit:buildit resolve.
+      for (const key of new Set([...Object.keys(local), ...Object.keys(published)])) {
+        if (key === 'description' || key === 'mcpServers' || key === 'version') continue;
+        expect(local[key], key).toEqual(published[key]);
+      }
+      expect((local.mcpServers as typeof plugin.mcpServers).buildit).toEqual({
+        ...plugin.mcpServers.buildit,
+        command: 'node',
+        args: [join(checkout, 'dist', 'index.js'), '--channel', '--from-plugin'],
+      });
+      expect(readJsonAt(join(out, 'buildit', 'hooks', 'hooks.json'))).toEqual(hooks);
+      expect(devCommands(out)).toEqual([
+        `claude plugin marketplace add ${out}`,
+        'claude plugin install buildit@buildit-dev',
+        'claude --dangerously-load-development-channels plugin:buildit@buildit-dev',
+      ]);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
     }
-    expect((local.mcpServers as typeof plugin.mcpServers).buildit).toEqual({
-      ...plugin.mcpServers.buildit,
-      command: 'node',
-      args: ['${CLAUDE_PLUGIN_ROOT}/../dist/index.js', '--channel'],
-    });
-    expect(read('plugin-local/hooks/hooks.json')).toEqual(hooks);
   });
 
   it("calls ask from AskUserQuestion's hook with the server's timeout, and turn_ended on Stop", async () => {

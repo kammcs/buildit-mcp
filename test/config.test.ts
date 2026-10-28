@@ -223,6 +223,7 @@ describe('channel mode', () => {
       folder: resolve(process.cwd()),
       tokenSource: 'store',
       apiUrlFlag: false,
+      fromPlugin: false,
     });
     const fromEnv = parseCli(['--channel', '--folder', 'sub'], { BUILDIT_TOKEN: SESSION }, cwd);
     if (fromEnv.kind !== 'run') throw new Error('expected run');
@@ -231,8 +232,17 @@ describe('channel mode', () => {
       folder: join(cwd, 'sub'),
       tokenSource: 'env',
       apiUrlFlag: false,
+      fromPlugin: false,
     });
     expect(fromEnv.config.warnings).toEqual([]);
+  });
+
+  it('knows a server the plugin started: --from-plugin, or CLAUDE_PLUGIN_ROOT', () => {
+    expect(run(['--channel', '--from-plugin'], {}).channel?.fromPlugin).toBe(true);
+    expect(run(['--channel'], { CLAUDE_PLUGIN_ROOT: '/plugins/buildit' }).channel?.fromPlugin).toBe(
+      true,
+    );
+    expect(run(['--channel'], { CLAUDE_PLUGIN_ROOT: '' }).channel?.fromPlugin).toBe(false);
   });
 
   it('takes BUILDIT_CHANNEL and BUILDIT_FOLDER, and warns about a personal access token', () => {

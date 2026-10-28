@@ -57,6 +57,7 @@ import {
   type ListedTools,
   type SwitchableServer,
 } from '../server.js';
+import { PREEMPT_WAIT_MS, type ChannelLock } from '../channel/lock.js';
 import { TypingIndicator } from '../channel/typing.js';
 import { createAskTool, type AskOptions } from '../tools/ask.js';
 import { createReplyTool, createTurnEndedTool } from '../tools/reply.js';
@@ -82,6 +83,13 @@ export interface StdioOptions {
    * another server is the channel.
    */
   channelOwner?: boolean;
+  /**
+   * Channel mode: the folder's channel lock this server holds, checked
+   * before each poll (another server may take the folder over).
+   */
+  channelLock?: Pick<ChannelLock, 'owns' | 'preempted'>;
+  /** The wait before the first poll after taking the folder over (default PREEMPT_WAIT_MS). */
+  preemptWaitMs?: number;
   /** For tests: ask's timing. */
   ask?: Pick<AskOptions, 'msPerSecond' | 'now'>;
   /** For tests: the typing indicator's timing. */
@@ -444,7 +452,7 @@ export function startStdio(
           if (loop !== undefined) return;
           if (!state.isChannel) {
             logger.warn(
-              'another buildit server is the channel for this folder; this one serves its tools without the channel',
+              'another buildit server in this folder receives the messages from buildIt.Social (it holds the channel lock); this one serves its tools without the channel. Remove the extra server (claude mcp remove <name>; "buildit-mcp status" names them)',
             );
             return;
           }
@@ -453,6 +461,14 @@ export function startStdio(
             logger: logger.child({ component: 'channel' }),
             state,
             notify: (params) => mcp.notification({ method: CHANNEL_NOTIFICATION, params }),
+            ...(options.channelLock === undefined
+              ? {}
+              : {
+                  owns: () => options.channelLock?.owns() ?? true,
+                  ...(options.channelLock.preempted === undefined
+                    ? {}
+                    : { firstPollDelayMs: options.preemptWaitMs ?? PREEMPT_WAIT_MS }),
+                }),
             onEnded: async (reason) => {
               if (state.ended !== undefined) {
                 // The server stays up: Claude keeps its tools (which now say the session

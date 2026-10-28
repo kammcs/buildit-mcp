@@ -402,15 +402,19 @@ describe('the claude mcp add line', () => {
     expect(npx).toContain(
       'claude --dangerously-load-development-channels plugin:buildit@buildit-mcp',
     );
-    expect(npx).toContain('<checkout>/plugin-local');
+    expect(npx).toContain('npm run dev-marketplace');
     expect(npx).toContain('claude mcp add buildit -- npx -y @kammcs/buildit-mcp@latest --channel');
     expect(npx.indexOf('plugin:buildit@')).toBeLessThan(npx.indexOf('server:buildit'));
-    // From a local build, the checkout's own plugin-local.
+    // From a local build, the checkout's dev marketplace.
     const local = nextSteps('linux', '/src/buildit-mcp/dist/index.js').join('\n');
-    expect(local).toMatch(
-      /--plugin-dir \S*buildit-mcp[\\/]plugin-local --dangerously-load-development-channels plugin:buildit@inline/,
+    expect(local).toContain('npm run dev-marketplace');
+    expect(local).toMatch(/claude plugin marketplace add \S*buildit-mcp[\\/]\.dev-marketplace/);
+    expect(local).toContain('claude plugin install buildit@buildit-dev');
+    expect(local).toContain(
+      'claude --dangerously-load-development-channels plugin:buildit@buildit-dev',
     );
-    expect(local).not.toContain('marketplace add');
+    expect(local).not.toContain('--plugin-dir /');
+    expect(local).not.toContain('marketplace add kammcs');
     expect(local).toContain('node "/src/buildit-mcp/dist/index.js" --channel');
   });
 });

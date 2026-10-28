@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApiClient } from '../src/api/client.js';
 import type { SessionEvent } from '../src/api/generated/schemas.js';
 import { listSessionEvents } from '../src/channel/api.js';
-import { acquireChannelLock } from '../src/channel/lock.js';
+import { acquireChannelLock, lockHolders } from '../src/channel/lock.js';
 import { CardInbox, CardWaiters } from '../src/channel/waiters.js';
 import {
   channelServerPlaces,
@@ -98,6 +98,60 @@ describe('the channel lock', () => {
     expect(
       acquireChannelLock(dir, API, { dir: lockDir(), pid: 3333, releaseOnExit: false }),
     ).toBeDefined();
+  });
+
+  describe("the plugin's server comes first", () => {
+    const at = (pid: number, plugin: boolean, alive: (pid: number) => boolean = () => true) =>
+      acquireChannelLock(join(dir, 'proj'), API, {
+        dir: lockDir(),
+        pid,
+        plugin,
+        isAlive: alive,
+        releaseOnExit: false,
+      });
+
+    it('takes the folder over from a server without the plugin, which gives way for good', () => {
+      const plain = at(1111, false)!;
+      expect(plain.owns()).toBe(true);
+      const plugin = at(2222, true)!;
+      expect(plugin).toBeDefined();
+      expect(plugin.plugin).toBe(true);
+      expect(plugin.preempted).toBe(1111);
+      expect(plugin.owns()).toBe(true);
+      // The other one finds out at its next check, and releases its own lock.
+      expect(plain.owns()).toBe(false);
+      expect(existsSync(plain.path)).toBe(false);
+      // Even once the plugin's server is gone: it stays off.
+      plugin.release();
+      expect(plain.owns()).toBe(false);
+      expect(lockHolders(join(dir, 'proj'), API, { dir: lockDir() })).toEqual({
+        plugin: undefined,
+        server: undefined,
+      });
+    });
+
+    it('leaves a server without the plugin out while a plugin server runs', () => {
+      const plugin = at(2222, true)!;
+      expect(plugin.preempted).toBeUndefined();
+      expect(at(1111, false)).toBeUndefined();
+      const holders = lockHolders(join(dir, 'proj'), API, {
+        dir: lockDir(),
+        isAlive: () => true,
+      });
+      expect(holders.plugin).toMatchObject({ pid: 2222, plugin: true });
+      expect(holders.server).toBeUndefined();
+      // Once it is gone (a crash), a server without the plugin may take the folder.
+      expect(at(1111, false, (pid) => pid !== 2222)?.owns()).toBe(true);
+    });
+
+    it('keeps the first of two plugin servers, and takes over a gone one', () => {
+      const first = at(2222, true)!;
+      expect(at(3333, true)).toBeUndefined();
+      expect(first.owns()).toBe(true);
+      const next = at(3333, true, (pid) => pid !== 2222)!;
+      expect(next.owns()).toBe(true);
+      expect(first.owns()).toBe(false);
+    });
   });
 
   it('treats this process as alive by default', () => {
@@ -343,19 +397,46 @@ describe("Claude Code's files (status)", () => {
     expect(pluginConfigured(folder(), home())).toBe(true);
     expect(duplicateChannelWarning(folder(), home())).toContain('.mcp.json also starts');
 
-    let out = '';
-    const code = await runStatus(
-      { apiUrl: API, folder: folder() },
-      {
-        out: (t) => (out += t),
-        err: () => undefined,
-        store: new FileTokenStore(join(dir, 'sessions.json')),
-        logger: createLogger({ sink: () => undefined }),
-        home: home(),
-      },
-    );
-    expect(code).toBe(1);
+    const lockDir = join(dir, 'locks');
+    const status = async (): Promise<string> => {
+      let out = '';
+      const code = await runStatus(
+        { apiUrl: API, folder: folder() },
+        {
+          out: (t) => (out += t),
+          err: () => undefined,
+          store: new FileTokenStore(join(dir, 'sessions.json')),
+          logger: createLogger({ sink: () => undefined }),
+          home: home(),
+          lockDir,
+        },
+      );
+      expect(code).toBe(1);
+      return out;
+    };
+    let out = await status();
     expect(out).toContain('Warning:  the buildit plugin is installed');
+    expect(out).toContain('("b")');
+    expect(out).toContain('claude mcp remove b');
+    // It names both servers, and which one receives the folder's messages.
+    expect(out).toContain('Servers:  the buildit plugin; "b" (in .mcp.json)');
+    expect(out).toContain("Channel:  no buildit server is receiving this folder's messages now.");
+    const plain = acquireChannelLock(folder(), API, { dir: lockDir, releaseOnExit: false })!;
+    out = await status();
+    expect(out).toContain(
+      `Channel:  a buildit server without the plugin (pid ${process.pid}) receives this folder's messages.`,
+    );
+    plain.release();
+    const plugin = acquireChannelLock(folder(), API, {
+      dir: lockDir,
+      plugin: true,
+      releaseOnExit: false,
+    })!;
+    out = await status();
+    expect(out).toContain(
+      `Channel:  the buildit plugin's server (pid ${process.pid}) receives this folder's messages.`,
+    );
+    plugin.release();
   });
 
   it('sees the plugin enabled in settings, and ignores unreadable files', () => {

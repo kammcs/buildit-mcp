@@ -10,7 +10,7 @@
   "mcpServers": {
     "buildit": {
       "command": "npx",
-      "args": ["-y", "@kammcs/buildit-mcp@0.5.0", "--channel"],
+      "args": ["-y", "@kammcs/buildit-mcp@0.5.0", "--channel", "--from-plugin"],
       "env": {
         "BUILDIT_TOOLSETS": "all",
         "BUILDIT_ASK_TIMEOUT_MINUTES": "${user_config.ask_timeout_minutes}",

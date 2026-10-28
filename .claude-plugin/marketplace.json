@@ -1,6 +1,9 @@
 {
   "name": "buildit-mcp",
-  "owner": { "name": "Kamm Creative Solutions" },
+  "owner": {
+    "name": "Kamm Creative Solutions"
+  },
+  "description": "The buildit plugin: buildIt.Social as a Claude Code channel.",
   "plugins": [
     {
       "name": "buildit",

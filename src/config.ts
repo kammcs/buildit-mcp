@@ -52,6 +52,12 @@ export interface ChannelConfig {
    * for the folder wins over BUILDIT_API_URL and the default.
    */
   apiUrlFlag: boolean;
+  /**
+   * Started by the buildit plugin (--from-plugin, which its manifest
+   * passes, or CLAUDE_PLUGIN_ROOT in the environment): it takes the
+   * folder's channel over from a server without the plugin.
+   */
+  fromPlugin: boolean;
 }
 
 /** How questions reach the person in channel mode (the plugin's settings). */
@@ -159,6 +165,9 @@ Options (each also has an environment variable):
   --channel                 BUILDIT_CHANNEL=true      Claude Code channel mode (stdio only)
   --folder <path>           BUILDIT_FOLDER            The folder whose saved session --channel uses
                                                       (default: the working directory)
+  --from-plugin                                       --channel: started by the buildit plugin, which
+                                                      Claude Code registers as the channel (the
+                                                      plugin passes it)
                             BUILDIT_QUESTIONS_IN_APP  --channel: the plugin's question hook asks in
                                                       buildIt.Social (default true)
                             BUILDIT_ASK_TIMEOUT_MINUTES
@@ -569,6 +578,7 @@ export function parseCli(
         'allow-any-host': { type: 'boolean' },
         channel: { type: 'boolean' },
         folder: { type: 'string' },
+        'from-plugin': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
       },
@@ -640,6 +650,7 @@ export function parseCli(
       folder: folderOf(values.folder, env, cwd),
       tokenSource: 'store',
       apiUrlFlag: typeof values['api-url'] === 'string',
+      fromPlugin: values['from-plugin'] === true || nonEmpty(env.CLAUDE_PLUGIN_ROOT) !== undefined,
     };
     const envToken = rawToken?.trim() ?? '';
     if (envToken.startsWith('buildit_ags_')) {
