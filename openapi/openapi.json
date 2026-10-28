@@ -8893,7 +8893,7 @@
           "session"
         ],
         "summary": "The session's events",
-        "description": "What reached this session since the last ack, oldest first: the owner's messages in the agent's direct message (new top-level messages routed to this session, and replies in its threads). Deliveries are at least once: deduplicate on the event's id, and ack the cursor once handled. Events wait 7 days for a session that isn't running. Poll every `poll_interval_s` seconds of get_session; polling also counts as the session's heartbeat (online). Polls, events and acks together, are limited to 12 a minute by default (429 rate_limited, bucket session_polls_per_minute). Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
+        "description": "What reached this session since the last ack, oldest first: the owner's messages in the agent's direct message (new top-level messages routed to this session, and replies in its threads). Deliveries are at least once: deduplicate on the event's id, and ack the cursor once handled. Events wait 7 days for a session that isn't running. Poll every `poll_interval_s` seconds of get_session; polling also counts as the session's heartbeat (online). Polls are limited to 12 a minute by default (429 rate_limited, bucket session_polls_per_minute); acks count as ordinary requests. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
         "parameters": [
           {
             "name": "cursor",
@@ -9058,7 +9058,7 @@
           "session"
         ],
         "summary": "Ack the session's events",
-        "description": "Marks every event of this session up to `cursor` handled, so it isn't handed out again. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
+        "description": "Marks every event of this session up to `cursor` handled, so it isn't handed out again. It counts as an ordinary request, not a poll. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -16210,7 +16210,7 @@
             "description": "The org's requests a minute, across all its tokens."
           },
           "polls_per_minute": {
-            "description": "A session token's polls a minute: list_session_events and ack_session_events together. Absent on servers older than API version 1.5.0.",
+            "description": "A session token's polls of list_session_events a minute (acks count as ordinary requests). Absent on servers older than API version 1.5.0.",
             "type": "integer"
           }
         },

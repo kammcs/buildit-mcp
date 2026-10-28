@@ -13,9 +13,10 @@
  * into a channel can steer the session), other event types, and events seen
  * before (by event and message id).
  *
- * Polling counts as the session's heartbeat on the server. The API counts
- * an acknowledgement in the same per-minute window as a poll, so after one
- * the loop skips a poll to stay within it. On stop it says "offline".
+ * Polling counts as the session's heartbeat on the server. The loop polls
+ * at the server's pace (poll_interval_s; the API allows 12 polls a minute),
+ * never faster, even while more events wait; a 429 waits out its
+ * Retry-After. On stop it says "offline".
  *
  * A revoked or expired token (token_revoked, token_expired) ends the loop
  * for good, and `onEnded` clears the saved token. A suspended session, or
@@ -191,8 +192,6 @@ export class ChannelLoop {
           }
           if (this.isStopped()) return;
           await ackSessionEvents(this.options.api, page.cursor, { signal: this.signal });
-          // The acknowledgement used a poll of the per-minute window.
-          wait = page.more ? 0 : interval * 2;
         }
         cursor = page.cursor;
       } catch (err) {

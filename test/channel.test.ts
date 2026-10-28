@@ -96,7 +96,16 @@ function channelConfig(env: Record<string, string> = {}): Config {
   return action.config;
 }
 
-async function start(options: { config?: Config; auto?: boolean } = {}): Promise<{
+/** Waits that a test records: each poll's pause, cut short so the test runs fast. */
+const waits: number[] = [];
+const recordingSleep = (ms: number): Promise<void> => {
+  waits.push(ms);
+  return new Promise((r) => setTimeout(r, 5));
+};
+
+async function start(
+  options: { config?: Config; auto?: boolean; recordWaits?: boolean } = {},
+): Promise<{
   client: Client;
   notes: Notification[];
   ended: string[];
@@ -113,7 +122,9 @@ async function start(options: { config?: Config; auto?: boolean } = {}): Promise
     {
       stdin,
       stdout,
-      channelLoop: { intervalMs: 20 },
+      channelLoop: options.recordWaits
+        ? { intervalMs: 5000, sleep: recordingSleep }
+        : { intervalMs: 20 },
       onSessionEnded: (reason) => {
         ended.push(reason);
       },
@@ -213,6 +224,31 @@ describe('channel mode', () => {
     await waitFor(() => session.acked === 1);
     expect(api.count('/v1/session/events/ack')).toBe(2);
     expect(channelNotes(notes)).toHaveLength(1);
+  });
+
+  it("polls at the server's pace, even while more events wait", async () => {
+    waits.length = 0;
+    const session = api.sessions.open(SESSION_TOKENS.first);
+    for (let i = 0; i < 150; i++) api.sessions.postFrom(SESSION_TOKENS.first, `Message ${i}`);
+    const { notes } = await start({ recordWaits: true });
+    await waitFor(() => session.acked === 150);
+    expect(channelNotes(notes)).toHaveLength(150);
+    expect(new Set(waits)).toEqual(new Set([5000]));
+  });
+
+  it("waits out a 429's Retry-After", async () => {
+    waits.length = 0;
+    const session = api.sessions.open(SESSION_TOKENS.first);
+    api.enqueueError(
+      '/v1/session/events',
+      'rate_limited',
+      { retry_after: 45, bucket: 'session_polls_per_minute' },
+      { headers: { 'Retry-After': '45' } },
+    );
+    await start({ recordWaits: true });
+    await waitFor(() => api.count('/v1/session/events') >= 2);
+    expect(waits[0]).toBeGreaterThanOrEqual(45_000);
+    expect(session.heartbeats).toContain('online');
   });
 
   it('stops when the session is revoked, and says why', async () => {
