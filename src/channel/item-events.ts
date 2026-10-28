@@ -178,7 +178,16 @@ export function repliedContent(
   );
 }
 
-/** work_item.unassigned: stop. */
-export function unassignedContent(owner: string, key: string, reason: string): string {
-  return `You were unassigned from ${key} (${unassignedReason(reason, owner)}). Stop work on it; don't post or edit it unless ${owner} asks again.`;
+/**
+ * work_item.unassigned: stop. `assigned` false: the session worked on the
+ * item through a mention or a hand-on, not an assignment, so it was
+ * released from it rather than unassigned.
+ */
+export function unassignedContent(
+  owner: string,
+  key: string,
+  reason: string,
+  assigned = true,
+): string {
+  return `You were ${assigned ? 'unassigned' : 'released'} from ${key} (${unassignedReason(reason, owner)}). Stop work on it; don't post or edit it unless ${owner} asks again.`;
 }

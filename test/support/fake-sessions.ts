@@ -670,7 +670,7 @@ export class FakeSessions {
           id,
           key: item?.key ?? 'DEMO-0',
           title: item?.title ?? '',
-          status: { id: u(7202), key: 'todo', name: 'To do', category: 'not_started' },
+          status: { id: u(7202), key: 'todo', name: null, category: 'not_started' },
         },
         bound_reason: 'assigned' as const,
         bound_at: at,

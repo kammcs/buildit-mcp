@@ -608,7 +608,7 @@ export class ChannelLoop {
       if (state.last?.thread_id === threadId) state.last = undefined;
       state.activeItems.delete(threadId);
       await this.send({
-        content: unassignedContent(owner, key, reason),
+        content: unassignedContent(owner, key, reason, event.data.assignment !== null),
         meta: {
           event: 'item_unassigned',
           thread_id: threadId,

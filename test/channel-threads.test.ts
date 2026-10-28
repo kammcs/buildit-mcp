@@ -14,6 +14,7 @@ import type { CallToolResult } from '@modelcontextprotocol/client';
 import { buildInstructions, ITEM_WORKER_AGENT } from '../src/server.js';
 import { uuidV5 } from '../src/tools/ask.js';
 import { CARD_IN_DM_NOTE, CARD_STEP } from '../src/tools/plans.js';
+import { statusName } from '../src/tools/threads.js';
 import {
   channelConfig,
   channelNotes,
@@ -340,5 +341,17 @@ describe("the lead's instructions", () => {
       }),
     });
     expect(c.client.getInstructions()).toContain('At most 4 workers run at once');
+  });
+});
+
+describe("a thread's status", () => {
+  it('names a built-in status (no name) from its key, else its category', () => {
+    expect(statusName({ key: 'todo', name: null, category: 'not_started' })).toBe('To do');
+    expect(statusName({ key: 'in_review', name: null, category: 'started' })).toBe('In review');
+    expect(statusName({ key: null, name: null, category: 'not_started' })).toBe('Not started');
+    expect(statusName({ key: 'qa', name: 'Ready for QA', category: 'started' })).toBe(
+      'Ready for QA',
+    );
+    expect(statusName(null)).toBeNull();
   });
 });

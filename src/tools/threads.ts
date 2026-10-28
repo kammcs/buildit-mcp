@@ -15,6 +15,31 @@ import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolDefinition } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
 
+/** Built-in statuses whose name doesn't follow from the key. */
+const BUILT_IN_NAMES: Readonly<Record<string, string>> = { todo: 'To do', canceled: 'Cancelled' };
+
+/** "in_review" as people read it: "In review". */
+const humanize = (key: string): string => {
+  const words = key.replace(/[_-]+/g, ' ').trim();
+  return words === '' ? '' : words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+/**
+ * A status's name. Built-in statuses come with a key and no name (the app
+ * names them in the person's language), so the name follows from the key,
+ * else from the category.
+ */
+export function statusName(
+  status: { key: string | null; name: string | null; category: string } | null,
+): string | null {
+  if (status === null) return null;
+  if (status.name !== null && status.name.trim() !== '') return sanitizeLabel(status.name, 60);
+  const key = status.key?.trim().toLowerCase() ?? '';
+  const named = key === '' ? undefined : (BUILT_IN_NAMES[key] ?? humanize(key));
+  const name = named !== undefined && named !== '' ? named : humanize(status.category);
+  return name === '' ? null : sanitizeLabel(name, 60);
+}
+
 const ThreadOutSchema = z.object({
   thread_id: z.string(),
   conversation_id: z.string(),
@@ -62,10 +87,7 @@ export function createListThreadsTool(state: ChannelState): ToolDefinition {
             : {
                 key: sanitizeLabel(t.item.key, 40),
                 title: sanitizeLabel(t.item.title, 300),
-                status:
-                  t.item.status?.name === null || t.item.status === null
-                    ? null
-                    : sanitizeLabel(t.item.status.name, 60),
+                status: statusName(t.item.status),
               },
         open_cards: t.open_cards,
         last_owner_message_at: t.last_owner_message_at,
