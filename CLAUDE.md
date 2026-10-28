@@ -42,7 +42,8 @@ The agent API is built and maintained by the buildIt.Social product team, in a p
 ```
 openapi/openapi.json    the agent API's contract (copied in, never edited)
 src/
-  index.ts              the buildit-mcp command: parse config, start stdio or HTTP
+  index.ts              the buildit-mcp command: parse config, start stdio or HTTP, or run a
+                        session command (connect, disconnect, status)
   config.ts             environment variables and flags, validated (never prints the token)
   log.ts                JSON logs to stderr, with token scrubbing
   version.ts            name, version, version comparison
@@ -71,10 +72,19 @@ src/
   tools/chat.ts         list_channels, read_channel, read_thread, list_pins, list_emoji
   tools/plans.ts        get_workflow, list_work_types, the propose_* tools, apply_plan
   tools/setup.ts        create_channel, create_project
-  transports/stdio.ts   stdio: token from BUILDIT_TOKEN, identity read at startup and refreshed
+  tools/reply.ts        reply (channel mode only; not in the catalog)
+  channel/api.ts        the session operations (connect flow, session, events, messages, heartbeat)
+  channel/loop.ts       channel mode: polls the session's events, gates the sender, sends
+                        notifications/claude/channel, acks
+  cli/commands.ts       connect (device flow), disconnect, status
+  secrets/keychain.ts   a folder's session token in the OS keychain (@napi-rs/keyring,
+                        optional), or a 0600 file
+  transports/stdio.ts   stdio: token from BUILDIT_TOKEN, identity read at startup and refreshed;
+                        --channel adds the channel capability, reply and the loop, 2025 handshake only
   transports/http.ts    Streamable HTTP: stateless, Bearer per request, Host/Origin checks
 test/
   support/fake-api.ts   in-process fake of the agent API on the generated contract (made-up data)
+  support/fake-sessions.ts  the fake's agent sessions and connect flow
   support/harness.ts    an in-memory MCP client on the real catalog, and hostile-content checks
   support/test-tools.ts stand-in tools across toolsets, for registry and transport tests
   *.test.ts             vitest
@@ -100,7 +110,7 @@ Key rules the code relies on:
 
 - **stdout is the protocol in stdio mode.** Never write to it; log through `Logger` (stderr). ESLint forbids `console` in `src/`.
 - **Never log tokens or content.** Log codes, ids, statuses and durations; never titles, descriptions, comments, query strings or bodies. The logger scrubs tokens as a backstop, not as permission.
-- **Stateless.** Nothing about a caller survives the request (HTTP) or the connection (stdio), with one exception: `IdentityCache` (`src/identity.ts`) keeps each token's scopes (and whether it has project or channel limits) for 30 seconds in HTTP mode, so listing tools doesn't read `/v1/me` every time. It is keyed by an HMAC of the token (never the token), holds only those, is bounded, and is evicted on any auth error. Add no other cache keyed by token. `ApiClient.served` keeps what `/v1/meta` last said about the deployment (its version and the operations it serves), not about the caller; in HTTP mode it lives only as long as the request.
+- **Stateless.** Nothing about a caller survives the request (HTTP) or the connection (stdio), with one exception: `IdentityCache` (`src/identity.ts`) keeps each token's scopes (and whether it has project or channel limits) for 30 seconds in HTTP mode, so listing tools doesn't read `/v1/me` every time. It is keyed by an HMAC of the token (never the token), holds only those, is bounded, and is evicted on any auth error. Add no other cache keyed by token. Channel mode and the session commands are the one place a token is stored: the folder's session token, in the OS keychain (or the 0600 file), written only by `connect` and removed by `disconnect` or when the session ends. `ApiClient.served` keeps what `/v1/meta` last said about the deployment (its version and the operations it serves), not about the caller; in HTTP mode it lives only as long as the request.
 - **Tool descriptions are static text.** Never build them from server data.
 - **People-written text is wrapped.** Every tool, resource and plan preview that returns titles, descriptions, comments, pages, messages, goals or descriptions passes them through `wrapUntrusted()`; short labels (names, keys) go through `sanitizeLabel()`.
 - **API refusals are tool results**, not exceptions: throw `ApiError` (the client does) and `server.ts` turns it into `isError: true` with the code, message, hint and details.

@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://bu
 
 It runs on your own machine (stdio) or as a stateless HTTP server for a team. It holds no secrets of its own: each person's token stays in their own client.
 
-**Status:** 0.3.0, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all).
+**Status:** 0.4.0, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`.
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
@@ -26,7 +26,7 @@ Nothing to install by hand: clients start the server with `npx`, which downloads
 npx -y @kammcs/buildit-mcp@latest --help
 ```
 
-- **Versions:** `@latest` gets the newest release each time the client starts the server, so you get fixes and new tools as they ship; `@0.3.0` pins one release. Don't use a range such as `@0`: npx keeps the copy it first installed for a range and never updates it. The server tells you when the API needs a newer one ([Versions](#versions)).
+- **Versions:** `@latest` gets the newest release each time the client starts the server, so you get fixes and new tools as they ship; `@0.4.0` pins one release. Don't use a range such as `@0`: npx keeps the copy it first installed for a range and never updates it. The server tells you when the API needs a newer one ([Versions](#versions)).
 - **Windows:** a client that starts `npx` directly fails there (`spawn npx ENOENT`: npx is a `.cmd` file), as Claude Code does. Use `cmd` as the command, with `/c`, `npx`, `-y` and `@kammcs/buildit-mcp@latest` as its arguments (the Claude Code example below shows it).
 - Also available as a [container image](#container-image) and, for Claude Desktop, as a [bundle](#claude-desktop).
 
@@ -45,20 +45,23 @@ The server is then `node /path/to/buildit-mcp/dist/index.js`: use that command a
 
 Every setting is an environment variable, and also a flag (the flag wins). The token is the exception: it is only ever read from the environment, because other processes can see flags.
 
-| Variable                  | Flag                | Default                                             | Meaning                                                                                                                                                             |
-| ------------------------- | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BUILDIT_TOKEN`           | none                |                                                     | Your personal access token (stdio mode). Ignored in HTTP mode, where each request carries its own.                                                                  |
-| `BUILDIT_API_URL`         | `--api-url`         | `https://api.buildit.social/functions/v1/agent-api` | The agent API. Must be `https://` (plain `http://` only for localhost).                                                                                             |
-| `BUILDIT_TOOLSETS`        | `--toolsets`        | `items,comments`                                    | Comma-separated toolsets, or `all`. Known: `items`, `comments`, `planning`, `pages`, `chat`, `admin`, `destructive`.                                                |
-| `BUILDIT_READ_ONLY`       | `--read-only`       | `false`                                             | List only tools that change nothing.                                                                                                                                |
-| `BUILDIT_EXCLUDE_TOOLS`   | `--exclude-tools`   |                                                     | Comma-separated tool names to hide.                                                                                                                                 |
-| `BUILDIT_LOG_LEVEL`       | `--log-level`       | `info`                                              | `debug`, `info`, `warn` or `error`. Logs are JSON lines on stderr and never contain tokens or content.                                                              |
-| `BUILDIT_HTTP`            | `--http`            | `false`                                             | Serve Streamable HTTP instead of stdio.                                                                                                                             |
-| `BUILDIT_HOST`            | `--host`            | `127.0.0.1`                                         | HTTP bind address.                                                                                                                                                  |
-| `BUILDIT_PORT`            | `--port`            | `8765`                                              | HTTP port.                                                                                                                                                          |
-| `BUILDIT_ALLOWED_HOSTS`   | `--allowed-hosts`   | localhost names on a loopback bind                  | Hostnames accepted in the `Host` header (DNS-rebinding protection). Required when binding off loopback, unless `BUILDIT_ALLOW_ANY_HOST` is set.                     |
-| `BUILDIT_ALLOWED_ORIGINS` | `--allowed-origins` | localhost names on a loopback bind                  | Hostnames accepted in the `Origin` header. Off loopback, requests with any other `Origin` are refused. `moz-extension://*`-style entries admit a browser extension. |
-| `BUILDIT_ALLOW_ANY_HOST`  | `--allow-any-host`  | `false`                                             | Off loopback, serve without checking the `Host` header (for example behind a proxy that checks it). Without it, such a bind needs `BUILDIT_ALLOWED_HOSTS`.          |
+| Variable                  | Flag                | Default                                             | Meaning                                                                                                                                                                                             |
+| ------------------------- | ------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BUILDIT_TOKEN`           | none                |                                                     | Your personal access token (stdio mode). Ignored in HTTP mode, where each request carries its own.                                                                                                  |
+| `BUILDIT_API_URL`         | `--api-url`         | `https://api.buildit.social/functions/v1/agent-api` | The agent API. Must be `https://` (plain `http://` only for localhost).                                                                                                                             |
+| `BUILDIT_TOOLSETS`        | `--toolsets`        | `items,comments`                                    | Comma-separated toolsets, or `all`. Known: `items`, `comments`, `planning`, `pages`, `chat`, `admin`, `destructive`.                                                                                |
+| `BUILDIT_READ_ONLY`       | `--read-only`       | `false`                                             | List only tools that change nothing.                                                                                                                                                                |
+| `BUILDIT_EXCLUDE_TOOLS`   | `--exclude-tools`   |                                                     | Comma-separated tool names to hide.                                                                                                                                                                 |
+| `BUILDIT_LOG_LEVEL`       | `--log-level`       | `info`                                              | `debug`, `info`, `warn` or `error`. Logs are JSON lines on stderr and never contain tokens or content.                                                                                              |
+| `BUILDIT_HTTP`            | `--http`            | `false`                                             | Serve Streamable HTTP instead of stdio.                                                                                                                                                             |
+| `BUILDIT_HOST`            | `--host`            | `127.0.0.1`                                         | HTTP bind address.                                                                                                                                                                                  |
+| `BUILDIT_PORT`            | `--port`            | `8765`                                              | HTTP port.                                                                                                                                                                                          |
+| `BUILDIT_ALLOWED_HOSTS`   | `--allowed-hosts`   | localhost names on a loopback bind                  | Hostnames accepted in the `Host` header (DNS-rebinding protection). Required when binding off loopback, unless `BUILDIT_ALLOW_ANY_HOST` is set.                                                     |
+| `BUILDIT_ALLOWED_ORIGINS` | `--allowed-origins` | localhost names on a loopback bind                  | Hostnames accepted in the `Origin` header. Off loopback, requests with any other `Origin` are refused. `moz-extension://*`-style entries admit a browser extension.                                 |
+| `BUILDIT_ALLOW_ANY_HOST`  | `--allow-any-host`  | `false`                                             | Off loopback, serve without checking the `Host` header (for example behind a proxy that checks it). Without it, such a bind needs `BUILDIT_ALLOWED_HOSTS`.                                          |
+| `BUILDIT_CHANNEL`         | `--channel`         | `false`                                             | Claude Code channel mode (stdio): see [Talk to Claude Code from buildIt.Social](#talk-to-claude-code-from-builditsocial). The token then comes from the folder's saved session, or `BUILDIT_TOKEN`. |
+| `BUILDIT_FOLDER`          | `--folder`          | the working directory                               | In channel mode, the folder whose saved session is used.                                                                                                                                            |
+| `BUILDIT_TOKEN_STORE`     | none                | the OS keychain                                     | `file` keeps session tokens in a file readable only by you instead of the OS keychain.                                                                                                              |
 
 The tools you see depend on the enabled toolsets, read-only mode, the exclude list, and your token's scopes: a token with only `projects:read` never sees write tools, and a token limited to some projects or channels doesn't see `create_channel` and `create_project`. If buildIt.Social refuses the token, only `whoami` is listed, so the agent can tell you why. If the scopes can't be read for a moment (a rate limit, the network), every tool your configuration allows is listed and buildIt.Social checks each call; the scopes are read again on the next list.
 
@@ -230,6 +233,95 @@ Without the bundle, don't put a token in `claude_desktop_config.json`: it doesn'
 }
 ```
 
+## Talk to Claude Code from buildIt.Social
+
+With channel mode, the Claude Code session in a folder becomes a **session of your personal agent** in buildIt.Social. You write to the agent in the app, on your computer or your phone; the message arrives in the running Claude Code session, which works on it and answers you in the same thread. The session can also work on the items of the projects you connected it to, as you, labelled as done through the agent.
+
+It works only with the **Claude Code CLI** (not Claude Desktop), because it uses Claude Code [channels](https://code.claude.com/docs/en/channels.md), a research preview whose flags and protocol may still change.
+
+### What you need
+
+- A personal agent in buildIt.Social (Settings → Agents), in an org that hasn't turned agents in the app off (they are on by default).
+- The Claude Code CLI, signed in with a **claude.ai account or a Claude Console API key**. Channels aren't available with Amazon Bedrock, Google Cloud's Agent Platform or Microsoft Foundry.
+- On a **claude.ai Team or Enterprise** plan, an org Owner must turn channels on first: Organization settings → Claude Code → Channels (or `channelsEnabled: true` in managed settings). Until then Claude Code says the channel is "blocked by org policy".
+- Node.js 20 or newer.
+
+### 1. Install or upgrade
+
+Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer. From a clone, use `node /path/to/buildit-mcp/dist/index.js` in place of `npx -y @kammcs/buildit-mcp@latest` below.
+
+### 2. Connect the folder
+
+In a terminal, in the folder where you run Claude Code (the project or repository), connect it to the projects it may work on:
+
+```sh
+npx -y @kammcs/buildit-mcp@latest connect --project DEMO
+```
+
+It prints a link and a code. Open the link, sign in to buildIt.Social if you need to, and check that the app shows the same code. The approval screen says what is connecting ("Claude Code on your computer's name"), as which of your agents, to which projects and with which scopes; untick any scope you don't want to give, then approve. Approve only a code you started yourself. The code works for 10 minutes; once you approve, the command saves the session's token in your OS keychain for this folder and says what to do next.
+
+- `--project` takes up to 10 project keys (repeat it, or separate keys with commas). The session reaches only those projects, and never more than you can.
+- `--label <name>` names the session in buildIt.Social (1 to 40 characters; the folder's name by default). The agent's messages show as "agent · label".
+- `--folder <path>` connects another folder than the working directory; `--api-url` another buildIt.Social deployment.
+- No personal access token is involved: the session has a token of its own (`buildit_ags_...`), which the CLI keeps and never prints. It expires after 30 days unused.
+
+`npx -y @kammcs/buildit-mcp@latest status` shows the folder's session and whether buildIt.Social still accepts it; `disconnect` forgets the folder's token (the session stays listed in the app until you revoke it there, or it expires).
+
+### 3. Add the server to Claude Code, with `--channel`
+
+In the same folder:
+
+```sh
+claude mcp add buildit -- npx -y @kammcs/buildit-mcp@latest --channel
+```
+
+On Windows, from PowerShell:
+
+```powershell
+claude mcp add buildit -- cmd /c npx -y "@kammcs/buildit-mcp@latest" --channel
+```
+
+This adds it for this folder only (`--scope local`, the default), which is what you want: each folder has its own session. No `BUILDIT_TOKEN` is needed, since the server reads the token `connect` saved for the folder Claude Code starts it in. A local entry named `buildit` wins over a user-scope `buildit` entry (with a personal access token) in this folder. If the server can't tell the folder (some setups start it elsewhere), add `--folder /path/to/folder` after `--channel`.
+
+### 4. Start Claude Code with the channel
+
+Until the buildit channel is on Claude Code's approved channel list, start Claude Code with the development flag:
+
+```sh
+claude --dangerously-load-development-channels server:buildit
+```
+
+Claude Code shows a warning about development channels first: choose "I am using this for local development". A line under the banner then says that messages from `server:buildit` arrive in this session. Without the flag, the server still gives Claude its tools and `reply`, but messages from the app don't arrive. Channels need an interactive session: they don't run under `claude -p` or the Agent SDK.
+
+### Using it
+
+- Write to your agent in its conversation in buildIt.Social. Claude Code shows the message in the session and Claude answers in the same thread with the `reply` tool. New messages are picked up within about 5 seconds.
+- Only your own messages reach the session: buildit-mcp drops anyone else's, and buildIt.Social sends only yours.
+- Messages sent while the session isn't running wait in buildIt.Social (for up to 7 days) and arrive when you start Claude Code again in that folder, which resumes the same session and its threads.
+- With several folders connected, the app shows each session and lets you choose where a message goes; a thread stays with the session that started it, and a thread of a session that ended can be handed to another.
+- To stop a session for good, revoke it in buildIt.Social (Settings → Agents): the running server stops at its next poll and clears the folder's saved token.
+
+### Where the token is kept
+
+| System  | Store                                                                                                                                                |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows | Windows Credential Manager (a generic credential of the service `buildit-mcp`)                                                                       |
+| macOS   | The login keychain (service `buildit-mcp`). macOS may ask once whether Node.js may read it, and again after Node.js is updated: choose Always Allow. |
+| Linux   | The Secret Service (GNOME Keyring, KWallet), which needs a desktop session                                                                           |
+
+Each folder and deployment has its own entry, named by a hash of the folder's real path and the API's address. The keychain is reached through the optional `@napi-rs/keyring` package, which npm installs with buildit-mcp where it has a build for the system. When there is no usable keychain (a headless Linux, WSL, a system without a build), the token goes to a file readable only by you, and the CLI says so: `%APPDATA%\buildit-mcp\sessions.json` on Windows, `~/Library/Application Support/buildit-mcp/sessions.json` on macOS, `~/.config/buildit-mcp/sessions.json` elsewhere (`$XDG_CONFIG_HOME` if set). Set `BUILDIT_TOKEN_STORE=file` to use the file directly. `BUILDIT_TOKEN` set to a session token overrides the store.
+
+### Troubleshooting
+
+- **"No buildIt.Social session is saved for ..."**: the server looked for a session for that folder and found none. Run `connect` in that folder, or point the server at the right one with `--folder`. A folder reached through another path (a symbolic link, another drive letter) is the same folder only if its real path is the same.
+- **Messages don't arrive:** check that Claude Code was started with `--dangerously-load-development-channels server:buildit`, and that `/mcp` shows `buildit` connected. "Blocked by org policy" means your Team or Enterprise org hasn't turned channels on. Sessions signed in through Bedrock, Agent Platform or Foundry can't use channels. For details, start Claude Code with `--debug` and read `~/.claude/debug/<session-id>.txt`; add `-e BUILDIT_LOG_LEVEL=debug` to the `claude mcp add` command for the server's own logs (they never contain tokens or message text).
+- **The code expired, or the connection was denied:** run `connect` again for a new code.
+- **"The session was revoked or has expired"** in the logs: the session ended (revoked in the app, or unused for 30 days), and its saved token was cleared. Run `connect` again.
+- **The session is paused:** the org turned agents in the app off, or your membership was suspended. The server keeps trying every minute and resumes when it is allowed again.
+- **macOS keeps asking for the keychain:** choose Always Allow; it asks again when the Node.js binary changes.
+- **WSL:** it can't reach Windows Credential Manager, so the token goes to the file in your Linux home. Run `connect` inside WSL if Claude Code runs there.
+- **`spawn npx ENOENT` on Windows:** use `cmd /c npx` as above.
+
 ## HTTP mode
 
 ```sh
@@ -261,7 +353,7 @@ Bound to anything but loopback, the server refuses to start without `BUILDIT_ALL
 
 ### Container image
 
-`ghcr.io/kammcs/buildit-mcp` runs the server in HTTP mode on port 8765, as a non-root user, with a health check on `/healthz`. Each release is tagged with its version (`0.3.0`) and its major version (`0`), for amd64 and arm64. No token is in the image: each request brings its own.
+`ghcr.io/kammcs/buildit-mcp` runs the server in HTTP mode on port 8765, as a non-root user, with a health check on `/healthz`. Each release is tagged with its version (`0.4.0`) and its major version (`0`), for amd64 and arm64. No token is in the image: each request brings its own.
 
 ```sh
 docker run -d -p 8765:8765 -e BUILDIT_ALLOWED_HOSTS=mcp.example.com ghcr.io/kammcs/buildit-mcp:0
@@ -283,7 +375,8 @@ docker run -i --rm -e BUILDIT_HTTP=false -e BUILDIT_TOKEN ghcr.io/kammcs/buildit
 - **The agent acts as you.** Everything it does is done with your permissions and is labelled in buildIt.Social as done through your agent.
 - **People-written content is marked.** Titles, descriptions, comments, pages and messages, the names of people, projects, channels and the like (and GitHub titles, branch names and authors) come back inside `<untrusted_content>` blocks, and the server tells the agent to treat them as data, never instructions. Each block carries a random id, repeated in its closing tag, and only that closing tag ends it. This reduces, but cannot remove, the risk of prompt injection, so prefer narrow scopes and review what an agent proposes.
 - **Destructive and admin changes are previewed and need your confirmation** ([above](#preview-then-confirm)), and their toolsets are off unless you turn them on. Read the preview before you say yes: it is what will happen.
-- **Chat is read only**, and never reaches direct messages.
+- **Chat is read only**, and never reaches direct messages. The one exception is channel mode's `reply`, which writes only in your agent's own conversation with you.
+- **Channel mode passes on only your own messages**, because whoever can write into a Claude Code session can steer it. A session token reaches only the projects you approved, never more than you can, and only your agent's conversation with you; revoke it in the app when you no longer need it.
 - **Logs** are JSON on stderr and never contain tokens or content.
 
 ### Hardening

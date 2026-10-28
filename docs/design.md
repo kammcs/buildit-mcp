@@ -56,6 +56,26 @@ The server never stores a token. In stdio mode it reads `BUILDIT_TOKEN` from its
 
 In HTTP mode the token is the caller's own buildIt.Social API credential, forwarded to the API on their behalf. It is not a token issued to this MCP server, so this is not the OAuth "token passthrough" pattern the MCP specification forbids. OAuth sign-in for remote connectors is planned for later; it will use tokens issued for this server, with proper audiences.
 
+## Identity: agent sessions (channel mode)
+
+A person can also give a Claude Code session its own identity: a **session** of their personal agent in buildIt.Social.
+
+- **Connecting** is the OAuth device flow (RFC 8628) in the API's envelope. `buildit-mcp connect` calls `connect_start` (no token) with what is connecting (`Claude Code`), the machine's name, a label and the project keys; it prints the server's link and short code, and polls `connect_poll` at the server's interval (`authorization_pending`; `slow_down` lengthens the wait; `access_denied` and `expired_token` end it). The person approves in the app, signed in, choosing the agent, the projects and the scopes; the CLI never sees their credentials. The token comes back once, from the poll that follows the approval.
+- **A session token** (`buildit_ags_`, the same format as a personal access token) acts as its owner, like a personal access token, but reaches only the session's projects and scopes (never more than the owner can), and its own direct conversation with the owner through the session operations (`get_session`, `list_session_events`, `ack_session_events`, `post_session_message`, `session_heartbeat`), which a personal access token can't use (`session_token_required`). It expires after 30 days unused, and the owner or an org admin can revoke the session in the app at any time.
+- **The token is kept per folder** in the OS keychain (`src/secrets/keychain.ts`, through the optional `@napi-rs/keyring`: Windows Credential Manager, the macOS Keychain, the Secret Service), under the service `buildit-mcp` and the hex SHA-256 of the folder's real path (case-folded on Windows and macOS) and the API's origin. So Claude Code restarted in the same folder resumes the same session and its threads, and two folders are two sessions. Without a usable keychain the token goes to a JSON file with mode 0600 in the user's config folder, with a warning. This is the one thing buildit-mcp stores, and only in channel mode and the session commands; `BUILDIT_TOKEN` still wins when it is set.
+
+## Channel mode
+
+`--channel` runs the stdio server as a [Claude Code channel](https://code.claude.com/docs/en/channels-reference.md):
+
+- It declares `capabilities.experimental["claude/channel"] = {}`, adds channel instructions (messages arrive as `<channel>` tags; answer with `reply`, passing `thread_id`), and lists `reply` next to the usual tools (unless read-only mode or the exclude list says otherwise).
+- It keeps the connection on the **2025-11-25 handshake**: Claude Code doesn't register a channel server that negotiates 2026-07-28, so a request that opens with a 2026-07-28 `_meta` claim is answered with the unsupported-version error naming only the 2025 revisions, and the client falls back to `initialize`.
+- Once the client has initialized, `src/channel/loop.ts` reads `GET /v1/session` (the owner, the session, the poll interval), says it is online, and polls `GET /v1/session/events`. Each new `message.posted` event whose sender is the owner becomes one `notifications/claude/channel` notification, `{content: <the message's text>, meta: {thread_id, message_id, session}}`, where `thread_id` is the thread's root (the message itself for a top-level message) and `session` the session's label. Only then is the page acknowledged (`POST /v1/session/events/ack`). Repeats (by event and message id), other event types and other senders are dropped and acknowledged; the server sends only the owner's messages, and the loop checks again, because whoever can write into a channel can steer the session. An acknowledgement counts in the same per-minute window as a poll, so the loop skips a poll after one.
+- Network trouble, rate limits and the API's 5xx back off (honouring `retry_after`); a suspended session or sessions turned off for the org wait a minute and try again; `token_revoked` and `token_expired` stop the loop for good and clear the folder's saved token; a personal access token (`session_token_required`) stops it too. When the connection closes the loop stops and says the session is offline.
+- `reply` posts with `POST /v1/session/messages` as the agent, labelled with the session, in the thread named or the thread of the latest message that arrived (a new message when none has). Its idempotency key is the message's id, generated when the agent gives none and returned.
+
+The message text is the owner's own, so it is not wrapped as untrusted content: it is the person directing the session. Everything the other tools return from buildIt.Social is still wrapped.
+
 ## Transports
 
 ### stdio (default)
@@ -93,6 +113,8 @@ The server uses the official MCP TypeScript SDK (v2) and serves both:
 
 - **2026-07-28**, the current revision: stateless, with the protocol version and capabilities in each request's `_meta`, `server/discover`, and cache hints on `tools/list`;
 - **2025-11-25**, through the SDK's stateless fallback for clients that still open with `initialize`.
+
+Channel mode serves only 2025-11-25 ([Channel mode](#channel-mode)).
 
 Both are covered by the tests (stdio and HTTP), by the Inspector smoke test, and by the official conformance suite.
 
@@ -182,10 +204,11 @@ The MCP specification lets a server ask the person directly (elicitation), and t
 
 ## Logs
 
-Logs are JSON lines on stderr: a timestamp, a level, a message and fields such as the tool name, the status, the duration and the request id. They never contain tokens or content: no titles, descriptions, comments, query strings or bodies. An API call is logged by its operation and its path template (`/v1/projects/{key}/sprints/{sprint}`), never the filled-in path, which can carry names. As a second line of defence, the logger scrubs bearer credentials and token-shaped strings from everything it writes.
+Logs are JSON lines on stderr: a timestamp, a level, a message and fields such as the tool name, the status, the duration and the request id. They never contain tokens or content: no titles, descriptions, comments, query strings or bodies. An API call is logged by its operation and its path template (`/v1/projects/{key}/sprints/{sprint}`), never the filled-in path, which can carry names. As a second line of defence, the logger scrubs bearer credentials and token-shaped strings (personal access and session tokens) from everything it writes. Channel mode logs event and message ids and why an event was dropped, never the message text.
 
 ## Self-hosting
 
+- **Channel mode:** Claude Code runs `npx -y @kammcs/buildit-mcp@latest --channel` in the folder that `connect` connected, with no token in its configuration.
 - **On one machine:** the client runs `npx -y @kammcs/buildit-mcp@latest` over stdio, with `BUILDIT_TOKEN` in the environment (see the README for each client). For Claude Desktop, the `.mcpb` bundle keeps the token as a sensitive user setting in the system's secure storage, since Desktop's config file doesn't expand environment variables.
 - **For a team:** run `npx -y @kammcs/buildit-mcp@latest --http --host 0.0.0.0` (or the container image) behind a TLS-terminating proxy, set `BUILDIT_ALLOWED_HOSTS` (required off loopback, unless `BUILDIT_ALLOW_ANY_HOST=true` says the proxy checks the `Host` header; and `BUILDIT_ALLOWED_ORIGINS` if a browser-based client needs it), enable only the toolsets the team needs (a request's header can narrow them, never add one), and optionally restrict client IPs at the proxy. The server never uses the client's address, so it ignores `X-Forwarded-*` headers and has no trusted-proxies setting; the proxy passes `Host` through. Each member puts the team URL and their own token in their client. The server holds no buildIt.Social secret: losing it exposes only traffic in flight. The container image `ghcr.io/kammcs/buildit-mcp` (HTTP mode by default, non-root, health check on `/healthz`, no token inside) is the easiest way to run it, and [deploy/](../deploy/README.md) runs it behind Caddy with Docker Compose.
 - **Against another buildIt.Social deployment:** point `BUILDIT_API_URL` at its agent API. Nothing else is assumed.
@@ -193,6 +216,7 @@ Logs are JSON lines on stderr: a timestamp, a level, a message and fields such a
 ## Testing
 
 - Unit and integration tests (vitest) run against an in-process fake of the agent API with made-up data; nothing talks to a real server. The fake is built on the generated contract: it routes by the contract's operations, refuses requests that don't match the exact schemas, and checks each of its own responses against them, so a contract change breaks the tests rather than production. Every tool, resource and prompt is tested through an MCP client: success, the main errors, hostile titles, descriptions, comments, pages and messages, pagination, response size, read-only mode, scope gating per toolset, and the plan flow (propose, apply, used, expired, stale, another token's handle). The fake can also answer like an older API (no error hints, no transition moves, no members route) to test the fallbacks.
+- Channel mode is tested end to end in process (startStdio on streams, an MCP client, the fake API's sessions: the capability, the 2025 handshake for a 2026-07-28 client, notifications before acks, sender gating, repeats, `reply`, revocation, expiry and the offline heartbeat), and through the built binary. The session commands are tested against the fake's device flow (approve, `slow_down`, deny, expiry) with an in-memory keychain, and the token store with a keychain fake that fails, to cover the file fallback.
 - A privacy guard (`npm run privacy`, also a test) fails when any file holds private details of the product: decision numbers, plan sections, database internals, real names, addresses outside `example.com`, private hostnames or the product team's project key. Its rules carry their own examples, which the test checks.
 - [evals/](../evals/README.md) holds about thirty realistic tasks that a maintainer runs by hand with a real client against a test org, to tune tool descriptions and errors.
 - `npm run inspect` drives the built server with the official MCP Inspector CLI over stdio and HTTP, in both protocol versions.
