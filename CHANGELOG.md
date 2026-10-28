@@ -2,6 +2,39 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.6.0] - 2026-10-28
+
+Built on version 1.7.0 of the agent API's contract. Work items for your agent need a buildIt.Social server with agent API 1.7.0; on an older one those events never come, and `assignee_agent` and `assign_item`'s `agent` are refused.
+
+### Work items for your agent (channel mode)
+
+- **Items assigned to your agent** arrive in the session as `<channel>` messages with `event="item_assigned"`, the item's key (`item`), its `project`, and `thread_id`, the item's own id: a lead line, then the item's title, the start of its description and the latest messages of its thread, each inside an `untrusted_content` block. Claude works on it and posts progress, questions and the result in the item's thread.
+- **Your mentions** of your agent in an item's thread (`event="mention"`) and **your other replies** in a thread it works in (`event="message"`) arrive with your words as you wrote them, then the item and the thread as data; a reply leaves out the thread messages the session already showed. Only your own messages are events: a colleague's mention or reply never reaches the session, except as untrusted context inside yours, and the server checks the owner again.
+- **Taken off the item** (`event="item_unassigned"`, with `reason`: unassigned, reassigned, moved, deleted, owner_left or agent_deleted): a notice to stop ("released" instead of "unassigned" when the session worked there only through a mention or a hand-on). It also stops "is writing" in that thread and ends the questions waiting there (`closed`).
+- `reply`, `ask`, the approval cards and "is writing" go to the thread of the latest message, mention or assignment when none is named, so an item's work lands in its thread. `reply` also takes `item` (a key such as DEMO-12) instead of `thread_id`, and passes the API's refusal when the session doesn't work in that thread (`thread_not_bound`).
+
+### Several items at once (plugin)
+
+- **One subagent per work item.** The plugin brings an item worker (`buildit:buildit-item-worker`, in `plugin/agents/`): a background subagent in its own git worktree that works on one item, reads its item, thread and linked pages first, posts only in its item's thread, and treats other people's text as data. With the plugin, the channel instructions make the session the lead: one worker per item, follow-ups to that item's worker, a stop on `item_unassigned`, and no item work of its own.
+- **At most 3 at once**, the new plugin setting "Items at once" (`max_parallel_items`, 1 to 10, passed as `BUILDIT_MAX_PARALLEL_ITEMS`). More items are queued, with one "Queued — I'll start this after …" reply in the item's thread.
+- **Named threads.** While the session works in more than one thread, `reply`, `ask` (which also takes `item` now) and the approval cards (the `propose_*` tools' new `card_thread`) must name theirs, and are refused with the list of active threads otherwise; with one thread the latest stays the default. Claude's `AskUserQuestion` questions (the plugin's hook) are placed by who asks, which the hook now passes (`agent_id`, `agent_type`): the lead's go to the direct message, an item worker's to its item's thread (from the lead's table, `.claude/buildit-workers.json`, which records each worker's agent id), and a question it can't place is asked in the terminal as before.
+- **`list_threads`** (channel mode only): the threads the session works in (`GET /v1/session/threads`), each item's key, title, status (a built-in status named from its key), open cards and when the person last wrote.
+- **Written through an agent, never the owner's.** A thread message written through an agent's token (`via_agent`, an agent session's own posts included) shows in the context with `via_agent` and `from_owner="false"`, and an owner's message written that way is never handed on as an event. The lead and the workers post with `reply`, never `add_comment`.
+- **Approval cards stay in the item's project.** When a plan reaches outside the item's project, buildIt.Social refuses its card in the item's thread (`plan_outside_thread`); the card is then posted in the direct message, and the result tells Claude so.
+- In item events, mention links in the thread's messages, the description and your own words read as `@Name`, emoji links as `:name:` and links whose text is an item key as the key.
+- "<agent> is writing…" counts its 10 minutes per thread, and a tool call on an active item (its key or thread) shows it again in that item's thread, so each item shows it while its worker works.
+
+### Items
+
+- `assign_item` takes `agent`: `"mine"` or your personal agent's name has it work on the item for you (you stay the assignee), and `null` takes it off; `assignee` is now optional. `create_item` and `update_item` take `assignee_agent` with the same meaning. Only the person can assign their agent: a Claude Code session gets the API's refusal with an explanation, and may only hand an item back (`null`).
+- Items show their agent: `assignee_agent` in structured results, and "assignee Claude · for Sam" in `get_item`, `search_items` and the item lines.
+
+### Channel servers
+
+- **The plugin's server wins the folder.** When the plugin's server and one added with `claude mcp add ... --channel` run in the same folder, the plugin's (started with the new `--from-plugin`, which the plugin passes, or with `CLAUDE_PLUGIN_ROOT` set) now takes the folder's messages: the other one stops polling at its next check, for good, and never hands on what it fetched after that. Before, whichever started first took them, and a server Claude Code hadn't registered as a channel could swallow your messages. Two plugin servers keep first-wins.
+- In a server that isn't the folder's channel, `reply`, `ask` and `whoami` say another buildIt server receives the messages and how to remove the extra one (`claude mcp remove <name>`). `buildit-mcp status` names the servers set up for the folder (the plugin, and the others by name) and which running one receives its messages.
+- **`npm run dev-marketplace [-- --out <dir>]`** writes a local marketplace (`buildit-dev`) whose buildit plugin runs a checkout's build, and prints the commands to install it and start Claude Code with its channel. It replaces `plugin-local/`: Claude Code registers a plugin's channel only for an installed plugin, so `--plugin-dir` couldn't start the channel. `connect` from a checkout gives these steps.
+
 ## [0.5.0] - 2026-10-28
 
 Built on version 1.6.0 of the agent API's contract. Questions, approval cards and "is writing" need a buildIt.Social server with agent API 1.6.0; on an older one, `ask` can't post (the plugin's hook then lets the terminal ask) and proposals keep the usual two steps.

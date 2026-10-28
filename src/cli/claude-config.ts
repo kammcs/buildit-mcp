@@ -52,24 +52,41 @@ export function isChannelServer(entry: unknown): boolean {
   );
 }
 
-/** Where a buildit-mcp channel server is configured for the folder ("~/.claude.json", ".mcp.json"). */
-export function channelServerPlaces(folder: string, home: string = homedir()): string[] {
-  const places: string[] = [];
+/** A buildit-mcp channel server configured for the folder outside the plugin: its name, and where. */
+export interface ChannelServer {
+  /** The name Claude Code knows it by (what `claude mcp remove` takes). */
+  name: string;
+  /** "~/.claude.json" or ".mcp.json". */
+  place: string;
+}
+
+/** The buildit-mcp channel servers configured for the folder outside the plugin. */
+export function channelServers(folder: string, home: string = homedir()): ChannelServer[] {
+  const found: ChannelServer[] = [];
+  const add = (servers: unknown, place: string): void => {
+    for (const [name, entry] of Object.entries(recordOf(servers))) {
+      if (isChannelServer(entry) && !found.some((f) => f.name === name && f.place === place)) {
+        found.push({ name, place });
+      }
+    }
+  };
   const user = readJson(join(home, '.claude.json'));
   if (user !== undefined) {
-    const servers = Object.values(recordOf(user.mcpServers));
+    add(user.mcpServers, '~/.claude.json');
     const id = folderIdentity(folder);
     const project = Object.entries(recordOf(user.projects)).find(
       ([path]) => folderIdentity(path) === id,
     )?.[1];
-    const projectServers = Object.values(recordOf(recordOf(project).mcpServers));
-    if ([...servers, ...projectServers].some(isChannelServer)) places.push('~/.claude.json');
+    add(recordOf(project).mcpServers, '~/.claude.json');
   }
   const local = readJson(join(folder, '.mcp.json'));
-  if (local !== undefined && Object.values(recordOf(local.mcpServers)).some(isChannelServer)) {
-    places.push('.mcp.json');
-  }
-  return places;
+  if (local !== undefined) add(local.mcpServers, '.mcp.json');
+  return found;
+}
+
+/** Where a buildit-mcp channel server is configured for the folder ("~/.claude.json", ".mcp.json"). */
+export function channelServerPlaces(folder: string, home: string = homedir()): string[] {
+  return [...new Set(channelServers(folder, home).map((s) => s.place))];
 }
 
 const isPluginKey = (key: string): boolean =>
@@ -95,7 +112,9 @@ export function duplicateChannelWarning(
   folder: string,
   home: string = homedir(),
 ): string | undefined {
-  const places = channelServerPlaces(folder, home);
-  if (places.length === 0 || !pluginConfigured(folder, home)) return undefined;
-  return `Warning:  the buildit plugin is installed, and ${places.join(' and ')} also starts "buildit-mcp --channel" for this folder. Only one of them can be the channel: remove the other server (claude mcp remove <name>), then restart Claude Code.`;
+  const servers = channelServers(folder, home);
+  if (servers.length === 0 || !pluginConfigured(folder, home)) return undefined;
+  const places = [...new Set(servers.map((s) => s.place))];
+  const names = servers.map((s) => `"${s.name}"`).join(', ');
+  return `Warning:  the buildit plugin is installed, and ${places.join(' and ')} also starts "buildit-mcp --channel" for this folder (${names}). Only one of them can be the channel, and the plugin's wins: remove the other server (claude mcp remove ${servers[0]?.name ?? '<name>'}), then restart Claude Code.`;
 }

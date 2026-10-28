@@ -178,3 +178,8 @@ export async function sessionTyping(
 ): Promise<void> {
   await callOperation(api, 'session_typing', { body }, options);
 }
+
+/** GET /v1/session/threads: the session's threads, newest activity first (at most 50). */
+export function listSessionThreads(api: ApiClient, options: Options = {}) {
+  return callOperation(api, 'list_session_threads', {}, options);
+}

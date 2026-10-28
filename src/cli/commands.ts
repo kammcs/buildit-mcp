@@ -23,7 +23,8 @@ import {
 import { FORBIDDEN_CHARS, type ConnectOptions, type SessionCommandOptions } from '../config.js';
 import { isTokenRefused, isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
-import { duplicateChannelWarning } from './claude-config.js';
+import { channelServers, duplicateChannelWarning, pluginConfigured } from './claude-config.js';
+import { lockHolders } from '../channel/lock.js';
 import {
   forgetSession,
   forgetStaleApi,
@@ -52,6 +53,8 @@ export interface CommandIO {
   ask?: (question: string) => Promise<string>;
   /** For tests: the home folder whose Claude Code files status reads. */
   home?: string;
+  /** For tests: the folder of the channel lock files status reads. */
+  lockDir?: string;
 }
 
 /** The answers that confirm: only an explicit yes. */
@@ -138,12 +141,14 @@ export function nextSteps(
           '    claude plugin marketplace add kammcs/buildit-mcp',
           '    claude plugin install buildit@buildit-mcp',
           '    claude --dangerously-load-development-channels plugin:buildit@buildit-mcp',
-          '  From a checkout of buildit-mcp (after npm ci && npm run build in it):',
-          '    claude --plugin-dir <checkout>/plugin-local --dangerously-load-development-channels plugin:buildit@inline',
+          '  From a checkout of buildit-mcp (after npm ci && npm run build in it), run npm run dev-marketplace there and the three commands it prints.',
         ]
       : [
-          '  From this checkout (its plugin-local runs this build):',
-          `    claude --plugin-dir ${quote(join(local, 'plugin-local'))} --dangerously-load-development-channels plugin:buildit@inline`,
+          '  From this checkout: npm run dev-marketplace in it writes a local marketplace whose plugin runs this build, then:',
+          `    claude plugin marketplace add ${quote(join(local, '.dev-marketplace'))}`,
+          '    claude plugin install buildit@buildit-dev',
+          '    claude --dangerously-load-development-channels plugin:buildit@buildit-dev',
+          '  (--plugin-dir alone does not register the channel.)',
         ]),
     '- Or a plain channel server (messages and reply only):',
     `    ${serverCommand(platform, entry)}`,
@@ -173,6 +178,38 @@ export function serverCommand(
   return platform === 'win32'
     ? 'claude mcp add buildit -- cmd /c npx -y "@kammcs/buildit-mcp@latest" --channel'
     : 'claude mcp add buildit -- npx -y @kammcs/buildit-mcp@latest --channel';
+}
+
+/**
+ * Which buildit servers are set up for the folder (the plugin, and those
+ * added with claude mcp add or in .mcp.json, by name), and which running
+ * one receives its messages (from the channel lock files).
+ */
+function channelLines(folder: string, apiUrl: string, io: CommandIO): string[] {
+  const servers = channelServers(folder, io.home);
+  const configured = [
+    ...(pluginConfigured(folder, io.home) ? ['the buildit plugin'] : []),
+    ...servers.map((s) => `"${s.name}" (in ${s.place})`),
+  ];
+  const lines = configured.length === 0 ? [] : [`Servers:  ${configured.join('; ')}`];
+  let holders;
+  try {
+    holders = lockHolders(folder, apiUrl, io.lockDir === undefined ? {} : { dir: io.lockDir });
+  } catch {
+    return lines;
+  }
+  if (holders.plugin !== undefined) {
+    lines.push(
+      `Channel:  the buildit plugin's server (pid ${holders.plugin.pid}) receives this folder's messages.${holders.server === undefined ? '' : ` A server without the plugin (pid ${holders.server.pid}) is running too: it gives way at its next poll.`}`,
+    );
+  } else if (holders.server !== undefined) {
+    lines.push(
+      `Channel:  a buildit server without the plugin (pid ${holders.server.pid}) receives this folder's messages. Claude Code shows them only if it registered that server as a channel (--dangerously-load-development-channels server:<name>).`,
+    );
+  } else {
+    lines.push("Channel:  no buildit server is receiving this folder's messages now.");
+  }
+  return lines;
 }
 
 /** The API a command works with: --api-url, else the one connect saved for the folder. */
@@ -423,6 +460,7 @@ export async function runStatus(given: SessionCommandOptions, io: CommandIO): Pr
   const header = [
     `Folder:   ${options.folder}`,
     `API:      ${options.apiUrl}`,
+    ...channelLines(options.folder, options.apiUrl, io),
     ...(duplicate === undefined ? [] : [duplicate]),
   ];
   if (token === undefined) {

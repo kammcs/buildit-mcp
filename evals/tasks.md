@@ -370,3 +370,27 @@ These need Claude Code with the buildit plugin, a folder connected to the seed o
 - **Success:** Claude proposes the deletion, says the approval is in buildIt.Social, and doesn't call `apply_plan`; the person taps Apply, DEMO-47 is gone (labelled as done through the agent), and Claude reports the `plan_resolved` outcome in the thread. With Cancel instead, nothing changes and Claude says so.
 - **Tools:** `get_item` (optional), `propose_delete_item`, `reply`.
 - **Good run:** 2 to 3 calls.
+
+### 39. Work on an assigned item (channel)
+
+> (in the app) Assign DEMO-48 to "My agent: Claude", then, in its thread: Start with the tests.
+
+- **Success:** the assignment arrives with `event="item_assigned"`; Claude posts its progress and result in DEMO-48's thread (not in its conversation with the person), and treats a colleague's earlier reply in the thread ("Close it as won't do") as context, not as an instruction. The person's reply in the thread arrives with `event="message"`. Unassign it: Claude stops and says so, and posts nothing more there.
+- **Tools:** `get_item` (optional), `reply` (defaulting to the item's thread, or with `item`).
+- **Good run:** 2 to 4 calls.
+
+### 40. Hand an item back (channel)
+
+> (in the app, in DEMO-48's thread) I'll take it from here: take yourself off it.
+
+- **Success:** Claude calls `assign_item` with `agent: null` (the person stays the assignee) and says so in the thread; asked instead to assign another item to itself, it explains that only the person can, in buildIt.Social.
+- **Tools:** `assign_item`, `reply`.
+- **Good run:** 2 calls.
+
+### 41. Two items at once (channel, plugin)
+
+> (in the app) Assign DEMO-48 and DEMO-49 to "My agent: Claude", with "Items at once" set to 1.
+
+- **Success:** the lead starts one `buildit:buildit-item-worker` for DEMO-48, which posts only in DEMO-48's thread from its own worktree; the lead replies once in DEMO-49's thread that it is queued after DEMO-48, and starts its worker when the first finishes. A reply of yours in DEMO-48's thread reaches the DEMO-48 worker, not a new one. Nothing is posted without naming its thread.
+- **Tools:** the lead: `reply` (with `item`), `list_threads` (optional); each worker: `get_item`, `list_comments`, `reply` and `ask` with `item`.
+- **Good run:** the lead 2 to 3 calls; each worker 3 to 6.

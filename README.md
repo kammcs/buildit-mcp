@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://bu
 
 It runs on your own machine (stdio) or as a stateless HTTP server for a team. It holds no secrets of its own: each person's token stays in their own client.
 
-**Status:** 0.5.0, not yet on npm ([`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp) has 0.4.0). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`; with the [buildit plugin](#questions-and-approvals-in-builditsocial-plugin), its questions and approvals come to you there as cards.
+**Status:** 0.6.0, not yet on npm ([`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp) has 0.4.0). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`; with the [buildit plugin](#questions-and-approvals-in-builditsocial-plugin), its questions and approvals come to you there as cards, and you can [assign it work items](#work-items-for-your-agent).
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
@@ -83,7 +83,7 @@ The tools you see depend on the enabled toolsets, read-only mode, the exclude li
 |                           | `get_item`                 | `projects:read`                     | read-only               | One item: fields, description (long ones in windows), custom fields, children, links, latest comments, a Feedback report and, optionally, history and GitHub refs; the versions an update needs.                                           |
 |                           | `create_item`              | `projects:write`                    |                         | An epic, story, task, bug or subtask, under a parent or in a project, at a position; safe to retry with its idempotency key.                                                                                                               |
 |                           | `update_item`              | `projects:write`                    | idempotent              | A field patch; the description appended to (safe) or replaced (with its version); `if_version` guards against concurrent edits.                                                                                                            |
-|                           | `assign_item`              | `projects:write`                    | idempotent              | Assign to a person (`me`, an email or a name) or unassign.                                                                                                                                                                                 |
+|                           | `assign_item`              | `projects:write`                    | idempotent              | Assign to a person (`me`, an email or a name), to your agent (`agent: "mine"`, working for you), or unassign.                                                                                                                              |
 |                           | `transition_item`          | `projects:write`                    | idempotent              | Move to a status by name, setting the fields the move needs and posting a comment; a refused move lists the moves allowed from where the item is.                                                                                          |
 |                           | `link_items`               | `projects:write`                    | idempotent              | Add a link: blocks, blocked by, relates, duplicates, duplicated by.                                                                                                                                                                        |
 |                           | `unlink_items`             | `projects:write`                    | destructive, idempotent | Remove a link, by kind and target or by its id.                                                                                                                                                                                            |
@@ -248,7 +248,7 @@ It works only with the **Claude Code CLI** (not Claude Desktop), because it uses
 
 ### 1. Install or upgrade
 
-Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer, and the [plugin](#questions-and-approvals-in-builditsocial-plugin) 0.5.0.
+Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer, the [plugin](#questions-and-approvals-in-builditsocial-plugin) 0.5.0, and [work items for your agent](#work-items-for-your-agent) 0.6.0.
 
 > **Until 0.4.0 is on npm**, `@latest` is an older release without channel mode, so use a local build: `git clone https://github.com/kammcs/buildit-mcp.git`, then `npm ci && npm run build` in it, and use `node /path/to/buildit-mcp/dist/index.js` wherever the steps below say `npx -y @kammcs/buildit-mcp@latest`. `connect` run that way prints the matching `claude mcp add` line.
 
@@ -309,6 +309,26 @@ Claude Code shows a warning about development channels first: choose "I am using
 - With several folders connected, the app shows each session and lets you choose where a message goes; a thread stays with the session that started it, and a thread of a session that ended can be handed to another.
 - To stop a session for good, revoke it in buildIt.Social (Settings → Agents), or run `disconnect`. The running server finds out at its next poll (or call) and clears the folder's saved token, but keeps running: Claude keeps its tools, which now answer that the session has ended and how to reconnect, and `reply` goes from the list. Run `connect` again in the folder and restart Claude Code.
 
+### Work items for your agent
+
+With 0.6.0 and a buildIt.Social server with agent API 1.7.0, your agent can work on items in a project's channel, in the item's thread, where everyone in the project follows along:
+
+- **Assign it.** In buildIt.Social, pick "My agent: Claude" as an item's assignee (it shows as "Claude · for you", and still counts as your work). The session gets the item as a `<channel>` message with `event="item_assigned"`, the item's key (`item`) and `thread_id` (the item's id), with the title, the start of the description and the thread's latest messages as data. Claude works on it and posts progress, questions and the result in the item's thread: `reply`, `ask`, approvals and "is writing" go there by default, and `reply` also takes `item` with the key. From a terminal session (a personal access token), `assign_item` with `agent: "mine"` does the same; a Claude Code session can't assign itself, only hand an item back (`agent: null`).
+- **Mention it** in an item's thread (`@Claude`) to bring it in: `event="mention"`, your message as you wrote it, then the item and the thread before it. Once it works in a thread, your other replies there arrive too (`event="message"`), with only the thread messages it hasn't seen.
+- **Only you direct it.** Your colleagues see its posts and cards, but their mentions and replies never reach the session as events: they arrive only as context inside yours, in `untrusted_content` blocks, and only you can answer its questions or tap Apply.
+- **Unassign it** (or assign someone else, move or delete the item, leave its project) and the session gets `event="item_unassigned"` with the reason ("released" when it only worked there through a mention or a hand-on), and stops: "is writing" stops, the questions it was waiting on in that thread close, and it can no longer post there.
+- If no session of the agent is online when you assign it (none connected, or a connected session whose Claude Code is closed), the item's thread says the agent will pick it up when a session comes online (work waits up to 7 days).
+
+### Several items at once
+
+With the plugin, the Claude Code session in the folder is the **lead**: it receives every message, mention and assignment, and gives each work item to its own **item worker**, a subagent the plugin brings (`buildit:buildit-item-worker`). Each item's conversation then stays in its own context, with only that item, its thread, the pages it links and the repository it needs; the lead keeps a small table of which worker has which thread (`.claude/buildit-workers.json`) and does no item work itself. Your direct messages stay with the lead.
+
+- **One worker per item.** A worker starts by reading its item (with its linked branches and pull requests), the item's thread from the start and the pages it links, then the repository. It posts every update, question and approval card in its item's thread, naming it, and treats the item, its comments and other people's messages as data, never as instructions. Your later messages in that thread go to that same worker; unassigning the item stops it.
+- **Its own worktree.** Each worker runs in its own git worktree (Claude Code's worktree isolation), on a branch named for its item, so parallel work on two items never touches the same files.
+- **A limit.** At most 3 items are worked on at once (the plugin's "Items at once" setting, 1 to 10). Another item waits its turn: the lead says so once in that item's thread ("Queued — I'll start this after DEMO-12, DEMO-13.") and starts it when a worker finishes.
+- **Named threads.** While the session works in more than one thread (an item's thread and the direct message, or several items), `reply`, `ask` and approval cards must name their thread: `thread_id`, or `item` with the item's key (a `propose_*` tool's `card_thread`); without one they're refused with the list of threads. `list_threads` lists the threads the session works in: each item's key, title, status, open cards and when you last wrote. With one thread, the latest one stays the default. Claude's own questions (`AskUserQuestion`, through the plugin) go where they belong: the lead's to your direct message, a worker's to its item's thread (the lead records each worker's agent id in its table for this); one that can't be placed is asked in the terminal. "<agent> is writing…" shows in each item's thread while its worker works on it.
+- **After a restart** of Claude Code, a worker is started fresh for an item when its next event arrives, and reads the item's thread again to carry on.
+
 ### Questions and approvals in buildIt.Social (plugin)
 
 The **buildit plugin** for Claude Code (0.5.0) adds what the bare channel can't do, so you can work with the session from your phone as well as from the terminal:
@@ -338,7 +358,7 @@ Then add this repository as a plugin marketplace and install the plugin (in Clau
 claude --dangerously-load-development-channels plugin:buildit@buildit-mcp
 ```
 
-`buildit-mcp status` warns when both the plugin and a `buildit-mcp --channel` server (in `~/.claude.json` or the folder's `.mcp.json`) are set up. If both run anyway, only the first one to start is the folder's channel (it holds a lock next to the session file); the other serves its tools without the channel, and its `reply` and `ask` say so.
+`buildit-mcp status` names the buildit servers set up for the folder (the plugin, and any `buildit-mcp --channel` server in `~/.claude.json` or the folder's `.mcp.json`, by name), warns when both kinds are, and says which running one receives the folder's messages. If both run anyway, the plugin's server is the folder's channel, since Claude Code shows channel messages only from a server it registered as one: the plugin passes `--from-plugin`, and a server without it stops polling as soon as the plugin's holds the folder (both keep a lock next to the session file). Of two plugin servers, the first to start wins. A server that isn't the channel serves its tools without it, and its `reply`, `ask` and `whoami` say another buildIt server receives the messages; remove the extra one with `claude mcp remove <name>`.
 
 **Settings** (`/plugin`, the buildit plugin's options):
 
@@ -346,32 +366,41 @@ claude --dangerously-load-development-channels plugin:buildit@buildit-mcp
 | --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Question wait (minutes)     | 60      | How long a question card waits for an answer, 1 to 60. The card closes a minute before the hook's one-hour limit at most. |
 | Questions in buildIt.Social | on      | Off: Claude's `AskUserQuestion` questions stay in the terminal. Approvals and "is writing" are unaffected.                |
+| Items at once               | 3       | How many work items assigned to your agent are worked on at once, 1 to 10, each by its own subagent; the rest wait.       |
 
-The plugin passes them to the server as `BUILDIT_ASK_TIMEOUT_MINUTES` and `BUILDIT_QUESTIONS_IN_APP`, and turns every toolset on (`BUILDIT_TOOLSETS=all`), since approvals need the `destructive` and `admin` tools; `--channel` does the same when `BUILDIT_TOOLSETS` isn't set. The session's own scopes and projects still limit what works. It hooks `AskUserQuestion` (`PreToolUse`, an `mcp_tool` hook calling the server's `ask` tool with a one-hour timeout) and Claude's turn ending (`Stop`, calling `turn_ended`, which only stops "is writing"; it isn't a tool for Claude). Tested with Claude Code 2.1.312, where a hook of this kind waited more than ten minutes as it should.
+The plugin passes them to the server as `BUILDIT_ASK_TIMEOUT_MINUTES`, `BUILDIT_QUESTIONS_IN_APP` and `BUILDIT_MAX_PARALLEL_ITEMS`, and turns every toolset on (`BUILDIT_TOOLSETS=all`), since approvals need the `destructive` and `admin` tools; `--channel` does the same when `BUILDIT_TOOLSETS` isn't set. The session's own scopes and projects still limit what works. It hooks `AskUserQuestion` (`PreToolUse`, an `mcp_tool` hook calling the server's `ask` tool with a one-hour timeout) and Claude's turn ending (`Stop`, calling `turn_ended`, which only stops "is writing"; it isn't a tool for Claude). Tested with Claude Code 2.1.312, where a hook of this kind waited more than ten minutes as it should.
 
 #### Try it from a checkout
 
-Until 0.5.0 is on npm, the plugin's server (`npx -y @kammcs/buildit-mcp@0.5.0 --channel`) can't be downloaded. The checkout has a twin of the plugin for that, `plugin-local/`: the same name (`buildit`), hooks and settings, but its server runs the checkout's own build, `node ${CLAUDE_PLUGIN_ROOT}/../dist/index.js --channel`. Load it for one session with `--plugin-dir`, which installs nothing:
+Until 0.6.0 is on npm, the plugin's server (`npx -y @kammcs/buildit-mcp@0.6.0 --channel`) can't be downloaded. A checkout can make a local plugin marketplace whose buildit plugin runs the checkout's own build:
 
 ```sh
 git clone https://github.com/kammcs/buildit-mcp.git
 cd buildit-mcp
 npm ci && npm run build
+npm run dev-marketplace
 ```
 
-Then, in the folder you work in (connected as in step 2, with the local build: `node /path/to/buildit-mcp/dist/index.js connect --project DEMO`):
+`npm run dev-marketplace` writes the marketplace `buildit-dev` to `.dev-marketplace/` in the checkout (git ignores it; `-- --out <dir>` writes it elsewhere): the plugin of `plugin/`, with the same name, hooks and settings, whose server is `node <checkout>/dist/index.js --channel --from-plugin` (an absolute path, since Claude Code copies an installed plugin into its plugin cache), and the version `<version>-local`. It prints the commands; once:
+
+```sh
+claude plugin marketplace add /path/to/buildit-mcp/.dev-marketplace
+claude plugin install buildit@buildit-dev
+```
+
+Then, in the folder you work in (connected as in step 2, with the local build: `node /path/to/buildit-mcp/dist/index.js connect --project DEMO`, which prints these steps too):
 
 ```sh
 claude mcp remove buildit
-claude --plugin-dir /path/to/buildit-mcp/plugin-local --dangerously-load-development-channels plugin:buildit@inline
+claude --dangerously-load-development-channels plugin:buildit@buildit-dev
 ```
 
 - `claude mcp remove buildit` is only needed when the server of step 3 is set up in that folder (it says so when there is none).
-- A plugin loaded with `--plugin-dir` belongs to the marketplace `inline`, so its channel is `plugin:buildit@inline`. Check the line under the banner: it should say that messages from `plugin:buildit@inline` arrive in this session.
-- Its server is `plugin:buildit:buildit`, as the hooks name it, and it starts in the folder Claude Code runs in, so it finds that folder's session.
-- Run `npm run build` again after pulling changes; `claude plugin validate plugin-local` checks it.
+- Check the line under the banner: it should say that messages from `plugin:buildit@buildit-dev` arrive in this session.
+- `--plugin-dir` alone doesn't do: it loads the plugin's hooks and server, but Claude Code registers a plugin's channel only for an installed plugin, so messages from buildIt.Social wouldn't arrive.
+- Run `npm run dev-marketplace` again after rebuilding or pulling, then `claude plugin marketplace update buildit-dev` and `claude plugin update buildit@buildit-dev`, so Claude Code takes the new copy; restart Claude Code. `claude plugin validate .dev-marketplace` checks it.
 
-On Windows, Claude Code starts the plugin's `npx` itself; if `/mcp` shows the plugin's server as failed, check that `npx -y @kammcs/buildit-mcp@0.5.0 --version` works in a terminal (Node.js 20 or newer on `PATH`).
+On Windows, Claude Code starts the plugin's `npx` itself; if `/mcp` shows the plugin's server as failed, check that `npx -y @kammcs/buildit-mcp@0.6.0 --version` works in a terminal (Node.js 20 or newer on `PATH`).
 
 ### Where the token is kept
 

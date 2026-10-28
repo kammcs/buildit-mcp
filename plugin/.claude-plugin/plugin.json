@@ -1,6 +1,6 @@
 {
   "name": "buildit",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT",
   "description": "Talk to this Claude Code session from buildIt.Social: messages, questions as cards, approvals.",
   "author": {
@@ -10,11 +10,12 @@
   "mcpServers": {
     "buildit": {
       "command": "npx",
-      "args": ["-y", "@kammcs/buildit-mcp@0.5.0", "--channel"],
+      "args": ["-y", "@kammcs/buildit-mcp@0.6.0", "--channel", "--from-plugin"],
       "env": {
         "BUILDIT_TOOLSETS": "all",
         "BUILDIT_ASK_TIMEOUT_MINUTES": "${user_config.ask_timeout_minutes}",
-        "BUILDIT_QUESTIONS_IN_APP": "${user_config.questions_in_app}"
+        "BUILDIT_QUESTIONS_IN_APP": "${user_config.questions_in_app}",
+        "BUILDIT_MAX_PARALLEL_ITEMS": "${user_config.max_parallel_items}"
       }
     }
   },
@@ -38,6 +39,14 @@
       "title": "Questions in buildIt.Social",
       "default": true,
       "description": "Ask Claude's questions as cards in buildIt.Social instead of in the terminal."
+    },
+    "max_parallel_items": {
+      "type": "number",
+      "title": "Items at once",
+      "default": 3,
+      "min": 1,
+      "max": 10,
+      "description": "How many work items assigned to your agent are worked on at once, each by its own subagent; the rest wait their turn."
     }
   }
 }

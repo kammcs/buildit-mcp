@@ -8,8 +8,15 @@
  * reply posts, ask posts a question card (the card shows the agent waits),
  * a plan card is posted; for every thread, when the plugin's Stop hook says
  * Claude's turn ended (the turn_ended tool), after 10 minutes without a
- * tool call to this server, and on shutdown. When the session ends, the
- * timers just stop (the token no longer works).
+ * tool call for it, and on shutdown. When the session ends, the timers
+ * just stop (the token no longer works).
+ *
+ * The 10 minutes count per thread: a tool call that names a thread (its
+ * thread_id, or an item's key) is that thread's activity, and a call that
+ * names none counts for the working thread only while there is one. Item
+ * workers run in parallel through this one server, so each item's thread
+ * shows "is writing" while its own worker calls tools, and `work` starts it
+ * again when a worker goes on after a reply.
  *
  * It is only a hint: failures are logged, never shown to Claude, and a 429
  * pauses the beats until its Retry-After has passed.
@@ -33,10 +40,11 @@ export interface TypingOptions {
 
 export class TypingIndicator {
   private readonly threads = new Map<string, NodeJS.Timeout>();
+  /** Each working thread's latest activity. */
+  private readonly lastActivity = new Map<string, number>();
   private readonly everyMs: number;
   private readonly idleMs: number;
   private readonly now: () => number;
-  private lastActivity: number;
   /** No beats before this time (after a 429). */
   private quietUntil = 0;
   private closed = false;
@@ -45,7 +53,6 @@ export class TypingIndicator {
     this.everyMs = options.everyMs ?? TYPING_EVERY_MS;
     this.idleMs = options.idleMs ?? TYPING_IDLE_MS;
     this.now = options.now ?? Date.now;
-    this.lastActivity = this.now();
   }
 
   /** The threads working now (tests). */
@@ -56,7 +63,7 @@ export class TypingIndicator {
   /** A message for Claude arrived in this thread: it is working on it. */
   start(threadId: string): void {
     if (this.closed) return;
-    this.lastActivity = this.now();
+    this.lastActivity.set(threadId, this.now());
     const old = this.threads.get(threadId);
     if (old !== undefined) clearInterval(old);
     const timer = setInterval(() => {
@@ -67,9 +74,29 @@ export class TypingIndicator {
     void this.send(threadId, true);
   }
 
-  /** A tool call to this server: Claude is still at work. */
-  activity(): void {
-    this.lastActivity = this.now();
+  /**
+   * A tool call to this server: Claude is still at work, on that thread
+   * when the call names one, else on the only working thread (with
+   * several, a call that names none keeps none of them going).
+   */
+  activity(threadId?: string): void {
+    const now = this.now();
+    if (threadId !== undefined) {
+      if (this.threads.has(threadId)) this.lastActivity.set(threadId, now);
+      return;
+    }
+    if (this.threads.size !== 1) return;
+    for (const id of this.threads.keys()) this.lastActivity.set(id, now);
+  }
+
+  /** A worker is at work on this thread: it shows "is writing" again if it had stopped. */
+  work(threadId: string): void {
+    if (this.closed) return;
+    if (this.threads.has(threadId)) {
+      this.lastActivity.set(threadId, this.now());
+      return;
+    }
+    this.start(threadId);
   }
 
   /** Stops one thread (reply, a card posted); nothing when it isn't working. */
@@ -79,6 +106,7 @@ export class TypingIndicator {
     if (timer === undefined) return;
     clearInterval(timer);
     this.threads.delete(threadId);
+    this.lastActivity.delete(threadId);
     void this.send(threadId, false);
   }
 
@@ -87,6 +115,7 @@ export class TypingIndicator {
     const ids = [...this.threads.keys()];
     for (const timer of this.threads.values()) clearInterval(timer);
     this.threads.clear();
+    this.lastActivity.clear();
     await Promise.all(ids.map((id) => this.send(id, false)));
   }
 
@@ -98,7 +127,7 @@ export class TypingIndicator {
   }
 
   private beat(threadId: string): void {
-    if (this.now() - this.lastActivity >= this.idleMs) {
+    if (this.now() - (this.lastActivity.get(threadId) ?? 0) >= this.idleMs) {
       this.options.logger.debug('typing stopped: no activity', { thread_id: threadId });
       this.stop(threadId);
       return;

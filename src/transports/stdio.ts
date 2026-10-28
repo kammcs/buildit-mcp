@@ -57,9 +57,11 @@ import {
   type ListedTools,
   type SwitchableServer,
 } from '../server.js';
+import { PREEMPT_WAIT_MS, type ChannelLock } from '../channel/lock.js';
 import { TypingIndicator } from '../channel/typing.js';
 import { createAskTool, type AskOptions } from '../tools/ask.js';
 import { createReplyTool, createTurnEndedTool } from '../tools/reply.js';
+import { createListThreadsTool } from '../tools/threads.js';
 import { CATALOG } from '../toolsets/catalog.js';
 import type { ToolDefinition, ToolPolicy } from '../toolsets/registry.js';
 import { compareVersions, SERVER_VERSION } from '../version.js';
@@ -82,6 +84,13 @@ export interface StdioOptions {
    * another server is the channel.
    */
   channelOwner?: boolean;
+  /**
+   * Channel mode: the folder's channel lock this server holds, checked
+   * before each poll (another server may take the folder over).
+   */
+  channelLock?: Pick<ChannelLock, 'owns' | 'preempted'>;
+  /** The wait before the first poll after taking the folder over (default PREEMPT_WAIT_MS). */
+  preemptWaitMs?: number;
   /** For tests: ask's timing. */
   ask?: Pick<AskOptions, 'msPerSecond' | 'now'>;
   /** For tests: the typing indicator's timing. */
@@ -310,8 +319,45 @@ export class LegacyOnlyTransport implements Transport {
  * The tools only channel mode has (reply, ask, and turn_ended for the
  * plugin's Stop hook), under the operator's read-only and exclude rules.
  */
+/** The tools that post in a thread and stop its "is writing" themselves. */
+const POSTING_TOOLS: ReadonlySet<string> = new Set(['reply', 'ask', 'turn_ended', 'list_threads']);
+
+/**
+ * A tool call is activity for "is writing": for the thread it names (its
+ * thread_id or card_thread, or an item's key that the session works on),
+ * else for the only working thread. A call that works on an active item's
+ * thread (a worker reading or changing its item) shows "is writing" there
+ * again; the posting tools stop it themselves.
+ */
+function noteActivity(state: ChannelState, tool: string, args: unknown): void {
+  const typing = state.typing;
+  if (typing === undefined) return;
+  const a = (args !== null && typeof args === 'object' ? args : {}) as Record<string, unknown>;
+  const str = (v: unknown): string | undefined =>
+    typeof v === 'string' && v !== '' ? v : undefined;
+  const ref = str(a.thread_id) ?? str(a.card_thread) ?? str(a.item);
+  const key = ref?.startsWith('#') ? ref.slice(1) : ref;
+  const thread =
+    key === undefined
+      ? undefined
+      : state.activeItems.has(key)
+        ? key
+        : state.items.get(key.toUpperCase());
+  if (thread === undefined || !state.activeItems.has(thread)) {
+    typing.activity(key !== undefined && thread === undefined ? key : undefined);
+    return;
+  }
+  if (POSTING_TOOLS.has(tool)) typing.activity(thread);
+  else typing.work(thread);
+}
+
 function channelTools(policy: ToolPolicy, state: ChannelState, ask: AskOptions): ToolDefinition[] {
-  return [createReplyTool(state), createAskTool(state, ask), createTurnEndedTool(state)].filter(
+  return [
+    createReplyTool(state),
+    createAskTool(state, ask),
+    createListThreadsTool(state),
+    createTurnEndedTool(state),
+  ].filter(
     (tool) =>
       (!policy.readOnly || tool.annotations.readOnlyHint) &&
       !policy.excludeTools.includes(tool.name),
@@ -344,6 +390,7 @@ export function startStdio(
   const channel = config.channel !== undefined;
   const state = new ChannelState();
   state.isChannel = options.channelOwner ?? true;
+  state.folder = config.channel?.folder;
   if (channel && state.isChannel) {
     state.typing = new TypingIndicator({
       api,
@@ -425,8 +472,11 @@ export function startStdio(
         ...(channel
           ? {
               channelState: state,
-              onToolCall: () => {
-                state.typing?.activity();
+              ...(config.channel?.fromPlugin === true
+                ? { lead: { maxParallelItems: config.ask.maxParallelItems } }
+                : {}),
+              onToolCall: (tool: string, args: unknown) => {
+                noteActivity(state, tool, args);
               },
               sessionEnded: () => state.ended,
               onSessionOver: (code: string) => {
@@ -444,7 +494,7 @@ export function startStdio(
           if (loop !== undefined) return;
           if (!state.isChannel) {
             logger.warn(
-              'another buildit server is the channel for this folder; this one serves its tools without the channel',
+              'another buildit server in this folder receives the messages from buildIt.Social (it holds the channel lock); this one serves its tools without the channel. Remove the extra server (claude mcp remove <name>; "buildit-mcp status" names them)',
             );
             return;
           }
@@ -453,6 +503,14 @@ export function startStdio(
             logger: logger.child({ component: 'channel' }),
             state,
             notify: (params) => mcp.notification({ method: CHANNEL_NOTIFICATION, params }),
+            ...(options.channelLock === undefined
+              ? {}
+              : {
+                  owns: () => options.channelLock?.owns() ?? true,
+                  ...(options.channelLock.preempted === undefined
+                    ? {}
+                    : { firstPollDelayMs: options.preemptWaitMs ?? PREEMPT_WAIT_MS }),
+                }),
             onEnded: async (reason) => {
               if (state.ended !== undefined) {
                 // The server stays up: Claude keeps its tools (which now say the session

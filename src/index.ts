@@ -6,7 +6,7 @@
  */
 import { createInterface } from 'node:readline/promises';
 
-import { acquireChannelLock } from './channel/lock.js';
+import { acquireChannelLock, type ChannelLock } from './channel/lock.js';
 import { runConnect, runDisconnect, runStatus, type CommandIO } from './cli/commands.js';
 import { COMMAND_USAGE, ConfigError, parseApiUrl, parseCli, USAGE } from './config.js';
 import { createLogger } from './log.js';
@@ -135,12 +135,25 @@ async function main(): Promise<void> {
   });
 
   if (config.mode === 'stdio') {
-    // One channel server per folder: the first one to start holds the lock.
+    // One channel server per folder: the plugin's first, else the first to start.
     let channelOwner = true;
+    let channelLock: ChannelLock | undefined;
     if (config.channel !== undefined) {
       try {
-        const lock = acquireChannelLock(config.channel.folder, config.apiUrl);
-        channelOwner = lock !== undefined;
+        channelLock = acquireChannelLock(config.channel.folder, config.apiUrl, {
+          plugin: config.channel.fromPlugin,
+        });
+        channelOwner = channelLock !== undefined;
+        if (channelLock?.preempted !== undefined) {
+          logger.warn(
+            "another buildit server without the plugin was receiving this folder's messages; the plugin's server takes them over, and that one stops polling. Remove it (claude mcp remove <name>)",
+            { other_pid: channelLock.preempted },
+          );
+        } else if (channelLock !== undefined && !channelLock.plugin) {
+          logger.info(
+            "this server receives the folder's messages; Claude Code shows them only when it was started with --dangerously-load-development-channels server:<name> (or use the buildit plugin)",
+          );
+        }
       } catch (err) {
         // Without a lock folder, serve as the channel (as before locks existed).
         logger.warn('could not take the channel lock; serving as the channel', { error: err });
@@ -148,6 +161,7 @@ async function main(): Promise<void> {
     }
     const handle = startStdio(config, logger, {
       channelOwner,
+      ...(channelLock === undefined ? {} : { channelLock }),
       onSessionEnded: async (reason) => {
         if (reason !== 'token_revoked' && reason !== 'token_expired') return;
         if (clearSaved === undefined) return;

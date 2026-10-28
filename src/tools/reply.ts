@@ -2,9 +2,12 @@
  * reply: answers the session's owner in buildIt.Social (channel mode only).
  *
  * The answer is posted as the agent, labelled with the session, in the
- * agent's direct conversation with its owner: in the thread named, else in
- * the thread of the latest message that arrived, else as a new message.
- * It is safe to retry: the idempotency key is the new message's id.
+ * agent's direct conversation with its owner, or in a work item's thread
+ * (in the item's project channel) when the session works on that item: in
+ * the thread named (or the item's, by key), else in the thread of the
+ * latest message, mention or assignment that arrived, else as a new
+ * message of the direct conversation. It is safe to retry: the
+ * idempotency key is the new message's id.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -13,9 +16,10 @@ import { z } from 'zod';
 import { postSessionMessage } from '../channel/api.js';
 import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import type { ChannelState } from '../channel/loop.js';
+import { isUuid, resolveThread } from '../channel/threads.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolDefinition } from '../toolsets/registry.js';
-import { IdempotencyKeyInput } from './shared.js';
+import { IdempotencyKeyInput, itemRef, ItemRefInput } from './shared.js';
 
 export const REPLY_MAX_CHARS = 4000;
 
@@ -32,8 +36,11 @@ export const ReplyInputSchema = z.object({
     .uuid()
     .optional()
     .describe(
-      'The thread_id of the <channel> message you answer. Left out: the thread of the latest message.',
+      'The thread_id of the <channel> message you answer. Left out: the thread of the latest message, while only one thread is active; with several, give it (or item).',
     ),
+  item: ItemRefInput.optional().describe(
+    "A work item's key (DEMO-12), to answer in its thread: one you work on (the <channel> tag's item). Instead of thread_id.",
+  ),
   reply_to_id: z
     .uuid()
     .optional()
@@ -60,7 +67,7 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
     // Not in the catalog: listed only in channel mode, whatever the toolsets.
     toolset: 'chat',
     title: 'Reply in buildIt.Social',
-    description: `Answers the person who directs this session, in buildIt.Social: posts your text as the agent (labelled with this session) in its conversation with them, where they read it on their computer or phone. Use it for every answer to a message that arrived as a <channel> tag: pass that tag's thread_id so the answer lands in the same thread (left out, it goes to the thread of the latest message; with no message yet, it starts a new one). Markdown, at most ${REPLY_MAX_CHARS} characters; split longer answers. idempotency_key makes a retry return the first message instead of posting twice; one is generated and returned if you leave it out.`,
+    description: `Answers the person who directs this session, in buildIt.Social: posts your text as the agent (labelled with this session) in its conversation with them, or in a work item's thread when the message came from one (meta item), where they read it on their computer or phone. Use it for every answer to a message that arrived as a <channel> tag: pass that tag's thread_id so the answer lands in the same thread (left out, it goes to the thread of the latest message, mention or assignment; with none yet, it starts a new message in your conversation with them). For an item assigned to you, post progress, questions and the result in its thread: pass its thread_id, or item with its key. You can post only in the threads of items you work on; everyone in the project's channel reads them. Markdown, at most ${REPLY_MAX_CHARS} characters; split longer answers. idempotency_key makes a retry return the first message instead of posting twice; one is generated and returned if you leave it out.`,
     scopes: [],
     annotations: {
       title: 'Reply in buildIt.Social',
@@ -74,7 +81,7 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
     async run(args, ctx) {
       if (!state.isChannel) throw new ToolInputError(NOT_THE_CHANNEL);
       const key = args.idempotency_key ?? randomUUID();
-      const threadId = args.thread_id ?? state.lastThreadId;
+      const threadId = await resolveThread(state, ctx, args, 'reply');
       const r = await postSessionMessage(
         ctx.api,
         {
@@ -87,7 +94,12 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
       );
       state.typing?.stop(threadId);
       const m = r.message;
-      const where = m.thread_id ? `in thread ${m.thread_id}` : 'as a new message';
+      const item = args.item === undefined ? undefined : itemRef(args.item).toUpperCase();
+      const where = m.thread_id
+        ? item !== undefined && !isUuid(item)
+          ? `in the thread of ${item} (${m.thread_id})`
+          : `in thread ${m.thread_id}`
+        : 'as a new message';
       return {
         structured: {
           created: r.created,

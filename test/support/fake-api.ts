@@ -62,7 +62,7 @@ import {
   type WorkflowStatus,
 } from '../../src/api/generated/strict.js';
 import { expandScopes } from '../../src/toolsets/toolsets.js';
-import { FakeSessions, SESSION_TOKENS, SessionRefusal } from './fake-sessions.js';
+import { FakeSessions, SESSION_IDS, SESSION_TOKENS, SessionRefusal } from './fake-sessions.js';
 
 // ---------------------------------------------------------------------------
 // Identities and tokens
@@ -327,6 +327,8 @@ export interface FakeItem {
   version: number;
   priority: 'none' | 'low' | 'medium' | 'high' | 'urgent';
   assigneeId: string | null;
+  /** The assignee's personal agent working on it (then assigneeId is its owner). */
+  assigneeAgentId?: string | null;
   reporterId: string;
   parentId: string | null;
   labels: string[];
@@ -358,8 +360,17 @@ export interface FakeLink {
   kind: 'blocks' | 'relates' | 'duplicates';
 }
 
+/** A personal agent of the org, and whose it is. */
+export interface FakeAgent {
+  id: string;
+  name: string;
+  ownerId: string;
+}
+
 export interface FakeStore {
   users: User[];
+  /** The org's personal agents (made up). */
+  agents: FakeAgent[];
   projects: FakeProject[];
   items: FakeItem[];
   comments: FakeComment[];
@@ -593,6 +604,7 @@ export function seedStore(): FakeStore {
 
   return {
     users: Object.values(USERS).map((u) => ({ ...u })),
+    agents: [{ id: SESSION_IDS.agent, name: 'Claude', ownerId: USERS.me.id }],
     projects: [demo, ops],
     items,
     comments: [
@@ -913,6 +925,7 @@ const HISTORY_FIELDS: Record<string, keyof FakeItem> = {
   type: 'typeId',
   parent: 'parentId',
   assignee: 'assigneeId',
+  assignee_agent: 'assigneeAgentId',
   priority: 'priority',
   labels: 'labels',
   add_labels: 'labels',
@@ -985,6 +998,7 @@ export class FakeApi {
     this.store = seedStore();
     this.sessions = this.newSessions();
     this.refusePlanCards = 0;
+    this.plansOutsideThread = false;
     this.identities = structuredClone(this.initialIdentities);
     this.compat = {
       hints: true,
@@ -1442,6 +1456,7 @@ export class FakeApi {
       title: i.title,
       priority: i.priority,
       assignee: i.assigneeId ? this.user(i.assigneeId) : null,
+      assignee_agent: this.agentBrief(i.assigneeAgentId),
       reporter: this.user(i.reporterId),
       parent: parent
         ? { id: parent.id, key: `${parent.project}-${parent.number}`, title: parent.title }
@@ -1785,6 +1800,8 @@ export class FakeApi {
         return this.sessionCheck(() => this.sessions.typing(call.token, call.body));
       case 'post_plan_card':
         return this.sessionCheck(() => this.postPlanCard(call));
+      case 'list_session_threads':
+        return this.sessionCheck(() => this.sessions.threads(call.token));
       default:
         throw new FakeError(
           'not_found',
@@ -2151,7 +2168,62 @@ export class FakeApi {
     return { status: 200, body: { items: page.map((c) => this.comment(c)), next_cursor: next } };
   }
 
-  private createItem({ identity, body }: Call): Handled {
+  /** An item's agent as items show it. */
+  private agentBrief(id: string | null | undefined): { id: string; name: string } | null {
+    const a = id ? this.store.agents.find((x) => x.id === id) : undefined;
+    return a ? { id: a.id, name: a.name } : null;
+  }
+
+  /**
+   * assignee_agent of an item write: the caller's own agent ("mine", its
+   * id or name), and the assignee it forces (the caller). A session token
+   * may only take the agent off.
+   */
+  private agentFor(
+    ref: unknown,
+    assignee: unknown,
+    identity: FakeIdentity,
+    token: string,
+  ): string | null {
+    if (ref === null) return null;
+    if (token.startsWith('buildit_ags_')) {
+      throw new FakeError(
+        'forbidden',
+        { reason: 'agent_self_assign' },
+        "A session can't assign items to its own agent.",
+      );
+    }
+    if (
+      assignee !== undefined &&
+      (typeof assignee !== 'string' || assignee.toLowerCase() !== 'me')
+    ) {
+      throw new FakeError('validation', {
+        fields: [
+          {
+            path: 'assignee_agent',
+            message: 'An agent works for its owner: leave out assignee, or pass me.',
+          },
+        ],
+      });
+    }
+    const refText = typeof ref === 'string' ? ref : '';
+    const mine = this.store.agents.filter((a) => a.ownerId === identity.user.id);
+    const name = refText.toLowerCase();
+    const found =
+      name === 'mine' ? mine : mine.filter((a) => a.id === name || a.name.toLowerCase() === name);
+    if (found.length > 1) {
+      throw new FakeError('ambiguous', {
+        kind: 'agent',
+        ref: refText,
+        candidates: found.map((a) => ({ id: a.id, label: a.name })),
+      });
+    }
+    const agent = found[0];
+    if (!agent) throw new FakeError('not_found', { kind: 'agent', ref: refText });
+    return agent.id;
+  }
+
+  private createItem({ identity, body, token }: Call): Handled {
     const b = body as {
       project?: string;
       parent?: string;
@@ -2160,6 +2232,7 @@ export class FakeApi {
       description?: string;
       status?: string;
       assignee?: string;
+      assignee_agent?: string;
       priority?: FakeItem['priority'];
       labels?: string[];
       estimate?: number;
@@ -2205,6 +2278,10 @@ export class FakeApi {
         fields: [{ path: 'estimate', message: `Allowed: ${p.estimateValues.join(', ')}.` }],
       });
     }
+    const agentId =
+      b.assignee_agent === undefined
+        ? null
+        : this.agentFor(b.assignee_agent, b.assignee, identity, token);
     const initial = p.statuses.find((s) => s.initial)!;
     const now = this.now();
     const custom: Record<string, string> = {};
@@ -2221,7 +2298,12 @@ export class FakeApi {
       descriptionVersion: 1,
       version: 1,
       priority: b.priority ?? 'none',
-      assigneeId: b.assignee ? this.resolveUser(b.assignee, p, identity) : null,
+      assigneeId: agentId
+        ? identity.user.id
+        : b.assignee
+          ? this.resolveUser(b.assignee, p, identity)
+          : null,
+      assigneeAgentId: agentId,
       reporterId: identity.user.id,
       parentId: parent?.id ?? null,
       labels: (b.labels ?? []).map((l) => this.label(p, l)),
@@ -2277,7 +2359,7 @@ export class FakeApi {
     }
   }
 
-  private updateItem({ identity, params, body }: Call): Handled {
+  private updateItem({ identity, params, body, token }: Call): Handled {
     const item = this.item(params.key ?? '', identity);
     const p = this.projectOf(item);
     const b = body;
@@ -2317,9 +2399,19 @@ export class FakeApi {
     if ('parent' in b) {
       item.parentId = b.parent === null ? null : this.item(b.parent as string, identity).id;
     }
+    const agentId =
+      'assignee_agent' in b
+        ? this.agentFor(b.assignee_agent, b.assignee, identity, token)
+        : undefined;
     if ('assignee' in b) {
       item.assigneeId =
         b.assignee === null ? null : this.resolveUser(b.assignee as string, p, identity);
+      // Someone else as the assignee takes the agent off.
+      if (item.assigneeId !== before.assigneeId) item.assigneeAgentId = null;
+    }
+    if (agentId !== undefined) {
+      item.assigneeAgentId = agentId;
+      if (agentId !== null) item.assigneeId = identity.user.id;
     }
     if (typeof b.priority === 'string') item.priority = b.priority as FakeItem['priority'];
     if (Array.isArray(b.labels)) item.labels = (b.labels as string[]).map((l) => this.label(p, l));
@@ -3994,6 +4086,8 @@ export class FakeApi {
 
   /** Plan cards refused before they are posted (tests). */
   refusePlanCards = 0;
+  /** Plan cards in a thread are refused as reaching outside its item's project (tests). */
+  plansOutsideThread = false;
 
   private postPlanCard({ token, body }: Call): Handled {
     const handle = String(body.handle);
@@ -4018,6 +4112,10 @@ export class FakeApi {
     if (this.refusePlanCards > 0) {
       this.refusePlanCards--;
       throw new FakeError('unavailable', {});
+    }
+    // A plan that reaches outside the item's project, carded in the item's thread.
+    if (this.plansOutsideThread && typeof body.thread_id === 'string') {
+      throw new FakeError('plan_outside_thread', { thread_id: body.thread_id, key: 'OPS' });
     }
     plan.cardMessageId = id;
     plan.expiresAt = this.clock + 60 * 60_000;

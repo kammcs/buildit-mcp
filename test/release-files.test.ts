@@ -3,12 +3,18 @@
  * package.json: the MCP Registry's server.json and the Claude Desktop
  * bundle's manifest.
  */
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { DEFAULT_MAX_PARALLEL_ITEMS } from '../src/config.js';
+
 const read = (path: string): unknown =>
   JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'));
+const readJsonAt = (path: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
 
 const pkg = read('package.json') as { name: string; version: string; mcpName: string };
 
@@ -107,6 +113,8 @@ describe('the Claude Code plugin', () => {
       '-y',
       `${pkg.name}@${pkg.version}`,
       '--channel',
+      // The plugin's server takes the folder's channel over from one added with claude mcp add.
+      '--from-plugin',
     ]);
     expect(plugin.channels).toEqual([expect.objectContaining({ server: 'buildit' })]);
   });
@@ -117,25 +125,78 @@ describe('the Claude Code plugin', () => {
       BUILDIT_TOOLSETS: 'all',
       BUILDIT_ASK_TIMEOUT_MINUTES: '${user_config.ask_timeout_minutes}',
       BUILDIT_QUESTIONS_IN_APP: '${user_config.questions_in_app}',
+      BUILDIT_MAX_PARALLEL_ITEMS: '${user_config.max_parallel_items}',
     });
     expect(plugin.userConfig.ask_timeout_minutes?.default).toBe(60);
     expect(plugin.userConfig.questions_in_app?.default).toBe(true);
+    expect(plugin.userConfig.max_parallel_items).toMatchObject({
+      type: 'number',
+      default: DEFAULT_MAX_PARALLEL_ITEMS,
+      min: 1,
+      max: 10,
+    });
   });
 
-  it("has a local-build twin that runs the checkout's dist/ with the same hooks and settings", () => {
-    const local = read('plugin-local/.claude-plugin/plugin.json') as Record<string, unknown>;
-    const published = plugin as unknown as Record<string, unknown>;
-    // Named buildit with a server buildit, so the hooks' plugin:buildit:buildit resolve.
-    for (const key of new Set([...Object.keys(local), ...Object.keys(published)])) {
-      if (key === 'description' || key === 'mcpServers') continue;
-      expect(local[key], key).toEqual(published[key]);
+  it('has the item worker subagent that the lead instructions name', async () => {
+    const { ITEM_WORKER_AGENT } = await import('../src/server.js');
+    const text = readFileSync(
+      new URL('../plugin/agents/buildit-item-worker.md', import.meta.url),
+      'utf8',
+    );
+    const front = /^---\n([\s\S]*?)\n---\n/.exec(text.replace(/\r\n/g, '\n'))?.[1] ?? '';
+    const field = (name: string): string | undefined =>
+      new RegExp(`^${name}: (.+)$`, 'm').exec(front)?.[1];
+    // Named <plugin>:<name> once installed.
+    expect(`${plugin.name}:${field('name') ?? ''}`).toBe(ITEM_WORKER_AGENT);
+    expect(field('description')).toBeDefined();
+    // Its own git worktree, and it runs while the lead takes the next events.
+    expect(field('isolation')).toBe('worktree');
+    expect(field('background')).toBe('true');
+    // Only the fields a plugin agent may have.
+    for (const line of front.split('\n')) {
+      expect(['name', 'description', 'isolation', 'background']).toContain(line.split(':')[0]);
     }
-    expect((local.mcpServers as typeof plugin.mcpServers).buildit).toEqual({
-      ...plugin.mcpServers.buildit,
-      command: 'node',
-      args: ['${CLAUDE_PLUGIN_ROOT}/../dist/index.js', '--channel'],
-    });
-    expect(read('plugin-local/hooks/hooks.json')).toEqual(hooks);
+    expect(text).toContain('untrusted_content');
+    expect(text).toContain('card_thread');
+  });
+
+  it("makes a local marketplace whose plugin runs the checkout's dist/ with the same hooks and settings", async () => {
+    const { DEV_MARKETPLACE, devCommands, writeDevMarketplace } =
+      await import('../scripts/dev-marketplace.js');
+    const out = mkdtempSync(join(tmpdir(), 'buildit-dev-marketplace-'));
+    try {
+      const checkout = resolve(import.meta.dirname, '..');
+      const { version } = writeDevMarketplace(checkout, out);
+      expect(version).toBe(`${pkg.version}-local`);
+      const market = readJsonAt(join(out, '.claude-plugin', 'marketplace.json'));
+      expect(market).toMatchObject({
+        name: DEV_MARKETPLACE,
+        plugins: [{ name: 'buildit', source: './buildit', version }],
+      });
+      const local = readJsonAt(join(out, 'buildit', '.claude-plugin', 'plugin.json'));
+      const published = plugin as unknown as Record<string, unknown>;
+      // Named buildit with a server buildit, so the hooks' plugin:buildit:buildit resolve.
+      for (const key of new Set([...Object.keys(local), ...Object.keys(published)])) {
+        if (key === 'description' || key === 'mcpServers' || key === 'version') continue;
+        expect(local[key], key).toEqual(published[key]);
+      }
+      expect((local.mcpServers as typeof plugin.mcpServers).buildit).toEqual({
+        ...plugin.mcpServers.buildit,
+        command: 'node',
+        args: [join(checkout, 'dist', 'index.js'), '--channel', '--from-plugin'],
+      });
+      expect(readJsonAt(join(out, 'buildit', 'hooks', 'hooks.json'))).toEqual(hooks);
+      expect(readFileSync(join(out, 'buildit', 'agents', 'buildit-item-worker.md'), 'utf8')).toBe(
+        readFileSync(new URL('../plugin/agents/buildit-item-worker.md', import.meta.url), 'utf8'),
+      );
+      expect(devCommands(out)).toEqual([
+        `claude plugin marketplace add ${out}`,
+        'claude plugin install buildit@buildit-dev',
+        'claude --dangerously-load-development-channels plugin:buildit@buildit-dev',
+      ]);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
   });
 
   it("calls ask from AskUserQuestion's hook with the server's timeout, and turn_ended on Stop", async () => {
@@ -151,6 +212,9 @@ describe('the Claude Code plugin', () => {
         tool_use_id: '${tool_use_id}',
         session_id: '${session_id}',
         format: 'hook',
+        // Who asks (empty for the main agent): an item worker's question goes to its item.
+        agent_id: '${agent_id}',
+        agent_type: '${agent_type}',
       },
     });
     expect(hooks.hooks.Stop?.[0]?.hooks[0]).toMatchObject({

@@ -74,14 +74,22 @@ src/
   tools/setup.ts        create_channel, create_project
   tools/reply.ts        reply, and turn_ended for the plugin's Stop hook (channel mode only;
                         not in the catalog)
+  tools/threads.ts      list_threads (channel mode only)
   tools/ask.ts          ask: questions as a card, the answer back (channel mode only; also the
                         plugin's AskUserQuestion hook, format "hook")
   channel/api.ts        the session operations (connect flow, session, events, messages, heartbeat)
   channel/loop.ts       channel mode: polls the session's events, gates the sender, sends
                         notifications/claude/channel, hands card events to their waiters, turns
-                        plan cards' outcomes into plan_resolved notifications, acks
+                        plan cards' outcomes into plan_resolved notifications, acks; work items'
+                        events (assigned, mentions and replies in an item's thread, unassigned)
+  channel/item-events.ts  the content of a work item's notifications (lead, data blocks)
+  channel/workers.ts    where the question hook posts: the lead's in the DM, a worker's in its
+                        item's thread (the lead's table)
+  channel/threads.ts    which thread reply, ask and the approval cards post in (named once
+                        several are active)
   channel/waiters.ts    who waits for answers to the session's cards, by message id
-  channel/lock.ts       one channel server per folder (a lock file next to the token file)
+  channel/lock.ts       one channel server per folder, the plugin's first (lock files next to
+                        the token file)
   channel/typing.ts     "<agent> is writing..." while Claude works on a message
   cli/commands.ts       connect (device flow), disconnect, status
   cli/claude-config.ts  reads Claude Code's files for status (a channel server and the plugin)
@@ -101,6 +109,8 @@ scripts/
   inspect.ts            MCP Inspector CLI smoke test (stdio and HTTP, both protocol eras;
                         --image adds the container)
   publish-image.ts      build the image for amd64 and arm64 and push it to GHCR (a maintainer runs it)
+  dev-marketplace.ts    npm run dev-marketplace: a local marketplace whose buildit plugin runs this
+                        checkout's dist/ (written where the person says; never committed)
   bundle.ts             build the Claude Desktop bundle (.mcpb) from dist/ and bundle/manifest.json,
                         privacy-check it, and run it against the fake API
   privacy.ts            the privacy guard (npm run privacy, and privacy:pack over the packed
@@ -110,9 +120,9 @@ evals/                  realistic tasks a maintainer runs by hand against a test
 Dockerfile              the container image (HTTP mode, non-root, no token); .dockerignore is an allowlist
 deploy/                 team self-hosting: Compose with Caddy, and a guide
 bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes from package.json)
-plugin/                 the Claude Code plugin (channel server, AskUserQuestion and Stop hooks);
+plugin/                 the Claude Code plugin (channel server, AskUserQuestion and Stop hooks,
+                        the item worker subagent in agents/);
                         .claude-plugin/marketplace.json lists it (versions match package.json)
-plugin-local/           the same plugin running this checkout's dist/ (for --plugin-dir testing)
 server.json             the MCP Registry entry (its versions must match package.json; a test checks)
 docs/releasing.md       how a release ships through npm, GHCR, the bundle and the Registry
 ```

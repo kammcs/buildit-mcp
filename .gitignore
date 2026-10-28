@@ -9,3 +9,4 @@ results/
 *.mcpb
 .DS_Store
 *.tgz
+.dev-marketplace/

@@ -1,6 +1,6 @@
 {
   "name": "@kammcs/buildit-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP server for buildIt.Social: lets AI agents work with an org's projects, pages and channels through the buildIt.Social agent API, with a personal access token.",
   "license": "MIT",
   "author": "Kamm Creative Solutions",
@@ -46,6 +46,7 @@
     "inspect:docker": "npm run build && docker build -t buildit-mcp:inspect . && tsx scripts/inspect.ts --image buildit-mcp:inspect",
     "image:publish": "tsx scripts/publish-image.ts",
     "bundle": "npm run build && tsx scripts/bundle.ts",
+    "dev-marketplace": "tsx scripts/dev-marketplace.ts",
     "conformance": "npm run build && tsx scripts/conformance.ts",
     "generate": "tsx scripts/generate.ts",
     "privacy": "tsx scripts/privacy.ts",

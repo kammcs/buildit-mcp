@@ -12,7 +12,9 @@
               "questions": "${tool_input.questions}",
               "tool_use_id": "${tool_use_id}",
               "session_id": "${session_id}",
-              "format": "hook"
+              "format": "hook",
+              "agent_id": "${agent_id}",
+              "agent_type": "${agent_type}"
             },
             "timeout": 3600
           }

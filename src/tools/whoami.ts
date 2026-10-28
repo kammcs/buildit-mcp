@@ -3,6 +3,7 @@
  */
 import { z } from 'zod';
 
+import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import { OPERATIONS, type OperationId } from '../api/generated/operations.js';
 import type { MetaResponse } from '../api/generated/schemas.js';
 import { defineTool } from '../toolsets/registry.js';
@@ -260,6 +261,9 @@ export const whoamiTool = defineTool({
       lines.push(
         `This buildIt.Social server (API ${s.server.api_version ?? 'unknown'}) doesn't serve these operations yet, so calls that need them are refused until it is updated: ${s.server.not_served.join(', ')}.`,
       );
+    }
+    if (ctx.channel !== undefined && !ctx.channel.isChannel) {
+      lines.push(NOT_THE_CHANNEL);
     }
     if (updateRequired) {
       lines.push(
