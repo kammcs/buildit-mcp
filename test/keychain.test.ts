@@ -12,7 +12,11 @@ import {
   FileTokenStore,
   KEYRING_SERVICE,
   KeyringTokenStore,
+  forgetSession,
+  forgetStaleApi,
   openTokenStore,
+  savedApiUrl,
+  sessionApiKey,
   sessionKey,
   type KeyringEntry,
   type KeyringFactory,
@@ -126,6 +130,28 @@ describe('KeyringTokenStore', () => {
     expect(warnings[0]).not.toContain(TOKEN);
     expect(await store.delete('k1')).toBe(true);
     expect(await file.get('k1')).toBeUndefined();
+  });
+});
+
+describe('forgetting a session', () => {
+  it("removes the token and the record of its deployment, but not another deployment's", async () => {
+    const dir = tempDir();
+    const store = new FileTokenStore(join(dir, 'sessions.json'));
+    await store.set(sessionKey(dir, API), TOKEN);
+    await store.set(sessionApiKey(dir), API);
+    await forgetSession(store, dir, API);
+    expect(await store.get(sessionKey(dir, API))).toBeUndefined();
+    expect(await savedApiUrl(store, dir)).toBeUndefined();
+
+    const other = 'https://api2.example.com/functions/v1/agent-api';
+    await store.set(sessionKey(dir, other), TOKEN);
+    await store.set(sessionApiKey(dir), other);
+    await forgetSession(store, dir, API);
+    expect(await savedApiUrl(store, dir)).toBe(other);
+    expect(await forgetStaleApi(store, dir)).toBe(false);
+    await store.delete(sessionKey(dir, other));
+    expect(await forgetStaleApi(store, dir)).toBe(true);
+    expect(await savedApiUrl(store, dir)).toBeUndefined();
   });
 });
 

@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline/promises';
 import { runConnect, runDisconnect, runStatus, type CommandIO } from './cli/commands.js';
 import { COMMAND_USAGE, ConfigError, parseApiUrl, parseCli, USAGE } from './config.js';
 import { createLogger } from './log.js';
-import { openTokenStore, savedApiUrl, sessionKey } from './secrets/keychain.js';
+import { forgetSession, openTokenStore, savedApiUrl, sessionKey } from './secrets/keychain.js';
 import { CATALOG } from './toolsets/catalog.js';
 import { unknownToolNames } from './toolsets/registry.js';
 import { startHttp } from './transports/http.js';
@@ -103,9 +103,12 @@ async function main(): Promise<void> {
       process.exitCode = 2;
       return;
     }
+    const folder = config.channel.folder;
+    const apiUrl = config.apiUrl;
     config = { ...config, token };
     clearSaved = async () => {
-      await store.delete(key);
+      // The token, and the record of its deployment, as disconnect does.
+      await forgetSession(store, folder, apiUrl);
     };
   }
 

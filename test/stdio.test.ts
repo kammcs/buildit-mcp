@@ -253,8 +253,9 @@ describe('stdio channel mode (built binary)', () => {
       });
       expect(call.isError).toBe(true);
       expect(JSON.stringify(call.content)).toContain('This buildIt.Social session has ended');
-      // The saved token is cleared.
+      // The saved token is cleared, and the record of its deployment with it.
       expect(await store.get(sessionKey(home, api.url))).toBeUndefined();
+      expect(await store.get(sessionApiKey(home))).toBeUndefined();
       expect(stderr()).not.toContain(SESSION_TOKENS.second);
       expect(stderr()).not.toContain(TOKENS.full);
     } finally {

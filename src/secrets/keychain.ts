@@ -105,6 +105,34 @@ export async function savedApiUrl(store: TokenStore, folder: string): Promise<st
   }
 }
 
+/**
+ * Forgets a folder's session with one deployment: its token, and the record
+ * of the deployment when it names this one (a record of another deployment
+ * belongs to that one's session).
+ */
+export async function forgetSession(
+  store: TokenStore,
+  folder: string,
+  apiUrl: string,
+): Promise<void> {
+  await store.delete(sessionKey(folder, apiUrl));
+  if ((await savedApiUrl(store, folder)) === apiUrl) await store.delete(sessionApiKey(folder));
+}
+
+/**
+ * Removes the folder's record of a deployment when no token is left under
+ * it (left over from an older version). True when there was one to remove.
+ */
+export async function forgetStaleApi(store: TokenStore, folder: string): Promise<boolean> {
+  const saved = await savedApiUrl(store, folder);
+  if (saved === undefined) {
+    // A record that isn't a valid URL is stale too.
+    return store.delete(sessionApiKey(folder));
+  }
+  if ((await store.get(sessionKey(folder, saved))) !== undefined) return false;
+  return store.delete(sessionApiKey(folder));
+}
+
 /** The keychain's name on this platform, for messages. */
 export function keyringName(platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') return 'Windows Credential Manager';

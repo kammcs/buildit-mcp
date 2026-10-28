@@ -23,6 +23,7 @@ import {
   FileTokenStore,
   KeyringTokenStore,
   savedApiUrl,
+  sessionApiKey,
   sessionKey,
   type KeyringFactory,
   type TokenStore,
@@ -306,6 +307,30 @@ describe('disconnect', () => {
     expect(h.out()).toContain('the session is cancelled in buildIt.Social');
     expect(await runDisconnect({ apiUrl: api.url, folder: dir }, h.io)).toBe(0);
     expect(h.out()).toContain('No session is saved');
+  });
+});
+
+describe('disconnect, with a record of the deployment left over', () => {
+  it('removes a record whose token is gone, and says so', async () => {
+    const h = harness();
+    await h.store.set(sessionApiKey(dir), api.url);
+    expect(await runDisconnect({ apiUrl: api.url, folder: dir }, h.io)).toBe(0);
+    expect(h.out()).toContain('removed the leftover record of its deployment');
+    expect(await savedApiUrl(h.store, dir)).toBeUndefined();
+    // Nothing left: the plain message.
+    expect(await runDisconnect({ apiUrl: api.url, folder: dir }, h.io)).toBe(0);
+    expect(h.out()).toContain('No session is saved for this folder.\n');
+  });
+
+  it("keeps the record of another deployment's session that still has its token", async () => {
+    const h = harness();
+    await h.store.set(sessionKey(dir, api.url), SESSION_TOKENS.first);
+    await h.store.set(sessionApiKey(dir), api.url);
+    const other = 'https://api.example.com/functions/v1/agent-api';
+    expect(await runDisconnect({ apiUrl: other, folder: dir, apiUrlFlag: true }, h.io)).toBe(0);
+    expect(h.out()).toContain('No session is saved for this folder.');
+    expect(await savedApiUrl(h.store, dir)).toBe(api.url);
+    expect(await h.store.get(sessionKey(dir, api.url))).toBe(SESSION_TOKENS.first);
   });
 });
 

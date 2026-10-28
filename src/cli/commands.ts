@@ -22,7 +22,14 @@ import {
 import { FORBIDDEN_CHARS, type ConnectOptions, type SessionCommandOptions } from '../config.js';
 import { isTokenRefused, isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
-import { savedApiUrl, sessionApiKey, sessionKey, type TokenStore } from '../secrets/keychain.js';
+import {
+  forgetSession,
+  forgetStaleApi,
+  savedApiUrl,
+  sessionApiKey,
+  sessionKey,
+  type TokenStore,
+} from '../secrets/keychain.js';
 
 /** The name a session's client shows in buildIt.Social ("Claude Code on <machine>"). */
 export const CONNECT_CLIENT = 'Claude Code';
@@ -347,15 +354,18 @@ export async function runDisconnect(given: SessionCommandOptions, io: CommandIO)
   const key = sessionKey(options.folder, options.apiUrl);
   const token = await io.store.get(key);
   if (token === undefined) {
-    io.out('No session is saved for this folder.\n');
+    // A record of the deployment can outlive its token (an older version left it after a revoke).
+    const stale = await forgetStaleApi(io.store, options.folder);
+    io.out(
+      stale
+        ? 'No session is saved for this folder; removed the leftover record of its deployment.\n'
+        : 'No session is saved for this folder.\n',
+    );
     return 0;
   }
   // Best effort: the session ends in buildIt.Social too, before its token is forgotten here.
   const failed = await cancel(apiFor(options, io, token));
-  await io.store.delete(key);
-  if ((await savedApiUrl(io.store, options.folder)) === options.apiUrl) {
-    await io.store.delete(sessionApiKey(options.folder));
-  }
+  await forgetSession(io.store, options.folder, options.apiUrl);
   io.out(
     failed === undefined
       ? 'Disconnected: the session is cancelled in buildIt.Social, and this folder no longer has a saved token.\n'
