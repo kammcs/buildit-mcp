@@ -96,7 +96,9 @@ const CONTROL_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/;
 export function questionCardProblem(card: unknown, nowMs: number): string | undefined {
   if (card === null || typeof card !== 'object' || Array.isArray(card)) return '(card)';
   const c = card as Record<string, unknown>;
-  if (JSON.stringify(c).length > 16_384) return '(card)';
+  const counted = { ...c };
+  delete counted.private;
+  if (Buffer.byteLength(JSON.stringify(counted), 'utf8') > 16_384) return '(card)';
   if ('source' in c) return 'source';
   if (c.v !== 1) return 'v';
   const line = (v: unknown, max: number): boolean =>
@@ -140,10 +142,21 @@ export function questionCardProblem(card: unknown, nowMs: number): string | unde
       for (const [j, o] of options.entries()) {
         if (typeof o.id !== 'string' || !ID_RE.test(o.id)) return `inputs[${i}].options[${j}].id`;
         if (!line(o.label, 80)) return `inputs[${i}].options[${j}].label`;
+        if (o.description !== undefined && !text(o.description, 2000)) {
+          return `inputs[${i}].options[${j}].description`;
+        }
+        const extra = Object.keys(o).filter((k) => !['id', 'label', 'description'].includes(k));
+        if (extra.length > 0) return `inputs[${i}].options[${j}].${extra[0]}`;
       }
     } else if (input.type === 'text_input') {
+      if (input.placeholder !== undefined && !line(input.placeholder, 150)) {
+        return `inputs[${i}].placeholder`;
+      }
       const max = input.max_length;
-      if (typeof max !== 'number' || max < 1 || max > 500) return `inputs[${i}].max_length`;
+      if (typeof max !== 'number' || max < 1 || max > 2000) return `inputs[${i}].max_length`;
+      if (input.multiline !== undefined && typeof input.multiline !== 'boolean') {
+        return `inputs[${i}].multiline`;
+      }
     } else {
       return `inputs[${i}].type`;
     }

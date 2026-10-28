@@ -359,7 +359,7 @@ These need Claude Code with the buildit plugin, a folder connected to the seed o
 
 > (in the app) Add a Severity to DEMO-48. Ask me which one.
 
-- **Success:** Claude asks with a card in the same thread (buttons High and Low, and Other), the person taps Low, and DEMO-48 gets Severity Low; Claude answers in the thread with `reply`. Run it again and let the card wait out its time: Claude says nobody answered and doesn't set a severity on its own, or says which it chose and why.
+- **Success:** Claude asks with a card in the same thread (the choices High and Low, and Other), the person chooses Low and sends it, and DEMO-48 gets Severity Low; Claude answers in the thread with `reply`. Run it again and let the card wait out its time: Claude says nobody answered and doesn't set a severity on its own, or says which it chose and why.
 - **Tools:** `AskUserQuestion` (through the plugin's hook) or `ask`, `update_item`, `reply`.
 - **Good run:** 3 calls.
 

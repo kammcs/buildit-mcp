@@ -1,25 +1,31 @@
 /**
- * ask's pieces on their own: reading the questions, the card for each
- * shape (buttons, the Other form, the form), decoding answers, the words
- * in each language, the card message's id, and the hook's exact JSON.
+ * ask's pieces on their own: reading the questions, the card (always a
+ * form: each question's text, a choice with its options' descriptions, and
+ * Other), splitting a set that doesn't fit one card, decoding answers, the
+ * words in each language, the card message's ids, and the hook's exact JSON.
  */
 import { describe, expect, it } from 'vitest';
 
 import {
   askMessageId,
   buildQuestionCard,
+  buildQuestionCards,
+  cardIds,
   cardLocale,
+  cardSize,
+  CARD_MAX_BYTES,
+  CARD_MAX_ELEMENTS,
   cleanLine,
   cleanOther,
+  cleanText,
   closesAt,
   decodeAnswer,
   hookAllow,
   hookDeny,
   HOOK_PASS,
   noAnswerText,
-  otherFormCard,
   parseQuestions,
-  usesButtons,
+  splitText,
   uuidV5,
   type Question,
 } from '../src/tools/ask.js';
@@ -40,6 +46,13 @@ const targets: Question = {
   multiSelect: true,
 };
 
+type Input = Record<string, unknown> & { options?: Record<string, unknown>[] };
+const inputsOf = (card: Record<string, unknown>): Input[] => card.inputs as Input[];
+const bodyOf = (card: Record<string, unknown>): { type: string; text: string }[] =>
+  (card.body ?? []) as { type: string; text: string }[];
+const BIDI_OVERRIDE = String.fromCharCode(0x202e);
+const BELL = String.fromCharCode(7);
+
 describe('parseQuestions', () => {
   it('takes the array, or its JSON text (as the hook passes it), keeping other keys', () => {
     const withExtra = [{ ...color, extra: 1 }];
@@ -54,6 +67,7 @@ describe('parseQuestions', () => {
     ['one option', [{ ...color, options: [{ label: 'Only' }] }]],
     ['five options', [{ ...color, options: [1, 2, 3, 4, 5].map((n) => ({ label: `O${n}` })) }]],
     ['a blank label', [{ ...color, options: [{ label: ' ' }, { label: 'B' }] }]],
+    ['a blank header', [{ ...color, header: ' ' }]],
     ['no header', [{ question: 'Q?', options: color.options }]],
     ['an object', { questions: [color] }],
     ['empty text (a hook path that is missing)', ''],
@@ -63,20 +77,34 @@ describe('parseQuestions', () => {
 });
 
 describe('the card', () => {
-  it('uses buttons for one single-choice question with short labels, with Other…', () => {
-    expect(usesButtons([color])).toBe(true);
+  it("is a form: the question's text, a required choice under its header, Other, Send (golden)", () => {
     const built = buildQuestionCard([color], ctx);
-    expect(built.kind).toBe('buttons');
     expect(built.text).toBe('Claude asks: Which color?');
     expect(built.card).toEqual({
       v: 1,
-      header: { title: 'Which color?', subtitle: 'Color' },
-      body: [{ type: 'facts', items: [{ label: 'Blue', value: 'The default; runs everywhere.' }] }],
-      actions: [
-        { type: 'button', id: 'o1', label: 'Blue' },
-        { type: 'button', id: 'o2', label: 'Green' },
-        { type: 'button', id: 'other', label: 'Other…' },
+      header: { title: 'Claude has questions' },
+      body: [{ type: 'text', text: 'Which color?' }],
+      inputs: [
+        {
+          type: 'choice',
+          id: 'q1',
+          label: 'Color',
+          required: true,
+          options: [
+            { id: 'o1', label: 'Blue', description: 'The default; runs everywhere.' },
+            { id: 'o2', label: 'Green' },
+          ],
+        },
+        {
+          type: 'text_input',
+          id: 'q1_other',
+          label: 'Other',
+          placeholder: 'Or type your own answer',
+          multiline: true,
+          max_length: 2000,
+        },
       ],
+      actions: [{ type: 'submit', label: 'Send' }],
       responses: {
         mode: 'once',
         visibility: 'private',
@@ -90,94 +118,140 @@ describe('the card', () => {
     expect(questionCardProblem(built.card, NOW)).toBeUndefined();
   });
 
-  it('puts a long question in the body, with the header as the title', () => {
-    const long = { ...color, question: `${'Which one of these should we use '.repeat(6)}?` };
-    const built = buildQuestionCard([long], ctx);
-    expect(built.card.header).toEqual({ title: 'Color', subtitle: 'Color' });
-    expect((built.card.body as unknown[])[0]).toEqual({ type: 'text', text: long.question });
-    expect(questionCardProblem(built.card, NOW)).toBeUndefined();
-  });
-
-  it('turns into a one-field form for Other, with the same header, deadline and map', () => {
-    const built = buildQuestionCard([color], ctx);
-    const other = otherFormCard(built.card, 'fr-CA');
-    expect(other.actions).toEqual([{ type: 'submit', label: 'Envoyer' }]);
-    expect(other.inputs).toEqual([
-      { type: 'text_input', id: 'other', label: 'Votre réponse', max_length: 500, required: true },
-    ]);
-    expect(other.header).toEqual(built.card.header);
-    expect(other.responses).toEqual(built.card.responses);
-    expect(other.private).toEqual(built.card.private);
-    expect(questionCardProblem(other, NOW)).toBeUndefined();
-  });
-
-  it('uses a form for several questions, multi-select, or long labels', () => {
-    const longLabel = {
-      ...color,
-      options: [{ label: 'A label that is far too long for a button' }, { label: 'B' }],
-    };
-    expect(usesButtons([longLabel])).toBe(false);
-    expect(usesButtons([targets])).toBe(false);
-    expect(usesButtons([color, targets])).toBe(false);
+  it('asks several questions in one form, in order, multi-select where asked', () => {
     const built = buildQuestionCard([color, targets], ctx);
-    expect(built.kind).toBe('form');
     expect(built.text).toBe('Claude asks:\n- Which color?\n- Which targets?');
-    expect(built.card).toMatchObject({
-      v: 1,
-      header: { title: 'Claude has questions' },
-      body: [{ type: 'text', text: '**Color**\n• Blue: The default; runs everywhere.' }],
-      inputs: [
-        {
-          type: 'choice',
-          id: 'q1',
-          label: 'Which color?',
-          options: [
-            { id: 'o1', label: 'Blue' },
-            { id: 'o2', label: 'Green' },
-          ],
-        },
-        { type: 'text_input', id: 'q1_other', label: 'Other answer', max_length: 500 },
-        { type: 'choice', id: 'q2', label: 'Which targets?', multiple: true },
-        { type: 'text_input', id: 'q2_other' },
+    expect(bodyOf(built.card).map((b) => b.text)).toEqual(['Which color?', 'Which targets?']);
+    const inputs = inputsOf(built.card);
+    expect(inputs.map((i) => [i.type, i.id, i.label])).toEqual([
+      ['choice', 'q1', 'Color'],
+      ['text_input', 'q1_other', 'Other'],
+      ['choice', 'q2', 'Targets'],
+      ['text_input', 'q2_other', 'Other'],
+    ]);
+    expect(inputs[0]).not.toHaveProperty('multiple');
+    expect(inputs[2]).toMatchObject({ multiple: true, required: true });
+    expect(inputs[2]?.options).toEqual([
+      { id: 'o1', label: 'Windows' },
+      { id: 'o2', label: 'macOS' },
+      { id: 'o3', label: 'Linux' },
+    ]);
+    expect(inputs[1]).not.toHaveProperty('required');
+    expect(questionCardProblem(built.card, NOW)).toBeUndefined();
+  });
+
+  it('keeps line breaks and Markdown in questions and descriptions, and cuts only over 2,000', () => {
+    const rich: Question = {
+      question: `Pick **one**:\n\n- the\tfirst${BIDI_OVERRIDE}\n- the second${BELL}`,
+      header: 'Pick\nit',
+      options: [
+        { label: 'Long', description: `First *line*\nsecond line ${'w'.repeat(2100)}` },
+        { label: 'Blank', description: ` \n\t${BIDI_OVERRIDE} ` },
+        { label: 'Two\nlines', description: 'Use `code` and a [link](https://example.com).' },
       ],
-      actions: [{ type: 'submit', label: 'Send' }],
+    };
+    const card = buildQuestionCard([rich], ctx).card;
+    expect(bodyOf(card)).toEqual([
+      { type: 'text', text: 'Pick **one**:\n\n- the first\n- the second' },
+    ]);
+    const [choice] = inputsOf(card);
+    expect(choice?.label).toBe('Pick it');
+    const options = choice?.options ?? [];
+    const long = options[0]?.description as string;
+    expect(long.startsWith('First *line*\nsecond line www')).toBe(true);
+    expect(Array.from(long)).toHaveLength(2000);
+    expect(long.endsWith('…')).toBe(true);
+    expect(options[1]).toEqual({ id: 'o2', label: 'Blank' });
+    expect(options[2]).toEqual({
+      id: 'o3',
+      label: 'Two lines',
+      description: 'Use `code` and a [link](https://example.com).',
     });
-    expect((built.card.inputs as Record<string, unknown>[])[0]).not.toHaveProperty('multiple');
-    expect(JSON.stringify(built.card)).not.toContain('required');
-    expect(questionCardProblem(built.card, NOW)).toBeUndefined();
+    expect(questionCardProblem(card, NOW)).toBeUndefined();
+    // A description at the limit is left whole.
+    expect(cleanText('d'.repeat(2000), 2000)).toBe('d'.repeat(2000));
   });
 
-  it('fits four questions with long text in the limits', () => {
-    const big: Question = {
-      question: `${'q'.repeat(1990)}?`,
-      header: 'h'.repeat(200),
-      options: [1, 2, 3, 4].map((n) => ({
-        label: `${'x'.repeat(490)}${n}`,
-        description: 'd'.repeat(1900),
-      })),
-      multiSelect: true,
-    };
-    const built = buildQuestionCard([big, big, big, big], ctx);
-    expect(questionCardProblem(built.card, NOW)).toBeUndefined();
-    expect(Buffer.byteLength(JSON.stringify(built.card.private), 'utf8')).toBeLessThanOrEqual(2048);
-    expect(Array.from(built.text).length).toBeLessThanOrEqual(4000);
+  it('splits a question over 2,000 characters over text elements, cutting nothing', () => {
+    const paragraph = `${'word '.repeat(150).trim()}\n`;
+    const long: Question = { ...color, question: paragraph.repeat(7).trim() };
+    const body = bodyOf(buildQuestionCard([long], ctx).card);
+    expect(body.length).toBeGreaterThan(1);
+    for (const b of body) expect(Array.from(b.text).length).toBeLessThanOrEqual(2000);
+    expect(body.map((b) => b.text).join('\n')).toBe(long.question);
+    expect(splitText('x'.repeat(4500), 2000).map((p) => p.length)).toEqual([2000, 2000, 500]);
   });
 
-  it('removes control and bidi characters, and collapses white space in lines', () => {
+  it('removes control and bidi characters, and keeps labels to one line of 80', () => {
     const hostile: Question = {
-      question: 'Pick‮ one\u0007\nnow?',
-      header: 'H⁦dr',
-      options: [{ label: 'A‏\tB' }, { label: 'C' }],
+      question: `Pick${BIDI_OVERRIDE} one${BELL} now?`,
+      header: `H${String.fromCharCode(0x2066)}dr`,
+      options: [{ label: `A${String.fromCharCode(0x200f)}\tB` }, { label: 'x'.repeat(100) }],
     };
-    const built = buildQuestionCard([hostile], ctx);
-    expect(built.card.header).toEqual({ title: 'Pick one now?', subtitle: 'Hdr' });
-    expect((built.card.actions as { label: string }[])[0]?.label).toBe('A B');
+    const card = buildQuestionCard([hostile], ctx).card;
+    expect(bodyOf(card)[0]?.text).toBe('Pick one now?');
+    const choice = inputsOf(card)[0];
+    expect(choice?.label).toBe('Hdr');
+    expect(choice?.options?.[0]?.label).toBe('A B');
+    expect(Array.from(choice?.options?.[1]?.label as string)).toHaveLength(80);
     expect(cleanLine('x'.repeat(40), 30)).toBe(`${'x'.repeat(29)}…`);
   });
 
   it('closes a minute after the wait, at most a day after it is posted', () => {
     expect(closesAt(NOW, 600)).toBe('2026-10-28T10:11:00.000Z');
     expect(closesAt(NOW, 86_400)).toBe('2026-10-29T10:00:00.000Z');
+  });
+});
+
+describe('a set that does not fit one card', () => {
+  const wordy = (n: number): Question => ({
+    question: `Question ${n}?`,
+    header: `Q${n}`,
+    options: [1, 2, 3, 4].map((o) => ({ label: `Option ${o}`, description: 'd'.repeat(1500) })),
+  });
+
+  it('stays one card when it fits', () => {
+    const cards = buildQuestionCards([color, targets], ctx);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.questions).toEqual([color, targets]);
+  });
+
+  it('is one card per question, in order, each within the limits', () => {
+    const set = [wordy(1), wordy(2), wordy(3), wordy(4)];
+    expect(cardSize(buildQuestionCard(set, ctx).card).bytes).toBeGreaterThan(CARD_MAX_BYTES);
+    const cards = buildQuestionCards(set, ctx);
+    expect(cards.map((c) => c.questions)).toEqual(set.map((q) => [q]));
+    expect(cards.map((c) => c.text)).toEqual(set.map((q) => `Claude asks: ${q.question}`));
+    for (const c of cards) {
+      expect(questionCardProblem(c.card, NOW)).toBeUndefined();
+      // Nothing was cut: each description is whole.
+      expect(inputsOf(c.card)[0]?.options?.[0]?.description).toBe('d'.repeat(1500));
+    }
+  });
+
+  it('splits by elements too, and shrinks a single question that alone is too big', () => {
+    const tall: Question = { ...color, question: `${'line of text\n'.repeat(1500)}?` };
+    const cards = buildQuestionCards([tall, targets], ctx);
+    expect(cards).toHaveLength(2);
+    const size = cardSize(cards[0]!.card);
+    expect(size.bytes).toBeLessThanOrEqual(CARD_MAX_BYTES);
+    expect(size.elements).toBeLessThanOrEqual(CARD_MAX_ELEMENTS);
+    expect(questionCardProblem(cards[0]!.card, NOW)).toBeUndefined();
+    const huge: Question = {
+      question: 'q'.repeat(20_000),
+      header: 'Huge',
+      options: [1, 2, 3, 4].map((o) => ({ label: `O${o}`, description: 'd'.repeat(10_000) })),
+    };
+    const [one] = buildQuestionCards([huge], ctx);
+    expect(questionCardProblem(one!.card, NOW)).toBeUndefined();
+  });
+
+  it("gives each card its own id, the first one the tool call's", () => {
+    const first = uuidV5('toolu_1');
+    const ids = cardIds(first, 3);
+    expect(ids[0]).toBe(first);
+    expect(new Set(ids).size).toBe(3);
+    expect(cardIds(first, 3)).toEqual(ids);
   });
 });
 
@@ -189,67 +263,58 @@ describe('words', () => {
     expect(cardLocale('sr')).toBe('sr-Latn');
     expect(cardLocale('de')).toBe('en');
     expect(cardLocale(undefined)).toBe('en');
-    for (const [locale, other, title] of [
-      ['es-419', 'Otra…', 'Claude tiene preguntas'],
-      ['fr-CA', 'Autre…', 'Claude a des questions'],
-      ['sr-Cyrl', 'Друго…', 'Claude има питања'],
-      ['sr-Latn', 'Drugo…', 'Claude ima pitanja'],
+    for (const [locale, other, placeholder, send, title] of [
+      ['es-419', 'Otra', 'O escribe tu propia respuesta', 'Enviar', 'Claude tiene preguntas'],
+      ['fr-CA', 'Autre', 'Ou écrivez votre propre réponse', 'Envoyer', 'Claude a des questions'],
+      ['sr-Cyrl', 'Друго', 'Или упишите свој одговор', 'Пошаљи', 'Claude има питања'],
+      ['sr-Latn', 'Drugo', 'Ili upišite svoj odgovor', 'Pošalji', 'Claude ima pitanja'],
     ] as const) {
-      const buttons = buildQuestionCard([color], { ...ctx, locale });
-      expect((buttons.card.actions as { label: string }[]).at(-1)?.label).toBe(other);
       const form = buildQuestionCard([color, targets], { ...ctx, locale });
       expect(form.card.header).toEqual({ title });
+      expect(inputsOf(form.card)[1]).toMatchObject({ label: other, placeholder });
+      expect(form.card.actions).toEqual([{ type: 'submit', label: send }]);
     }
   });
 });
 
 describe('decodeAnswer', () => {
-  it('maps a button to its label, and Other to the Other form', () => {
-    expect(decodeAnswer([color], 'buttons', { action: 'o2' })).toEqual({
-      kind: 'answers',
-      answers: { 'Which color?': 'Green' },
-    });
-    expect(decodeAnswer([color], 'buttons', { action: 'other' })).toEqual({ kind: 'other' });
-    expect(decodeAnswer([color], 'buttons', { action: 'o9' })).toEqual({
-      kind: 'reject',
-      note: 'answer_each',
-    });
-  });
-
-  it("takes the Other form's text, cleaned, and refuses it empty", () => {
-    expect(decodeAnswer([color], 'other_form', { inputs: { other: ' my‮ own\ntext ' } })).toEqual({
-      kind: 'answers',
-      answers: { 'Which color?': 'my own text' },
-    });
-    expect(decodeAnswer([color], 'other_form', { inputs: { other: '  ' } })).toEqual({
-      kind: 'reject',
-      note: 'type_below',
-    });
-    expect(cleanOther('y'.repeat(900))).toHaveLength(500);
-  });
-
   it('joins labels in option order, then the Other text, per question', () => {
     expect(
-      decodeAnswer([color, targets], 'form', {
+      decodeAnswer([color, targets], {
         inputs: { q1: 'o1', q2: ['o3', 'o1'], q2_other: 'FreeBSD' },
       }),
     ).toEqual({
       kind: 'answers',
       answers: { 'Which color?': 'Blue', 'Which targets?': 'Windows, Linux, FreeBSD' },
     });
-    // Only Other text answers a question too.
-    expect(decodeAnswer([color], 'form', { inputs: { q1_other: 'Red' } })).toEqual({
+    expect(decodeAnswer([color], { inputs: { q1: 'o2' } })).toEqual({
       kind: 'answers',
-      answers: { 'Which color?': 'Red' },
+      answers: { 'Which color?': 'Green' },
     });
   });
 
-  it('refuses a form with a question left unanswered', () => {
-    expect(decodeAnswer([color, targets], 'form', { inputs: { q1: 'o1' } })).toEqual({
+  it('takes the Other text alone, its lines kept, cleaned and cut to 2,000', () => {
+    expect(
+      decodeAnswer([color], { inputs: { q1_other: ` my${BIDI_OVERRIDE} own\ntext${BELL} ` } }),
+    ).toEqual({
+      kind: 'answers',
+      answers: { 'Which color?': 'my own\ntext' },
+    });
+    expect(cleanOther('y'.repeat(2000))).toHaveLength(2000);
+    expect(cleanOther('y'.repeat(2900))).toHaveLength(2000);
+    expect(cleanOther('y'.repeat(2900)).endsWith('…')).toBe(true);
+  });
+
+  it('refuses a question left unanswered, or an answer that is not a form', () => {
+    expect(decodeAnswer([color, targets], { inputs: { q1: 'o1' } })).toEqual({
       kind: 'reject',
       note: 'answer_each',
     });
-    expect(decodeAnswer([color], 'form', { action: 'o1' })).toEqual({
+    expect(decodeAnswer([color], { inputs: { q1: 'o9', q1_other: '  ' } })).toEqual({
+      kind: 'reject',
+      note: 'answer_each',
+    });
+    expect(decodeAnswer([color], { action: 'o1' })).toEqual({
       kind: 'reject',
       note: 'answer_each',
     });

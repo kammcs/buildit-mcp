@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { CallToolResult } from '@modelcontextprotocol/client';
 
 import { NOT_THE_CHANNEL } from '../src/channel/lock.js';
-import { uuidV5 } from '../src/tools/ask.js';
+import { cardIds, uuidV5 } from '../src/tools/ask.js';
 import { CARD_STEP } from '../src/tools/plans.js';
 import {
   channelConfig,
@@ -109,7 +109,7 @@ async function cardOf(id: string) {
 }
 
 describe('ask from the hook', () => {
-  it('posts one button card in the latest thread, and allows AskUserQuestion with the answer', async () => {
+  it('posts one form in the latest thread, and allows AskUserQuestion with the answer', async () => {
     api.sessions.open(TOKEN);
     const c = await start();
     await ready();
@@ -121,12 +121,9 @@ describe('ask from the hook', () => {
     expect(card.threadId).toBe(root);
     const message = api.sessions.message(TOKEN, id)!;
     expect(message.text).toBe('Claude asks: Which color?');
-    expect((message.card!.actions as { id: string }[]).map((a) => a.id)).toEqual([
-      'o1',
-      'o2',
-      'other',
-    ]);
-    api.sessions.answerCard(TOKEN, id, { action: 'o2' });
+    expect((message.card!.inputs as { id: string }[]).map((i) => i.id)).toEqual(['q1', 'q1_other']);
+    expect(message.card!.actions).toEqual([{ type: 'submit', label: 'Send' }]);
+    api.sessions.answerCard(TOKEN, id, { inputs: { q1: 'o2' } });
     const r = await pending;
     expect(r.isError).toBeFalsy();
     expect(JSON.parse(textOf(r))).toEqual({
@@ -136,29 +133,95 @@ describe('ask from the hook', () => {
         updatedInput: { questions: [color], answers: { 'Which color?': 'Green' } },
       },
     });
-    // Accepted, which closed the card; no second close.
+    // Accepted, which closed the card; no second close, and the card never changed.
     expect(card.responses[0]?.status).toBe('accepted');
     expect(card.closedBy).toBe('app');
+    expect(card.updates).toEqual([]);
   });
 
-  it('turns Other into a one-field form, then takes the typed answer', async () => {
+  it('takes a typed Other answer, its lines kept', async () => {
     api.sessions.open(TOKEN);
     const c = await start();
     await ready();
     const pending = hookAsk(c, [color]);
     const id = uuidV5('toolu_test_1');
-    const card = await cardOf(id);
-    api.sessions.answerCard(TOKEN, id, { action: 'other' });
-    await waitFor(() => card.responses[0]?.status === 'rejected');
-    expect(card.responses[0]?.note).toBe('Type your answer below');
-    expect(card.updates).toHaveLength(1);
-    expect(card.updates[0]?.inputs).toEqual([
-      { type: 'text_input', id: 'other', label: 'Your answer', max_length: 500, required: true },
-    ]);
-    api.sessions.answerCard(TOKEN, id, { inputs: { other: 'Teal‮' } });
+    await cardOf(id);
+    api.sessions.answerCard(TOKEN, id, {
+      inputs: { q1_other: `Teal${String.fromCharCode(0x202e)}\nwith a stripe` },
+    });
     const r = await pending;
-    expect(hookOut(r).updatedInput?.answers).toEqual({
-      'Which color?': 'Teal',
+    expect(hookOut(r).updatedInput?.answers).toEqual({ 'Which color?': 'Teal\nwith a stripe' });
+  });
+
+  describe('a set too big for one card', () => {
+    const wordy = (n: number) => ({
+      question: `Question ${n}?`,
+      header: `Q${n}`,
+      options: [1, 2, 3, 4].map((o) => ({ label: `Option ${o}`, description: 'd'.repeat(1500) })),
+    });
+    const set = [wordy(1), wordy(2), wordy(3)];
+    const ids = cardIds(uuidV5('toolu_test_1'), 3);
+
+    it('is asked as one card per question, in order, and answered together', async () => {
+      api.sessions.open(TOKEN);
+      const c = await start();
+      await ready();
+      const pending = hookAsk(c, set);
+      for (const id of ids) await cardOf(id);
+      expect(session().messages.map((m) => m.id)).toEqual(ids);
+      expect(session().messages.map((m) => m.text)).toEqual(
+        set.map((q) => `Claude asks: ${q.question}`),
+      );
+      // Answered out of order; the first answer alone ends nothing.
+      api.sessions.answerCard(TOKEN, ids[2]!, { inputs: { q1: 'o3' } });
+      api.sessions.answerCard(TOKEN, ids[0]!, { inputs: { q1: 'o1' } });
+      await waitFor(() => session().cards.get(ids[0]!)?.closedBy === 'app');
+      expect(session().cards.get(ids[1]!)?.closedAt).toBeNull();
+      api.sessions.answerCard(TOKEN, ids[1]!, { inputs: { q1_other: 'None of these' } });
+      const r = await pending;
+      expect(hookOut(r)).toMatchObject({ permissionDecision: 'allow' });
+      expect(hookOut(r).updatedInput?.answers).toEqual({
+        'Question 1?': 'Option 1',
+        'Question 2?': 'None of these',
+        'Question 3?': 'Option 3',
+      });
+      expect(Object.keys(hookOut(r).updatedInput?.answers ?? {})).toEqual([
+        'Question 1?',
+        'Question 2?',
+        'Question 3?',
+      ]);
+    });
+
+    it('ends as dismissed when any of them is dismissed or closed, closing the others', async () => {
+      api.sessions.open(TOKEN);
+      const c = await start();
+      await ready();
+      const pending = hookAsk(c, set);
+      for (const id of ids) await cardOf(id);
+      api.sessions.answerCard(TOKEN, ids[0]!, { inputs: { q1: 'o1' } });
+      await waitFor(() => session().cards.get(ids[0]!)?.closedBy === 'app');
+      api.sessions.closeCardBy(TOKEN, ids[1]!, 'deleted');
+      const out = hookOut(await pending);
+      expect(out.permissionDecision).toBe('deny');
+      expect(out.permissionDecisionReason).toContain('dismissed this question');
+      expect(session().cards.get(ids[2]!)?.closedBy).toBe('app');
+    });
+
+    it('closes the cards already posted when a later one is refused', async () => {
+      api.sessions.open(TOKEN);
+      const c = await start();
+      await ready();
+      // The first post goes through; the second is refused.
+      const post = api.sessions.post.bind(api.sessions);
+      let posts = 0;
+      api.sessions.post = (token, body) => {
+        posts++;
+        if (posts === 2) api.sessions.refusePosts = 1;
+        return post(token, body);
+      };
+      expect(textOf(await hookAsk(c, set))).toBe('{}');
+      expect(session().cards.get(ids[0]!)?.closedBy).toBe('app');
+      expect(session().cards.has(ids[1]!)).toBe(false);
     });
   });
 
@@ -196,12 +259,12 @@ describe('ask from the hook', () => {
     api.sessions.answerCard(
       TOKEN,
       id,
-      { action: 'o1' },
+      { inputs: { q1: 'o1' } },
       { from: { id: SESSION_IDS.stranger, name: 'Someone Else' } },
     );
     // The owner answers twice before the next poll: the first one is stale by then.
-    api.sessions.answerCard(TOKEN, id, { action: 'o1' });
-    api.sessions.answerCard(TOKEN, id, { action: 'o2' });
+    api.sessions.answerCard(TOKEN, id, { inputs: { q1: 'o1' } });
+    api.sessions.answerCard(TOKEN, id, { inputs: { q1: 'o2' } });
     const r = await pending;
     expect(hookOut(r).updatedInput?.answers).toEqual({
       'Which color?': 'Green',
@@ -336,9 +399,10 @@ describe('ask from Claude', () => {
     });
     await waitFor(() => session().cards.size === 1);
     const [id] = [...session().cards.keys()];
-    api.sessions.answerCard(TOKEN, id!, { action: 'other' });
+    // An empty answer is refused first; then the typed one.
+    api.sessions.answerCard(TOKEN, id!, { inputs: {} });
     await waitFor(() => session().cards.get(id!)!.responses[0]?.status === 'rejected');
-    api.sessions.answerCard(TOKEN, id!, { inputs: { other: HOSTILE } });
+    api.sessions.answerCard(TOKEN, id!, { inputs: { q1_other: HOSTILE } });
     const r = await pending;
     const text = textOf(r);
     expect(text.startsWith('The person answered in buildIt.Social:')).toBe(true);
