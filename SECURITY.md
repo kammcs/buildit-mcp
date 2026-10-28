@@ -37,7 +37,7 @@ Security fixes go into the latest minor release on npm, as a patch release, and 
 
 | Version                          | Supported |
 | -------------------------------- | --------- |
-| The latest minor release (0.3.x) | Yes       |
+| The latest minor release (0.4.x) | Yes       |
 | Older minor releases             | No        |
 | Unreleased commits on `main`     | No        |
 

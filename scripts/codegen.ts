@@ -116,6 +116,13 @@ function refName(ref: string, where: string): string {
 }
 
 /** A valid identifier for a component's schema constant. */
+const NO_CONTENT = 'NoContentSchema';
+
+/** The schema an operation's success response is parsed with. */
+function responseIdent(op: OperationInfo): string {
+  return op.response === null ? NO_CONTENT : schemaIdent(op.response);
+}
+
 export function schemaIdent(name: string): string {
   if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(name)) fail(name, 'component name is not an identifier');
   return `${name}Schema`;
@@ -314,7 +321,8 @@ interface OperationInfo {
   query: { name: string; array: boolean; required: boolean; schema: Schema }[];
   request: string | null;
   requestRequired: boolean;
-  response: string;
+  /** The success response's component, or null for an answer without a body (204 only). */
+  response: string | null;
   statuses: number[];
   /**
    * Discovery (get_meta, get_me): takes no rate-limit unit, so its success
@@ -387,7 +395,12 @@ export function readOperations(doc: OpenApiDocument): OperationInfo[] {
         }
         response = name;
       }
-      if (response === undefined) fail(where, 'no JSON success response');
+      // An operation that answers only 204 has no body: its response schema is NoContentSchema.
+      const noContent =
+        response === undefined &&
+        success.length > 0 &&
+        success.every((status) => status === '204' && op.responses[status]?.content === undefined);
+      if (response === undefined && !noContent) fail(where, 'no JSON success response');
       // A contract that declares no RateLimit-* headers can't tell discovery apart.
       const discovery =
         rateLimited &&
@@ -417,7 +430,7 @@ export function readOperations(doc: OpenApiDocument): OperationInfo[] {
         query,
         request,
         requestRequired: op.requestBody?.required === true,
-        response,
+        response: response ?? null,
         statuses: success.map(Number),
         discovery,
       });
@@ -493,6 +506,10 @@ function openEnum<const T extends readonly [string, ...string[]]>(_values: T): z
     lines.push(`export const ${ident} = ${convert(schema, mode, name)};`);
     lines.push(`export type ${name} = z.infer<typeof ${ident}>;\n`);
   }
+  if (readOperations(doc).some((op) => op.response === null)) {
+    lines.push('/** The answer of an operation that returns no body (204). */');
+    lines.push(`export const ${NO_CONTENT} = z.undefined();\n`);
+  }
   if (mode === 'strict') {
     const ops = readOperations(doc);
     lines.push(
@@ -514,7 +531,7 @@ function openEnum<const T extends readonly [string, ...string[]]>(_values: T): z
     lines.push('} as const;\n');
     lines.push("/** Each operation's success response schema. */");
     lines.push('export const RESPONSE_SCHEMAS = {');
-    for (const op of ops) lines.push(`${op.id}: ${schemaIdent(op.response)},`);
+    for (const op of ops) lines.push(`${op.id}: ${responseIdent(op)},`);
     lines.push('} as const;\n');
     for (const op of ops) {
       if (op.request !== null) {
@@ -617,7 +634,7 @@ function operationsFile(doc: OpenApiDocument): string {
     lines.push(`hasBody: ${lit(op.request !== null)},`);
     lines.push(`statuses: ${lit(op.statuses)},`);
     lines.push(`discovery: ${lit(op.discovery)},`);
-    lines.push(`response: S.${schemaIdent(op.response)},`);
+    lines.push(`response: S.${responseIdent(op)},`);
     lines.push('},');
   }
   lines.push('} as const;\n');

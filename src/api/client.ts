@@ -132,7 +132,8 @@ export interface ServedApi {
 
 export interface ApiClientOptions {
   baseUrl: string;
-  token: string;
+  /** The caller's token. Left out only for the operations that take none (the connect flow). */
+  token?: string | undefined;
   fetch?: typeof fetch;
   /** Per-attempt timeout. Default 30 s. */
   timeoutMs?: number;
@@ -216,7 +217,7 @@ function readRetryAfter(body: unknown, headers: Headers): number | undefined {
 
 export class ApiClient {
   private readonly baseUrl: string;
-  private readonly token: string;
+  private readonly token: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly maxRetryAfterMs: number;
@@ -230,6 +231,11 @@ export class ApiClient {
    * deployment, not the caller.
    */
   served: ServedApi | undefined;
+
+  /** Whether this client's token is an agent session token (it is refused for good once the session ends). */
+  get sessionToken(): boolean {
+    return this.token?.startsWith('buildit_ags_') === true;
+  }
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -339,7 +345,7 @@ export class ApiClient {
         ...(options.tool ? { tool: options.tool } : {}),
       };
       const headers: Record<string, string> = {
-        Authorization: `Bearer ${this.token}`,
+        ...(this.token === undefined ? {} : { Authorization: `Bearer ${this.token}` }),
         Accept: 'application/json',
         'User-Agent': USER_AGENT,
         'X-Request-Id': requestId,

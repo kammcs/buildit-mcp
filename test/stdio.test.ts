@@ -3,7 +3,9 @@
  * client would run it. Needs `npm run build` first (`npm run check` does it).
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +14,13 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { FakeApi, TOKENS } from './support/fake-api.js';
+import {
+  defaultTokenFile,
+  FileTokenStore,
+  sessionApiKey,
+  sessionKey,
+} from '../src/secrets/keychain.js';
+import { SESSION_TOKENS } from './support/fake-sessions.js';
 
 const BIN = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
@@ -191,5 +200,130 @@ describe('stdio (built binary)', () => {
     expect(version.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
     const help = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
     expect(help.stdout).toContain('Usage: buildit-mcp');
+  });
+});
+
+describe('stdio channel mode (built binary)', () => {
+  it("uses the folder's saved session and API over a personal access token, and stays up when it ends", async () => {
+    api.sessions.interval = 1;
+    const home = mkdtempSync(join(tmpdir(), 'buildit-mcp-home-'));
+    try {
+      const env = { APPDATA: home, HOME: home, XDG_CONFIG_HOME: home, BUILDIT_TOKEN_STORE: 'file' };
+      // What connect leaves behind, in the fallback file of this (made-up) home.
+      const store = new FileTokenStore(defaultTokenFile(env));
+      await store.set(sessionKey(home, api.url), SESSION_TOKENS.second);
+      await store.set(sessionApiKey(home), api.url);
+      const session = api.sessions.open(SESSION_TOKENS.second, 'saved-folder');
+
+      // A user-level personal access token and another API, as the usual setup leaves them.
+      const { client, stderr } = await connect(TOKENS.full, {
+        env: {
+          ...env,
+          BUILDIT_CHANNEL: 'true',
+          BUILDIT_FOLDER: home,
+          BUILDIT_API_URL: 'https://api.example.com/functions/v1/agent-api',
+        },
+      });
+      const notes: { method: string }[] = [];
+      client.fallbackNotificationHandler = (n) => {
+        notes.push(n);
+        return Promise.resolve();
+      };
+      expect((await client.listTools()).tools.map((t) => t.name)).toContain('reply');
+      let until = Date.now() + 8000;
+      while (!session.heartbeats.includes('online') && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(session.heartbeats).toContain('online');
+      expect(stderr()).toContain('ignores it');
+
+      // The session ends: the process stays, the tools say why, reply goes.
+      api.sessions.revoke(SESSION_TOKENS.second);
+      until = Date.now() + 8000;
+      while (
+        !notes.some((n) => n.method === 'notifications/tools/list_changed') &&
+        Date.now() < until
+      ) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('reply');
+      const call = await client.callTool({
+        name: 'search_items',
+        arguments: { projects: ['DEMO'] },
+      });
+      expect(call.isError).toBe(true);
+      expect(JSON.stringify(call.content)).toContain('This buildIt.Social session has ended');
+      // The saved token is cleared, and the record of its deployment with it.
+      expect(await store.get(sessionKey(home, api.url))).toBeUndefined();
+      expect(await store.get(sessionApiKey(home))).toBeUndefined();
+      expect(stderr()).not.toContain(SESSION_TOKENS.second);
+      expect(stderr()).not.toContain(TOKENS.full);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("registers as a channel on the 2025 handshake and pushes the owner's messages", async () => {
+    api.sessions.interval = 1;
+    const session = api.sessions.open(SESSION_TOKENS.zero, 'demo-folder');
+    const { client, stderr } = await connect(SESSION_TOKENS.zero, {
+      auto: true,
+      env: { BUILDIT_CHANNEL: 'true' },
+    });
+    const notes: { method: string; params?: unknown }[] = [];
+    client.fallbackNotificationHandler = (n) => {
+      notes.push(n);
+      return Promise.resolve();
+    };
+    expect(client.getNegotiatedProtocolVersion()).toBe('2025-11-25');
+    expect(client.getServerCapabilities()?.experimental).toEqual({ 'claude/channel': {} });
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain('reply');
+
+    const id = api.sessions.postFrom(SESSION_TOKENS.zero, 'From the app.');
+    const until = Date.now() + 8000;
+    while (session.acked < 1 && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+    expect(notes).toContainEqual(
+      expect.objectContaining({
+        method: 'notifications/claude/channel',
+        params: {
+          content: 'From the app.',
+          meta: { thread_id: id, message_id: id, session: 'demo-folder' },
+        },
+      }),
+    );
+    const reply = await client.callTool({ name: 'reply', arguments: { text: 'Got it.' } });
+    expect(reply.isError).toBeFalsy();
+    expect(session.messages.at(-1)).toMatchObject({ text: 'Got it.', thread_id: id });
+    expect(stderr()).not.toContain(SESSION_TOKENS.zero);
+    expect(stderr()).not.toContain('From the app.');
+  });
+
+  it('exits with the connect command when no session is saved for the folder', () => {
+    const home = mkdtempSync(join(tmpdir(), 'buildit-mcp-home-'));
+    try {
+      const run = spawnSync(process.execPath, [BIN, '--channel', '--folder', home], {
+        env: {
+          PATH: process.env.PATH ?? '',
+          BUILDIT_API_URL: api.url,
+          BUILDIT_TOKEN_STORE: 'file',
+          APPDATA: home,
+          HOME: home,
+          XDG_CONFIG_HOME: home,
+          ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+        },
+        encoding: 'utf8',
+        timeout: 10_000,
+      });
+      expect(run.status).toBe(2);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toContain('connect --project <KEY>');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('prints the help of a session command', () => {
+    const help = spawnSync(process.execPath, [BIN, 'connect', '--help'], { encoding: 'utf8' });
+    expect(help.stdout).toContain('Usage: buildit-mcp connect --project <KEY>');
   });
 });

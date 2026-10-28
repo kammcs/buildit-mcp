@@ -8,6 +8,7 @@ import { createMcpServer } from '../src/server.js';
 import { whoamiTool } from '../src/tools/whoami.js';
 import { SERVER_VERSION } from '../src/version.js';
 import { FakeApi, sampleIdentity, TOKENS, uid, USERS } from './support/fake-api.js';
+import { SESSION_TOKENS } from './support/fake-sessions.js';
 import { stripIds } from './support/harness.js';
 
 let api: FakeApi;
@@ -62,6 +63,18 @@ describe('whoami', () => {
     );
   });
 
+  it('says when the token is an agent session, with its label', async () => {
+    const client = await connect(SESSION_TOKENS.first);
+    const result = await client.callTool({ name: 'whoami', arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      token: { name: 'demo-folder', kind: 'session' },
+    });
+    const text = JSON.stringify(result.content);
+    expect(text).toContain("with an agent session's token");
+    expect(text).toContain('Session: demo-folder');
+  });
+
   it('returns the identity as structured content and a text summary', async () => {
     const client = await connect(TOKENS.read);
     const result = await client.callTool({ name: 'whoami', arguments: {} });
@@ -69,7 +82,7 @@ describe('whoami', () => {
     expect(result.structuredContent).toEqual({
       user: { id: USERS.me.id, name: 'Test User', email: 'test.user@example.com' },
       org: { id: uid(5), name: 'Example Org', test: false },
-      token: { name: 'Test token', expires_at: '2030-01-01T00:00:00Z' },
+      token: { name: 'Test token', kind: null, expires_at: '2030-01-01T00:00:00Z' },
       scopes: ['projects:read'],
       limits: { projects: null, channels: null },
       cannot: [
@@ -94,7 +107,7 @@ describe('whoami', () => {
       server: {
         name: 'buildit-mcp',
         version: SERVER_VERSION,
-        api_version: '1.4.0',
+        api_version: '1.5.0',
         update_required: false,
         not_served: [],
       },

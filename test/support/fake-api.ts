@@ -62,6 +62,7 @@ import {
   type WorkflowStatus,
 } from '../../src/api/generated/strict.js';
 import { expandScopes } from '../../src/toolsets/toolsets.js';
+import { FakeSessions, SESSION_TOKENS, SessionRefusal } from './fake-sessions.js';
 
 // ---------------------------------------------------------------------------
 // Identities and tokens
@@ -147,7 +148,30 @@ export const DEFAULT_IDENTITIES: Record<string, FakeIdentity> = {
   ]),
   [TOKENS.read]: sampleIdentity(['projects:read']),
   [TOKENS.none]: sampleIdentity([]),
+  // Agent session tokens: they act as their owner, like a personal access token.
+  ...Object.fromEntries(
+    Object.values(SESSION_TOKENS).map((token) => [
+      token,
+      sampleIdentity(['projects:write', 'pages:read', 'chat:read'], {
+        token: {
+          id: uid(6),
+          name: 'demo-folder',
+          kind: 'session',
+          scopes: ['projects:write', 'pages:read', 'chat:read'],
+          expires_at: '2026-11-27T10:00:00Z',
+          created_at: '2026-10-01T00:00:00Z',
+          limits: { projects: null, channels: null },
+        },
+      }),
+    ]),
+  ),
 };
+
+/** The caller of an operation that takes no token. */
+const ANONYMOUS: FakeIdentity = sampleIdentity([]);
+
+/** Operations that take no token (the connect flow). */
+const NO_TOKEN_PATHS = new Set(['/v1/connect/start', '/v1/connect/poll']);
 
 // ---------------------------------------------------------------------------
 // The data model
@@ -794,7 +818,7 @@ const V14_OPS = new Set<OperationId>(['list_pins', 'list_emoji']);
 
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.4.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.5.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -916,6 +940,8 @@ export class FakeApi {
   identities: Record<string, FakeIdentity>;
   meta: Record<string, unknown> = defaultMeta();
   store: FakeStore = seedStore();
+  /** Agent sessions and the connect flow; tests approve codes and post messages through it. */
+  sessions = this.newSessions();
   private readonly queues = new Map<string, ScriptedResponse[]>();
   private readonly examples = new Set<OperationId>();
   private server: Server | undefined;
@@ -955,6 +981,7 @@ export class FakeApi {
   reset(): void {
     this.meta = defaultMeta();
     this.store = seedStore();
+    this.sessions = this.newSessions();
     this.identities = structuredClone(this.initialIdentities);
     this.compat = {
       hints: true,
@@ -1106,7 +1133,9 @@ export class FakeApi {
 
     const auth = req.headers.authorization ?? '';
     const token = /^Bearer (.+)$/.exec(auth)?.[1];
-    const identity = token === undefined ? undefined : this.identities[token];
+    const noToken = method === 'POST' && NO_TOKEN_PATHS.has(path);
+    const identity =
+      token === undefined ? (noToken ? ANONYMOUS : undefined) : this.identities[token];
     if (!identity) {
       this.send(res, {
         status: 401,
@@ -1146,6 +1175,10 @@ export class FakeApi {
 
     try {
       const op = OPERATIONS[route.id];
+      if (token !== undefined)
+        this.sessionCheck(() => {
+          this.sessions.checkToken(token);
+        });
       const olderRoute =
         (route.id === 'list_project_members' && !this.compat.membersRoute) ||
         (OLDER_RELEASE_OPS.has(route.id) && !this.compat.releaseOps) ||
@@ -1719,12 +1752,50 @@ export class FakeApi {
         return this.createPlan(call);
       case 'apply_plan':
         return this.applyPlan(call);
+      case 'connect_start':
+        return this.sessionCheck(() => this.sessions.start(call.body));
+      case 'connect_poll':
+        return this.sessionCheck(() => this.sessions.poll(call.body));
+      case 'get_session':
+        return this.sessionCheck(() => this.sessions.info(call.token));
+      case 'list_session_events':
+        return this.sessionCheck(() => this.sessions.events(call.token, call.query));
+      case 'ack_session_events':
+        return this.sessionCheck(() => this.sessions.ack(call.token, call.body));
+      case 'post_session_message':
+        return this.sessionCheck(() => this.sessions.post(call.token, call.body));
+      case 'revoke_session':
+        return this.sessionCheck(() => this.sessions.revokeSelf(call.token));
+      case 'session_heartbeat':
+        return this.sessionCheck(() => this.sessions.heartbeat(call.token, call.body));
       default:
         throw new FakeError(
           'not_found',
           { kind: 'route', ref: id },
           `The fake does not implement ${id}.`,
         );
+    }
+  }
+
+  private newSessions(): FakeSessions {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- the host reads the current identities
+    const api = this;
+    return new FakeSessions({
+      get identities() {
+        return api.identities;
+      },
+      now: () => this.now(),
+      clockMs: () => this.clock,
+    });
+  }
+
+  /** Runs a session handler, turning its refusals into the contract's errors. */
+  private sessionCheck<T>(run: () => T): T {
+    try {
+      return run();
+    } catch (err) {
+      if (err instanceof SessionRefusal) throw new FakeError(err.code, err.details);
+      throw err;
     }
   }
 

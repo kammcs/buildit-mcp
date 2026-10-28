@@ -122,6 +122,10 @@ const RATE_BUCKETS: Record<RateLimitBucket, string> = {
   token_writes_per_day: 'writes per day for this token',
   org_requests_per_minute: 'requests per minute for the whole org, across all its tokens',
   user_requests_per_minute: 'requests per minute for your account, across all your tokens',
+  session_polls_per_minute: 'polls per minute for this session',
+  connect_starts_per_hour: 'connections started per hour from this address',
+  connect_pending_grants: 'connections waiting for approval on this server',
+  connect_pending_per_address: 'connections waiting for approval from this network',
 };
 
 /** The release operations, as plan_release's actions. */
@@ -372,6 +376,42 @@ export function describeApiError(err: ApiError): string {
 }
 
 /** A tool result for any failure inside a tool handler. */
+/** The codes that mean an agent session is over: its token is no longer accepted. */
+export const SESSION_OVER_CODES: ReadonlySet<string> = new Set([
+  'token_revoked',
+  'token_expired',
+  'token_invalid',
+]);
+
+const SESSION_OVER_WHY: Record<string, string> = {
+  token_revoked: 'it was revoked',
+  token_expired: 'it expired after 30 days unused',
+  token_invalid: 'buildIt.Social no longer recognises its token',
+};
+
+/**
+ * What to tell the agent once a session token is refused for good: a
+ * session is reconnected with `connect`, never with a new personal access
+ * token.
+ */
+export function sessionEndedText(code: string): string {
+  const why = SESSION_OVER_WHY[code] ?? code;
+  return `This buildIt.Social session has ended (${why}). In this folder run \`buildit-mcp connect --project <KEY>\`, approve it, then restart Claude Code. Tell the person; retrying won't help.`;
+}
+
+/** A tool result for a call made after (or refused because) the session ended. */
+export function sessionEndedResult(code: string): CallToolResult {
+  return {
+    isError: true,
+    content: [
+      {
+        type: 'text',
+        text: `buildit-mcp error: session_ended (${code})\n${sessionEndedText(code)}`,
+      },
+    ],
+  };
+}
+
 export function toolErrorResult(err: unknown, requestId?: string): CallToolResult {
   if (err instanceof ApiError) {
     return { isError: true, content: [{ type: 'text', text: describeApiError(err) }] };
