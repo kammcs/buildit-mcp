@@ -25,7 +25,7 @@ export interface EventItem {
 /** One message of the item's thread, from the event's context. */
 export interface ContextMessage {
   id: string;
-  author: { kind: string; id: string; name: string };
+  author: { kind: string; id: string | null; name: string };
   from_owner: boolean;
   text: string;
 }

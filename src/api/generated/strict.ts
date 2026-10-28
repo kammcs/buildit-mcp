@@ -1325,7 +1325,7 @@ export const SessionContextMessageSchema = z.strictObject({
   id: UuidSchema,
   author: z.strictObject({
     kind: z.enum(['user', 'app', 'agent']),
-    id: UuidSchema,
+    id: UuidSchema.nullable(),
     name: z.string(),
   }),
   from_owner: z.boolean(),

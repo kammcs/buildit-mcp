@@ -15125,7 +15125,7 @@
             ]
           },
           "field": {
-            "description": "changed: type_id, status_id, parent_id, initiative_id, title, description, priority, assignee_id, assignee_agent_app_id (the agent working on it for its owner), start_date, due_date, estimate, sprint_id, fix_release_id, label_ids, or cf:<field id> for a custom field. linked and unlinked: the link's kind. Otherwise null.",
+            "description": "changed: type_id, status_id, parent_id, initiative_id, title, description, priority, assignee_id, start_date, due_date, estimate, sprint_id, fix_release_id, label_ids, cf:<field id> for a custom field, or another field's name (the personal agent working on the item for its owner, say: old_label and new_label name it). linked and unlinked: the link's kind. Otherwise null.",
             "type": [
               "string",
               "null"
@@ -18712,8 +18712,15 @@
                 "description": "user: a person; app: a bot of the org; agent: a personal agent's session. v1 may add kinds."
               },
               "id": {
-                "description": "The person's or the app's id.",
-                "$ref": "#/components/schemas/Uuid"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The person's or the app's id; null for a deleted account."
               },
               "name": {
                 "type": "string",

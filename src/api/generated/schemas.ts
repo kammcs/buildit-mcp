@@ -1171,7 +1171,7 @@ export const SessionContextMessageSchema = z.looseObject({
   id: UuidSchema,
   author: z.looseObject({
     kind: openEnum(['user', 'app', 'agent']),
-    id: UuidSchema,
+    id: UuidSchema.nullable(),
     name: z.string(),
   }),
   from_owner: z.boolean(),
