@@ -120,6 +120,22 @@ describe('the Claude Code plugin', () => {
     expect(plugin.userConfig.questions_in_app?.default).toBe(true);
   });
 
+  it("has a local-build twin that runs the checkout's dist/ with the same hooks and settings", () => {
+    const local = read('plugin-local/.claude-plugin/plugin.json') as Record<string, unknown>;
+    const published = plugin as unknown as Record<string, unknown>;
+    // Named buildit with a server buildit, so the hooks' plugin:buildit:buildit resolve.
+    for (const key of new Set([...Object.keys(local), ...Object.keys(published)])) {
+      if (key === 'description' || key === 'mcpServers') continue;
+      expect(local[key], key).toEqual(published[key]);
+    }
+    expect((local.mcpServers as typeof plugin.mcpServers).buildit).toEqual({
+      ...plugin.mcpServers.buildit,
+      command: 'node',
+      args: ['${CLAUDE_PLUGIN_ROOT}/../dist/index.js', '--channel'],
+    });
+    expect(read('plugin-local/hooks/hooks.json')).toEqual(hooks);
+  });
+
   it("calls ask from AskUserQuestion's hook with the server's timeout, and turn_ended on Stop", async () => {
     const { HOOK_TIMEOUT_S } = await import('../src/transports/stdio.js');
     const ask = hooks.hooks.PreToolUse?.find((h) => h.matcher === 'AskUserQuestion')?.hooks[0];

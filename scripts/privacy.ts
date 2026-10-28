@@ -125,7 +125,7 @@ export const RULES: Rule[] = [
     // The company is the author in the package's and the plugin's manifests.
     allow: [
       {
-        path: /^(LICENSE|package\.json|plugin\/\.claude-plugin\/plugin\.json|\.claude-plugin\/marketplace\.json)$/,
+        path: /^(LICENSE|package\.json|plugin(-local)?\/\.claude-plugin\/plugin\.json|\.claude-plugin\/marketplace\.json)$/,
         text: /K[a]mm Creative Solutions/,
       },
     ],

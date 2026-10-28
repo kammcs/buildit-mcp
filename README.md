@@ -349,7 +349,27 @@ claude --dangerously-load-development-channels plugin:buildit@buildit-mcp
 
 The plugin passes them to the server as `BUILDIT_ASK_TIMEOUT_MINUTES` and `BUILDIT_QUESTIONS_IN_APP`. It hooks `AskUserQuestion` (`PreToolUse`, an `mcp_tool` hook calling the server's `ask` tool with a one-hour timeout) and Claude's turn ending (`Stop`, calling `turn_ended`, which only stops "is writing"; it isn't a tool for Claude). Tested with Claude Code 2.1.312, where a hook of this kind waited more than ten minutes as it should.
 
-**Until 0.5.0 is on npm**, the plugin's server (`npx -y @kammcs/buildit-mcp@0.5.0 --channel`) can't be downloaded. To try it from a clone: build it (`npm ci && npm run build`), copy the `plugin` folder somewhere, change `command` and `args` in its `.claude-plugin/plugin.json` to `node` and `["/path/to/buildit-mcp/dist/index.js", "--channel"]`, and start Claude Code with `--plugin-dir /path/to/that/plugin`, naming the plugin in `--dangerously-load-development-channels` as `/plugin` lists it. `claude plugin validate plugin` checks the plugin from a clone.
+#### Try it from a checkout
+
+Until 0.5.0 is on npm, the plugin's server (`npx -y @kammcs/buildit-mcp@0.5.0 --channel`) can't be downloaded. The checkout has a twin of the plugin for that, `plugin-local/`: the same name (`buildit`), hooks and settings, but its server runs the checkout's own build, `node ${CLAUDE_PLUGIN_ROOT}/../dist/index.js --channel`. Load it for one session with `--plugin-dir`, which installs nothing:
+
+```sh
+git clone https://github.com/kammcs/buildit-mcp.git
+cd buildit-mcp
+npm ci && npm run build
+```
+
+Then, in the folder you work in (connected as in step 2, with the local build: `node /path/to/buildit-mcp/dist/index.js connect --project DEMO`):
+
+```sh
+claude mcp remove buildit
+claude --plugin-dir /path/to/buildit-mcp/plugin-local --dangerously-load-development-channels plugin:buildit@inline
+```
+
+- `claude mcp remove buildit` is only needed when the server of step 3 is set up in that folder (it says so when there is none).
+- A plugin loaded with `--plugin-dir` belongs to the marketplace `inline`, so its channel is `plugin:buildit@inline`. Check the line under the banner: it should say that messages from `plugin:buildit@inline` arrive in this session.
+- Its server is `plugin:buildit:buildit`, as the hooks name it, and it starts in the folder Claude Code runs in, so it finds that folder's session.
+- Run `npm run build` again after pulling changes; `claude plugin validate plugin-local` checks it.
 
 On Windows, Claude Code starts the plugin's `npx` itself; if `/mcp` shows the plugin's server as failed, check that `npx -y @kammcs/buildit-mcp@0.5.0 --version` works in a terminal (Node.js 20 or newer on `PATH`).
 

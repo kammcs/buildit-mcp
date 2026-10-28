@@ -112,6 +112,7 @@ deploy/                 team self-hosting: Compose with Caddy, and a guide
 bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes from package.json)
 plugin/                 the Claude Code plugin (channel server, AskUserQuestion and Stop hooks);
                         .claude-plugin/marketplace.json lists it (versions match package.json)
+plugin-local/           the same plugin running this checkout's dist/ (for --plugin-dir testing)
 server.json             the MCP Registry entry (its versions must match package.json; a test checks)
 docs/releasing.md       how a release ships through npm, GHCR, the bundle and the Registry
 ```
