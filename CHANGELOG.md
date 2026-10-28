@@ -14,8 +14,8 @@ Built on version 1.5.0 of the agent API's contract. Channel mode and the session
 
 ### Commands
 
-- `buildit-mcp connect --project <KEY> [--label <name>] [--folder <path>] [--api-url <url>]` connects a folder with a device code that you approve in the app, and saves the session token (`buildit_ags_...`) in the OS keychain: Windows Credential Manager, the macOS Keychain or the Secret Service, through the optional `@napi-rs/keyring` package. Without a usable keychain it uses a file readable only by you, and says so (`BUILDIT_TOKEN_STORE=file` picks the file). Once approved, it names the agent, its owner and the org and asks "Is this you? [y/N]": only `y` saves the token, since whoever approves a code gets the session. `--yes` skips the question, for scripts only.
-- `buildit-mcp status` shows the folder's session; `buildit-mcp disconnect` forgets its token.
+- `buildit-mcp connect --project <KEY> [--label <name>] [--folder <path>] [--api-url <url>]` connects a folder with a device code that you approve in the app, and saves the session token (`buildit_ags_...`) in the OS keychain: Windows Credential Manager, the macOS Keychain or the Secret Service, through the optional `@napi-rs/keyring` package. Without a usable keychain it uses a file readable only by you, and says so (`BUILDIT_TOKEN_STORE=file` picks the file). Once approved, it names the agent, its owner and the org and asks "Is this you? [y/N]": only `y` saves the token, since whoever approves a code gets the session; any other answer cancels the session at once. The projects shown are the ones approved. `--yes` skips the question, for scripts only.
+- `buildit-mcp status` shows the folder's session; `buildit-mcp disconnect` cancels it (`DELETE /v1/session`) and forgets its token.
 
 ### Other
 

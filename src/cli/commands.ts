@@ -15,7 +15,8 @@ import {
   connectStart,
   getSession,
   POLL_CODES,
-  sessionHeartbeat,
+  revokeSession,
+  SESSION_ENDED_CODES,
   type SessionInfo,
 } from '../channel/api.js';
 import {
@@ -201,17 +202,22 @@ export async function runConnect(options: ConnectOptions, io: CommandIO): Promis
     }
     try {
       const done = await connectPoll(api, start.device_code);
-      const plural = options.projects.length === 1 ? 'project' : 'projects';
+      // The projects as approved, which the person may have changed from the ones asked for.
+      const keys = done.session.projects.map((p) => plain(p.key, 10));
+      const plural = keys.length === 1 ? 'project' : 'projects';
       io.out(
-        `Connected as ${plain(done.agent.name, 80)} (${plain(done.owner.name, 80)}) in ${plain(done.org.name, 80)}, ${plural} ${options.projects.join(', ')}; session "${plain(done.session.label, 40)}".\n`,
+        `Connected as ${plain(done.agent.name, 80)} (${plain(done.owner.name, 80)}) in ${plain(done.org.name, 80)}, ${plural} ${keys.join(', ')}; session "${plain(done.session.label, 40)}".\n`,
       );
       // Whoever approves a code gets the session: check it was the person here.
       const answer = options.yes ? 'y' : ((await io.ask?.('Is this you? [y/N] ')) ?? '');
       if (!YES.test(answer.trim())) {
+        const cancelled = await cancel(apiFor(options, io, done.token));
         io.err(
           [
-            'Not saved: the connection was not confirmed.',
-            `If that is not you, someone else may have approved your code. In buildIt.Social, revoke the session "${plain(done.session.label, 40)}" (Settings → Agents), or tell its owner to; unused, it expires after 30 days.`,
+            cancelled === undefined
+              ? 'Not saved, and the session was cancelled: the connection was not confirmed.'
+              : `Not saved: the connection was not confirmed. The session could not be cancelled (${cancelled}): revoke the session "${plain(done.session.label, 40)}" in buildIt.Social (Settings → Agents), or have its owner do it.`,
+            'If that was not you, someone else may have approved your code.',
             'Run "buildit-mcp connect" again for a new code, and approve it yourself.',
           ].join('\n') + '\n',
         );
@@ -276,15 +282,29 @@ export async function runDisconnect(
     io.out('No session is saved for this folder.\n');
     return 0;
   }
-  // Best effort: the session shows offline at once instead of after 90 seconds.
-  await sessionHeartbeat(apiFor(options, io, token), 'offline', {
-    signal: AbortSignal.timeout(5000),
-  }).catch(() => undefined);
+  // Best effort: the session ends in buildIt.Social too, before its token is forgotten here.
+  const failed = await cancel(apiFor(options, io, token));
   await io.store.delete(key);
   io.out(
-    'Disconnected: this folder no longer has a saved session. The session stays listed in buildIt.Social until you revoke it there, or it expires after 30 days unused.\n',
+    failed === undefined
+      ? 'Disconnected: the session is cancelled in buildIt.Social, and this folder no longer has a saved token.\n'
+      : `Disconnected: this folder no longer has a saved token. The session could not be cancelled in buildIt.Social (${failed}): revoke it there (Settings → Agents).\n`,
   );
   return 0;
+}
+
+/**
+ * Ends the session with DELETE /v1/session. Returns undefined when it is
+ * over (a session already revoked or expired counts), else why it failed.
+ */
+async function cancel(api: ApiClient): Promise<string | undefined> {
+  try {
+    await revokeSession(api, { signal: AbortSignal.timeout(10_000) });
+    return undefined;
+  } catch (err) {
+    if (err instanceof ApiError && SESSION_ENDED_CODES.has(err.code)) return undefined;
+    return err instanceof ApiError ? err.code : 'unknown error';
+  }
 }
 
 /** buildit-mcp status: the folder's saved session, as buildIt.Social sees it. */

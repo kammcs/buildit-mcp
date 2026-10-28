@@ -374,6 +374,13 @@ export const ConnectStartResponseSchema = z.looseObject({
 });
 export type ConnectStartResponse = z.infer<typeof ConnectStartResponseSchema>;
 
+export const ConnectedSessionSchema = z.looseObject({
+  id: UuidSchema,
+  label: z.string(),
+  projects: z.array(z.looseObject({ id: UuidSchema, key: ProjectKeySchema })),
+});
+export type ConnectedSession = z.infer<typeof ConnectedSessionSchema>;
+
 export const CreateChannelRequestSchema = z.looseObject({
   name: ChannelNameSchema,
   description: z.string().optional(),
@@ -1279,7 +1286,7 @@ export type CompleteSprintResponse = z.infer<typeof CompleteSprintResponseSchema
 export const ConnectPollResponseSchema = z.looseObject({
   token: SessionTokenSchema,
   expires_at: TimestampSchema,
-  session: SessionBriefSchema,
+  session: ConnectedSessionSchema,
   agent: AgentBriefSchema,
   owner: SessionOwnerSchema,
   org: z.looseObject({ id: UuidSchema, name: z.string() }),
@@ -2017,3 +2024,6 @@ export const SearchItemsResponseSchema = z.looseObject({
   next_cursor: z.string().nullable(),
 });
 export type SearchItemsResponse = z.infer<typeof SearchItemsResponseSchema>;
+
+/** The answer of an operation that returns no body (204). */
+export const NoContentSchema = z.undefined();

@@ -422,6 +422,13 @@ export const ConnectStartResponseSchema = z.strictObject({
 });
 export type ConnectStartResponse = z.infer<typeof ConnectStartResponseSchema>;
 
+export const ConnectedSessionSchema = z.strictObject({
+  id: UuidSchema,
+  label: z.string(),
+  projects: z.array(z.strictObject({ id: UuidSchema, key: ProjectKeySchema })),
+});
+export type ConnectedSession = z.infer<typeof ConnectedSessionSchema>;
+
 export const CreateChannelRequestSchema = z.strictObject({
   name: ChannelNameSchema,
   description: z.string().max(1000).optional(),
@@ -1372,7 +1379,7 @@ export type CompleteSprintResponse = z.infer<typeof CompleteSprintResponseSchema
 export const ConnectPollResponseSchema = z.strictObject({
   token: SessionTokenSchema,
   expires_at: TimestampSchema,
-  session: SessionBriefSchema,
+  session: ConnectedSessionSchema,
   agent: AgentBriefSchema,
   owner: SessionOwnerSchema,
   org: z.strictObject({ id: UuidSchema, name: z.string() }),
@@ -2115,6 +2122,9 @@ export const SearchItemsResponseSchema = z.strictObject({
 });
 export type SearchItemsResponse = z.infer<typeof SearchItemsResponseSchema>;
 
+/** The answer of an operation that returns no body (204). */
+export const NoContentSchema = z.undefined();
+
 /** Each operation's query parameters, as read from a URL (repeated parameters as arrays). */
 export const QUERY_SCHEMAS = {
   ack_session_events: z.strictObject({}),
@@ -2217,6 +2227,7 @@ export const QUERY_SCHEMAS = {
   remove_sprint_items: z.strictObject({}),
   reopen_release: z.strictObject({}),
   restore_release: z.strictObject({}),
+  revoke_session: z.strictObject({}),
   search_items: z.strictObject({
     q: z.string().min(1).max(200).optional(),
     project: z.array(ProjectRefSchema).max(20).optional(),
@@ -2328,6 +2339,7 @@ export const REQUEST_SCHEMAS = {
   remove_sprint_items: PlanningItemsRequestSchema,
   reopen_release: null,
   restore_release: null,
+  revoke_session: null,
   search_items: null,
   search_pages: null,
   session_heartbeat: SessionHeartbeatRequestSchema,
@@ -2388,6 +2400,7 @@ export const RESPONSE_SCHEMAS = {
   remove_sprint_items: SprintItemsResponseSchema,
   reopen_release: ReleaseResponseSchema,
   restore_release: ReleaseResponseSchema,
+  revoke_session: NoContentSchema,
   search_items: SearchItemsResponseSchema,
   search_pages: SearchPagesResponseSchema,
   session_heartbeat: SessionHeartbeatResponseSchema,
@@ -2468,6 +2481,7 @@ export type RemoveSprintItemsBody = z.input<typeof PlanningItemsRequestSchema>;
 export type RemoveSprintItemsQuery = z.input<typeof QUERY_SCHEMAS.remove_sprint_items>;
 export type ReopenReleaseQuery = z.input<typeof QUERY_SCHEMAS.reopen_release>;
 export type RestoreReleaseQuery = z.input<typeof QUERY_SCHEMAS.restore_release>;
+export type RevokeSessionQuery = z.input<typeof QUERY_SCHEMAS.revoke_session>;
 export type SearchItemsQuery = z.input<typeof QUERY_SCHEMAS.search_items>;
 export type SearchPagesQuery = z.input<typeof QUERY_SCHEMAS.search_pages>;
 export type SessionHeartbeatBody = z.input<typeof SessionHeartbeatRequestSchema>;
@@ -2533,6 +2547,7 @@ export interface OperationIO {
   remove_sprint_items: { query: RemoveSprintItemsQuery; body: RemoveSprintItemsBody };
   reopen_release: { query: ReopenReleaseQuery; body: undefined };
   restore_release: { query: RestoreReleaseQuery; body: undefined };
+  revoke_session: { query: RevokeSessionQuery; body: undefined };
   search_items: { query: SearchItemsQuery; body: undefined };
   search_pages: { query: SearchPagesQuery; body: undefined };
   session_heartbeat: { query: SessionHeartbeatQuery; body: SessionHeartbeatBody };

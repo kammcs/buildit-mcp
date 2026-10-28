@@ -87,6 +87,11 @@ export function postSessionMessage(
   return callOperation(api, 'post_session_message', { body }, options);
 }
 
+/** DELETE /v1/session: the session ends itself (its token stops working at once). 204, no body. */
+export async function revokeSession(api: ApiClient, options: Options = {}): Promise<void> {
+  await callOperation(api, 'revoke_session', {}, options);
+}
+
 /** POST /v1/session/heartbeat */
 export function sessionHeartbeat(
   api: ApiClient,

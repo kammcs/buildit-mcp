@@ -1764,6 +1764,8 @@ export class FakeApi {
         return this.sessionCheck(() => this.sessions.ack(call.token, call.body));
       case 'post_session_message':
         return this.sessionCheck(() => this.sessions.post(call.token, call.body));
+      case 'revoke_session':
+        return this.sessionCheck(() => this.sessions.revokeSelf(call.token));
       case 'session_heartbeat':
         return this.sessionCheck(() => this.sessions.heartbeat(call.token, call.body));
       default:

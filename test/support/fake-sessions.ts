@@ -50,6 +50,8 @@ export interface FakeSession {
   }[];
   revokedAt?: string;
   expiredAt?: string;
+  /** Ended by DELETE /v1/session. */
+  selfRevoked?: boolean;
 }
 
 export interface FakeGrant {
@@ -62,6 +64,8 @@ export interface FakeGrant {
   status: 'pending' | 'approved' | 'denied' | 'consumed' | 'expired';
   /** The token the approval will hand out. */
   token?: string;
+  /** The project keys the approval chose, when it changed the ones asked for. */
+  approvedProjects?: string[];
   lastPolledAt?: number;
 }
 
@@ -165,7 +169,14 @@ export class FakeSessions {
       body: {
         token,
         expires_at: '2026-11-27T10:00:00.000Z',
-        session: { id: session.id, label: session.label },
+        session: {
+          id: session.id,
+          label: session.label,
+          // As approved: the asked-for projects the owner can see, unless the approval changed them.
+          projects: this.identity(token)
+            .projects.filter((p) => (grant.approvedProjects ?? grant.projects).includes(p.key))
+            .map((p) => ({ id: p.id, key: p.key })),
+        },
         agent: { id: SESSION_IDS.agent, name: 'Claude' },
         owner: { id: session.ownerId, name: session.ownerName },
         org: { id: this.identity(token).org.id, name: this.identity(token).org.name },
@@ -264,6 +275,14 @@ export class FakeSessions {
     return { status: 201, body: { created: true, message: this.messageOut(s, message) } };
   }
 
+  /** DELETE /v1/session: the session ends itself. */
+  revokeSelf(token: string): { status: number; body: unknown } {
+    const s = this.live(token);
+    s.revokedAt = '2026-10-07T16:00:00.000Z';
+    s.selfRevoked = true;
+    return { status: 204, body: undefined };
+  }
+
   heartbeat(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
     const s = this.live(token);
     s.heartbeats.push(String(body.state));
@@ -276,10 +295,11 @@ export class FakeSessions {
   readonly otherSessionThreads = new Set<string>();
 
   /** Approves the pending code (the latest by default), handing out `token`. */
-  approve(userCode?: string, token: string = SESSION_TOKENS.first): void {
+  approve(userCode?: string, token: string = SESSION_TOKENS.first, projects?: string[]): void {
     const grant = this.pending(userCode);
     grant.status = 'approved';
     grant.token = token;
+    if (projects) grant.approvedProjects = projects;
   }
 
   deny(userCode?: string): void {

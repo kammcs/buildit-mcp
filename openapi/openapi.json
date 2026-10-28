@@ -8700,7 +8700,13 @@
                   "expires_at": "2026-11-06T14:03:00Z",
                   "session": {
                     "id": "00000000-0000-4000-8000-000000000066",
-                    "label": "demo-app"
+                    "label": "demo-app",
+                    "projects": [
+                      {
+                        "id": "00000000-0000-4000-8000-00000000000a",
+                        "key": "DEMO"
+                      }
+                    ]
                   },
                   "agent": {
                     "id": "00000000-0000-4000-8000-000000000064",
@@ -8885,6 +8891,89 @@
         "x-buildit-hints": {
           "read_only": true,
           "destructive": false,
+          "idempotent": true,
+          "needs_projects": false
+        }
+      },
+      "delete": {
+        "operationId": "revoke_session",
+        "tags": [
+          "session"
+        ],
+        "summary": "End the session",
+        "description": "Revokes this session and its token at once, as revoking it in buildIt.Social would (the CLI's disconnect). Answers 204 with no body; the token is refused from then on (401 token_revoked, so a repeat is too). The session's threads stay in the agent's direct message, and the owner can hand them on to another session of the agent. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done; no body.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": null,
+        "x-buildit-required-scopes": [],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "rate_limited",
+          "internal",
+          "unavailable",
+          "session_token_required",
+          "agent_sessions_off"
+        ],
+        "x-buildit-auth": "session",
+        "x-buildit-hints": {
+          "read_only": false,
+          "destructive": true,
           "idempotent": true,
           "needs_projects": false
         }
@@ -10334,7 +10423,7 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "session": {
-            "$ref": "#/components/schemas/SessionBrief"
+            "$ref": "#/components/schemas/ConnectedSession"
           },
           "agent": {
             "$ref": "#/components/schemas/AgentBrief"
@@ -10441,6 +10530,42 @@
           "verification_uri_complete",
           "interval",
           "expires_in"
+        ]
+      },
+      "ConnectedSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "label": {
+            "type": "string",
+            "description": "The session's label, as the user approved it."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/Uuid"
+                },
+                "key": {
+                  "$ref": "#/components/schemas/ProjectKey"
+                }
+              },
+              "required": [
+                "id",
+                "key"
+              ]
+            },
+            "description": "The projects the user approved the session for (they may differ from those asked for)."
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "projects"
         ]
       },
       "CreateChannelRequest": {

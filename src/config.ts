@@ -166,13 +166,15 @@ Options:
                             it gets the session
   -h, --help                Show this help
 
-Once approved, it says who approved it (the agent, its owner, the org) and
-asks "Is this you?"; only "y" saves the token.
+Once approved, it says who approved it (the agent, its owner, the org, the
+projects) and asks "Is this you?"; only "y" saves the token, and any other
+answer cancels the session.
 `,
   disconnect: `Usage: buildit-mcp disconnect [options]
 
-Forgets the session token saved for this folder. The session stays in
-buildIt.Social until you revoke it there, or it expires after 30 days unused.
+Cancels this folder's session in buildIt.Social and forgets its saved token.
+If buildIt.Social can't be reached, the token is forgotten anyway: revoke
+the session in the app then.
 
 Options:
   --folder <path>           The folder (default: the working directory)

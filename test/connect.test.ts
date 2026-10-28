@@ -152,8 +152,10 @@ describe('connect', () => {
       expect(h.out()).toContain(
         'Connected as Claude (Test User) in Example Org, projects DEMO, OPS',
       );
+      expect(h.err()).toContain('Not saved, and the session was cancelled');
       expect(h.err()).toContain('someone else may have approved your code');
-      expect(h.err()).toContain('revoke the session "demo-folder"');
+      // The token was used once, to end the session, and never kept.
+      expect(api.sessions.sessions.get(SESSION_TOKENS.first)?.selfRevoked).toBe(true);
       expect(await h.store.get(sessionKey(dir, api.url))).toBeUndefined();
       expect(h.out() + h.err()).not.toContain(SESSION_TOKENS.first);
     }
@@ -165,6 +167,25 @@ describe('connect', () => {
       expect(await h.store.get(sessionKey(dir, api.url))).toBe(SESSION_TOKENS.first);
       await h.store.delete(sessionKey(dir, api.url));
     }
+  });
+
+  it('says to revoke the session in the app when it could not cancel it', async () => {
+    api.enqueueError('/v1/session', 'internal');
+    const h = harness((n) => {
+      if (n === 1) api.sessions.approve();
+    }, 'n');
+    expect(await runConnect(options(), h.io)).toBe(1);
+    expect(h.err()).toContain('could not be cancelled (internal)');
+    expect(h.err()).toContain('revoke the session "demo-folder" in buildIt.Social');
+    expect(await h.store.get(sessionKey(dir, api.url))).toBeUndefined();
+  });
+
+  it('names the projects as approved, not as asked for', async () => {
+    const h = harness((n) => {
+      if (n === 1) api.sessions.approve(undefined, SESSION_TOKENS.first, ['OPS']);
+    });
+    expect(await runConnect(options({ projects: ['DEMO', 'OPS'] }), h.io)).toBe(0);
+    expect(h.out()).toContain('in Example Org, project OPS; session');
   });
 
   it('with --yes, saves without asking (for scripts)', async () => {
@@ -241,16 +262,36 @@ describe('connect', () => {
 });
 
 describe('disconnect', () => {
-  it('says the session is offline and forgets its token', async () => {
+  it('cancels the session and forgets its token', async () => {
     const h = harness();
     const session = api.sessions.open(SESSION_TOKENS.first);
     await h.store.set(sessionKey(dir, api.url), SESSION_TOKENS.first);
     expect(await runDisconnect({ apiUrl: api.url, folder: dir }, h.io)).toBe(0);
-    expect(session.heartbeats).toEqual(['offline']);
+    expect(session.selfRevoked).toBe(true);
     expect(await h.store.get(sessionKey(dir, api.url))).toBeUndefined();
-    expect(h.out()).toContain('revoke it there');
+    expect(h.out()).toContain('the session is cancelled in buildIt.Social');
     expect(await runDisconnect({ apiUrl: api.url, folder: dir }, h.io)).toBe(0);
     expect(h.out()).toContain('No session is saved');
+  });
+});
+
+describe('disconnect, when the session already ended or the API is away', () => {
+  it('forgets the token either way, and says what is left to do', async () => {
+    const h = harness();
+    api.sessions.open(SESSION_TOKENS.first);
+    api.sessions.revoke(SESSION_TOKENS.first);
+    await h.store.set(sessionKey(dir, api.url), SESSION_TOKENS.first);
+    expect(await runDisconnect({ apiUrl: api.url, folder: dir }, h.io)).toBe(0);
+    expect(h.out()).toContain('the session is cancelled in buildIt.Social');
+    expect(await h.store.get(sessionKey(dir, api.url))).toBeUndefined();
+
+    const h2 = harness();
+    api.sessions.open(SESSION_TOKENS.second);
+    api.enqueueError('/v1/session', 'unavailable');
+    await h2.store.set(sessionKey(dir, api.url), SESSION_TOKENS.second);
+    expect(await runDisconnect({ apiUrl: api.url, folder: dir }, h2.io)).toBe(0);
+    expect(h2.out()).toContain('could not be cancelled in buildIt.Social (unavailable)');
+    expect(await h2.store.get(sessionKey(dir, api.url))).toBeUndefined();
   });
 });
 
