@@ -390,6 +390,7 @@ export function startStdio(
   const channel = config.channel !== undefined;
   const state = new ChannelState();
   state.isChannel = options.channelOwner ?? true;
+  state.folder = config.channel?.folder;
   if (channel && state.isChannel) {
     state.typing = new TypingIndicator({
       api,

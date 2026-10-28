@@ -55,13 +55,38 @@ export function unassignedReason(reason: string, owner: string): string {
   }
 }
 
+const LINK_RE = /\[([^\]\n]{1,200})\]\(([^)\s]{0,2048})\)/g;
+const ITEM_KEY_RE = /^#?[A-Za-z][A-Za-z0-9]{0,9}-\d{1,9}$/;
+
+/**
+ * The app's Markdown links as people read them: a mention,
+ * `[@Ana](mention:<id>)`, becomes `@Ana`; a custom emoji,
+ * `[:party:](emoji:<id>)`, `:party:`; a link whose text is an item key
+ * (`[DEMO-7](...)`) the key. Other links stay. It runs before the text is
+ * wrapped, so whatever a link's text holds is still inside the block and
+ * defused there (the block's author and source come from the event's
+ * fields, never from the text).
+ */
+export function plainLinks(text: string): string {
+  return text.replace(LINK_RE, (whole, label: string, url: string) => {
+    const scheme = url.toLowerCase();
+    if (scheme.startsWith('mention:')) return `@${label.replace(/^@+/, '').trim()}`;
+    if (scheme.startsWith('emoji:')) return label;
+    if (ITEM_KEY_RE.test(label.trim())) return label.trim().replace(/^#/, '').toUpperCase();
+    return whole;
+  });
+}
+
 /** The item's title and description excerpt, as blocks. */
 function itemBlocks(item: EventItem): string[] {
   const blocks = [wrapUntrusted(item.title, { source: 'item title', maxChars: 300 })];
   const excerpt = item.description_excerpt ?? '';
   if (excerpt.trim() !== '') {
     blocks.push(
-      wrapUntrusted(excerpt, { source: 'item description', maxChars: EXCERPT_MAX_CHARS }),
+      wrapUntrusted(plainLinks(excerpt), {
+        source: 'item description',
+        maxChars: EXCERPT_MAX_CHARS,
+      }),
     );
     if (item.description_truncated === true) {
       blocks.push('(The description is cut here; read it all with get_item.)');
@@ -76,7 +101,7 @@ function contextBlocks(messages: readonly ContextMessage[]): string[] {
   return [
     'The latest messages in its thread, oldest first:',
     ...messages.map((m) =>
-      wrapUntrusted(m.text, {
+      wrapUntrusted(plainLinks(m.text), {
         source: 'item thread',
         author: sanitizeLabel(m.author.name, 64),
         attributes: {

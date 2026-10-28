@@ -37,6 +37,7 @@ import { planResolvedContent } from '../tools/plans.js';
 import {
   assignedContent,
   mentionContent,
+  plainLinks,
   repliedContent,
   unassignedContent,
   type ContextMessage,
@@ -125,6 +126,8 @@ export class ChannelState {
   readonly activeItems = new Map<string, string>();
   /** The thread of the owner's latest direct message, while there is one. */
   lastDmThread: string | undefined;
+  /** The folder the session is connected for (the lead's table of workers is in it). */
+  folder: string | undefined;
   /** An item's thread is active (its key and id). */
   activateItem(key: string, id: string): void {
     this.rememberItem(key, id);
@@ -643,7 +646,7 @@ export class ChannelLoop {
       this.noteLocale(user);
       const forwarded = forwardOrigin(message);
       const text = (): string =>
-        forwarded ? forwardedBlock(message.text, forwarded) : message.text;
+        forwarded ? forwardedBlock(plainLinks(message.text), forwarded) : plainLinks(message.text);
       const base = { thread_id: threadId, message_id: message.id, item: key, project, session };
       if (event.type === 'app.mentioned') {
         content = mentionContent(owner, key, text, item, context);

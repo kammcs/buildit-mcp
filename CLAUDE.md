@@ -83,6 +83,8 @@ src/
                         plan cards' outcomes into plan_resolved notifications, acks; work items'
                         events (assigned, mentions and replies in an item's thread, unassigned)
   channel/item-events.ts  the content of a work item's notifications (lead, data blocks)
+  channel/workers.ts    where the question hook posts: the lead's in the DM, a worker's in its
+                        item's thread (the lead's table)
   channel/threads.ts    which thread reply, ask and the approval cards post in (named once
                         several are active)
   channel/waiters.ts    who waits for answers to the session's cards, by message id

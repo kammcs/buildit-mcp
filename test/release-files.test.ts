@@ -212,6 +212,9 @@ describe('the Claude Code plugin', () => {
         tool_use_id: '${tool_use_id}',
         session_id: '${session_id}',
         format: 'hook',
+        // Who asks (empty for the main agent): an item worker's question goes to its item.
+        agent_id: '${agent_id}',
+        agent_type: '${agent_type}',
       },
     });
     expect(hooks.hooks.Stop?.[0]?.hooks[0]).toMatchObject({

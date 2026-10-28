@@ -32,7 +32,8 @@ import { ApiError } from '../api/client.js';
 import { answerSessionResponse, closeSessionCard, postSessionMessage } from '../channel/api.js';
 import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import type { ChannelState } from '../channel/loop.js';
-import { resolveThread } from '../channel/threads.js';
+import { isUuid, itemThreadId, resolveThread } from '../channel/threads.js';
+import { isItemWorker, workerEntry } from '../channel/workers.js';
 import { CardInbox, eventMessageId, type CardWaiters } from '../channel/waiters.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolContext, type ToolDefinition } from '../toolsets/registry.js';
@@ -633,6 +634,8 @@ export const AskInputSchema = z.object({
     .describe(`How long to wait for the answer, in seconds (default ${TOOL_DEFAULT_WAIT_S}).`),
   tool_use_id: z.string().max(200).optional().describe('Set by the plugin hook; leave it out.'),
   session_id: z.string().max(200).optional().describe('Set by the plugin hook; leave it out.'),
+  agent_id: z.string().max(200).optional().describe('Set by the plugin hook; leave it out.'),
+  agent_type: z.string().max(200).optional().describe('Set by the plugin hook; leave it out.'),
   format: z
     .enum(['tool', 'hook'])
     .optional()
@@ -737,18 +740,13 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
         question: b.question,
       }));
       let threadId: string | undefined;
-      try {
+      if (hook) {
+        // The hook names no thread: who asks (the lead, or an item worker) decides.
+        const placed = await hookThread(state, ctx, args.agent_id, args.agent_type);
+        if (placed === null) return pass('thread_unknown');
+        threadId = placed.thread;
+      } else {
         threadId = await resolveThread(state, ctx, args, 'ask');
-      } catch (err) {
-        // The hook can't name a thread: Claude is told to ask with the tool instead.
-        if (!(hook && err instanceof ToolInputError)) throw err;
-        ctx.logger.info('ask needs a thread', { reason: 'several_threads' });
-        return {
-          structured: { status: 'not_asked' as const, answers: {}, message_id: null },
-          text: hookDeny(
-            `${err.message} Ask with the ask tool instead, passing thread_id or item, so the question goes to the right thread.`,
-          ),
-        };
       }
 
       // Registered before the posts, so an answer in the next poll finds it.
@@ -813,6 +811,38 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
       }
     },
   });
+}
+
+/**
+ * Where the hook's question goes (channel/workers.ts): the main agent's
+ * (no agent_id or agent_type) in the direct message, its latest thread
+ * (undefined: a new message there); an item worker's in its item's thread,
+ * from the lead's table; anything else is null (the terminal asks).
+ */
+async function hookThread(
+  state: ChannelState,
+  ctx: ToolContext,
+  agentId: string | undefined,
+  agentType: string | undefined,
+): Promise<{ thread: string | undefined } | null> {
+  // An empty field, or one Claude Code didn't fill in, is absent.
+  const clean = (v: string | undefined): string => {
+    const s = v?.trim() ?? '';
+    return s.startsWith('${') ? '' : s;
+  };
+  const id = clean(agentId);
+  const type = clean(agentType);
+  if (id === '' && type === '') return { thread: state.lastDmThread };
+  if (id === '' || !isItemWorker(type) || state.folder === undefined) return null;
+  const entry = workerEntry(state.folder, id);
+  if (entry === undefined) return null;
+  if (entry.thread_id !== undefined && isUuid(entry.thread_id)) return { thread: entry.thread_id };
+  if (entry.item === undefined) return null;
+  try {
+    return { thread: await itemThreadId(entry.item, ctx) };
+  } catch {
+    return null;
+  }
 }
 
 /** The questions as the hook passed them, parsed (AskUserQuestion's updatedInput takes them back). */

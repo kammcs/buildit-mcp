@@ -3,6 +3,10 @@
  * process: an explicit thread once more than one is active, list_threads,
  * "is writing" per item thread, and the lead's instructions.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -60,6 +64,95 @@ async function notes(c: ChannelClient, n: number) {
 
 const one = demoItem(12, { title: 'Fix the login redirect' });
 const two = demoItem(13, { title: 'Export reports as CSV' });
+const questions = [
+  { question: 'Which?', header: 'Pick', options: [{ label: 'A' }, { label: 'B' }] },
+];
+
+describe("AskUserQuestion's hook, with several threads", () => {
+  let folder: string;
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'buildit-mcp-lead-'));
+  });
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  /** A channel server for `folder`, working on two items, with a direct message. */
+  async function lead(): Promise<{ c: ChannelClient; dm: string }> {
+    const c = await start({ BUILDIT_FOLDER: folder });
+    api.sessions.assignItem(TOKEN, one);
+    api.sessions.assignItem(TOKEN, two);
+    const dm = api.sessions.postFrom(TOKEN, 'Hi');
+    await notes(c, 3);
+    return { c, dm };
+  }
+
+  /** The hook's call, as the plugin's hooks.json makes it (agent fields substituted). */
+  function hook(c: ChannelClient, agent: { id: string; type: string }, toolUseId: string) {
+    return c.client.callTool({
+      name: 'ask',
+      arguments: {
+        questions: JSON.stringify(questions),
+        tool_use_id: toolUseId,
+        session_id: 'claude-session-1',
+        agent_id: agent.id,
+        agent_type: agent.type,
+        format: 'hook',
+      },
+    });
+  }
+
+  /** Waits for the hook's card, dismisses it, and returns its thread. */
+  async function cardThread(pending: Promise<unknown>): Promise<string | null | undefined> {
+    await waitFor(() => session().cards.size === 1);
+    const [id, card] = [...session().cards.entries()][0]!;
+    api.sessions.closeCardBy(TOKEN, id, 'owner');
+    await pending;
+    return card.threadId;
+  }
+
+  it("puts the lead's question in the direct message", async () => {
+    const { c, dm } = await lead();
+    expect(await cardThread(hook(c, { id: '', type: '' }, 'toolu_lead'))).toBe(dm);
+    // Fields Claude Code left as written count as absent too.
+    session().cards.clear();
+    expect(await cardThread(hook(c, { id: '${agent_id}', type: '${agent_type}' }, 'toolu_2'))).toBe(
+      dm,
+    );
+  });
+
+  it("puts an item worker's question in its item's thread, from the lead's table", async () => {
+    const { c } = await lead();
+    mkdirSync(join(folder, '.claude'), { recursive: true });
+    writeFileSync(
+      join(folder, '.claude', 'buildit-workers.json'),
+      JSON.stringify({
+        workers: [
+          { agent_id: 'a1b2c3', item: 'DEMO-13', thread_id: two.id },
+          { agent_id: 'd4e5f6', item: 'DEMO-12' },
+        ],
+      }),
+    );
+    const worker = 'buildit:buildit-item-worker';
+    expect(await cardThread(hook(c, { id: 'a1b2c3', type: worker }, 'toolu_w1'))).toBe(two.id);
+    session().cards.clear();
+    // Recorded by key only: its thread is the item's id.
+    expect(await cardThread(hook(c, { id: 'd4e5f6', type: worker }, 'toolu_w2'))).toBe(one.id);
+  });
+
+  it("lets the terminal ask when it can't place the question", async () => {
+    const { c } = await lead();
+    // A worker the table doesn't name (there is no table), and another kind of subagent.
+    for (const agent of [
+      { id: 'zz9', type: 'buildit:buildit-item-worker' },
+      { id: 'yy8', type: 'Explore' },
+    ]) {
+      const r = await hook(c, agent, `toolu_${agent.id}`);
+      expect(textOf(r)).toBe('{}');
+    }
+    expect(session().cards.size).toBe(0);
+  });
+});
 
 describe('several threads at once', () => {
   it('keeps the default with one thread, and asks for a thread with two', async () => {
@@ -105,26 +198,14 @@ describe('several threads at once', () => {
     expect(back.isError).toBeFalsy();
   });
 
-  it('asks for a thread in ask too; the hook is told to use the tool', async () => {
+  it('asks for a thread in the ask tool', async () => {
     const c = await start();
     api.sessions.assignItem(TOKEN, one);
     api.sessions.assignItem(TOKEN, two);
     await notes(c, 2);
-    const questions = [
-      { question: 'Which?', header: 'Pick', options: [{ label: 'A' }, { label: 'B' }] },
-    ];
     const tool = await c.client.callTool({ name: 'ask', arguments: { questions } });
     expect(tool.isError).toBe(true);
     expect(textOf(tool)).toContain('so ask needs thread_id or item');
-    const hook = await c.client.callTool({
-      name: 'ask',
-      arguments: { questions: JSON.stringify(questions), tool_use_id: 'toolu_1', format: 'hook' },
-    });
-    const out = JSON.parse(textOf(hook)) as {
-      hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string };
-    };
-    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
-    expect(out.hookSpecificOutput.permissionDecisionReason).toContain('Ask with the ask tool');
     expect(session().cards.size).toBe(0);
 
     // With the item named, the card goes to its thread.
