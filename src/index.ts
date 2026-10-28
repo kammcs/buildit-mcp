@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 /**
- * The buildit-mcp command. stdio by default; Streamable HTTP with --http.
+ * The buildit-mcp command. stdio by default; Streamable HTTP with --http;
+ * a Claude Code channel with --channel; and the session commands
+ * (connect, disconnect, status), which run in a terminal.
  */
-import { ConfigError, parseCli, USAGE } from './config.js';
+import { runConnect, runDisconnect, runStatus, type CommandIO } from './cli/commands.js';
+import { COMMAND_USAGE, ConfigError, parseCli, USAGE } from './config.js';
 import { createLogger } from './log.js';
+import { openTokenStore, sessionKey } from './secrets/keychain.js';
 import { CATALOG } from './toolsets/catalog.js';
 import { unknownToolNames } from './toolsets/registry.js';
 import { startHttp } from './transports/http.js';
@@ -24,7 +28,7 @@ async function main(): Promise<void> {
   }
 
   if (action.kind === 'help') {
-    process.stdout.write(USAGE);
+    process.stdout.write(action.command ? COMMAND_USAGE[action.command] : USAGE);
     return;
   }
   if (action.kind === 'version') {
@@ -32,12 +36,52 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { config } = action;
+  if (action.kind === 'connect' || action.kind === 'disconnect' || action.kind === 'status') {
+    // A terminal command says what happened in plain text; logs stay quiet.
+    const store = await openTokenStore({
+      warn: (message) => process.stderr.write(`${SERVER_NAME}: ${message}\n`),
+    });
+    const io: CommandIO = {
+      out: (text) => process.stdout.write(text),
+      err: (text) => process.stderr.write(`${SERVER_NAME}: ${text}`),
+      store,
+      logger: createLogger({ level: 'error' }),
+    };
+    process.exitCode =
+      action.kind === 'connect'
+        ? await runConnect(action.options, io)
+        : action.kind === 'disconnect'
+          ? await runDisconnect(action.options, io)
+          : await runStatus(action.options, io);
+    return;
+  }
+
+  let { config } = action;
+  const early: string[] = [];
+  let clearSaved: (() => Promise<void>) | undefined;
+  if (config.channel !== undefined && config.token === undefined) {
+    // Channel mode without BUILDIT_TOKEN: the token connect saved for the folder.
+    const store = await openTokenStore({ warn: (message) => early.push(message) });
+    const key = sessionKey(config.channel.folder, config.apiUrl);
+    const token = await store.get(key);
+    if (token === undefined) {
+      process.stderr.write(
+        `${SERVER_NAME}: No buildIt.Social session is saved for ${config.channel.folder}. In a terminal in that folder, run: npx -y @kammcs/buildit-mcp@latest connect --project <KEY>\n`,
+      );
+      process.exitCode = 2;
+      return;
+    }
+    config = { ...config, token };
+    clearSaved = async () => {
+      await store.delete(key);
+    };
+  }
+
   const logger = createLogger({
     level: config.logLevel,
     ...(config.token ? { secrets: [config.token] } : {}),
   });
-  for (const warning of config.warnings) logger.warn(warning);
+  for (const warning of [...config.warnings, ...early]) logger.warn(warning);
   const unknown = unknownToolNames(CATALOG, config.excludeTools);
   if (unknown.length > 0) {
     logger.warn('BUILDIT_EXCLUDE_TOOLS names tools this version does not have', { names: unknown });
@@ -45,13 +89,23 @@ async function main(): Promise<void> {
   logger.info('starting', {
     version: SERVER_VERSION,
     mode: config.mode,
+    channel: config.channel !== undefined,
     api_url: config.apiUrl,
     toolsets: config.toolsets,
     read_only: config.readOnly,
   });
 
   if (config.mode === 'stdio') {
-    const handle = startStdio(config, logger);
+    const handle = startStdio(config, logger, {
+      onSessionEnded: async (reason) => {
+        if (reason !== 'token_revoked' && reason !== 'token_expired') return;
+        if (clearSaved === undefined) return;
+        await clearSaved().catch(() => undefined);
+        logger.warn(
+          'the session was revoked or has expired, so its saved token is cleared; run "buildit-mcp connect" in the folder to connect again',
+        );
+      },
+    });
     const stop = (): void => {
       void handle.close().finally(() => process.exit(0));
     };

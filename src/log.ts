@@ -39,13 +39,14 @@ const REDACTED = '[redacted]';
 const SECRET_KEY = /(authorization|token|secret|password|api[-_]?key|cookie)/i;
 
 /**
- * Bearer credentials and buildIt personal access tokens, wherever they appear
- * in a string. The token pattern has no word boundary in front, so a token
+ * Bearer credentials and buildIt personal access and session tokens, wherever
+ * they appear in a string. The token pattern has no word boundary in front, so a token
  * glued to other text (`MY_buildit_pat_...`, `x1buildit_pat_...`) is caught too.
  */
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[^\s"',;]+/gi,
   /buildit_pat_[A-Za-z0-9_]+/g,
+  /buildit_ags_[A-Za-z0-9_]+/g,
 ];
 
 export function scrubString(value: string, secrets: readonly string[] = []): string {

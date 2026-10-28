@@ -3,7 +3,9 @@
  * client would run it. Needs `npm run build` first (`npm run check` does it).
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +14,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { FakeApi, TOKENS } from './support/fake-api.js';
+import { SESSION_TOKENS } from './support/fake-sessions.js';
 
 const BIN = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
@@ -191,5 +194,71 @@ describe('stdio (built binary)', () => {
     expect(version.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
     const help = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
     expect(help.stdout).toContain('Usage: buildit-mcp');
+  });
+});
+
+describe('stdio channel mode (built binary)', () => {
+  it("registers as a channel on the 2025 handshake and pushes the owner's messages", async () => {
+    api.sessions.interval = 1;
+    const session = api.sessions.open(SESSION_TOKENS.zero, 'demo-folder');
+    const { client, stderr } = await connect(SESSION_TOKENS.zero, {
+      auto: true,
+      env: { BUILDIT_CHANNEL: 'true' },
+    });
+    const notes: { method: string; params?: unknown }[] = [];
+    client.fallbackNotificationHandler = (n) => {
+      notes.push(n);
+      return Promise.resolve();
+    };
+    expect(client.getNegotiatedProtocolVersion()).toBe('2025-11-25');
+    expect(client.getServerCapabilities()?.experimental).toEqual({ 'claude/channel': {} });
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain('reply');
+
+    const id = api.sessions.postFrom(SESSION_TOKENS.zero, 'From the app.');
+    const until = Date.now() + 8000;
+    while (session.acked < 1 && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+    expect(notes).toContainEqual(
+      expect.objectContaining({
+        method: 'notifications/claude/channel',
+        params: {
+          content: 'From the app.',
+          meta: { thread_id: id, message_id: id, session: 'demo-folder' },
+        },
+      }),
+    );
+    const reply = await client.callTool({ name: 'reply', arguments: { text: 'Got it.' } });
+    expect(reply.isError).toBeFalsy();
+    expect(session.messages.at(-1)).toMatchObject({ text: 'Got it.', thread_id: id });
+    expect(stderr()).not.toContain(SESSION_TOKENS.zero);
+    expect(stderr()).not.toContain('From the app.');
+  });
+
+  it('exits with the connect command when no session is saved for the folder', () => {
+    const home = mkdtempSync(join(tmpdir(), 'buildit-mcp-home-'));
+    try {
+      const run = spawnSync(process.execPath, [BIN, '--channel', '--folder', home], {
+        env: {
+          PATH: process.env.PATH ?? '',
+          BUILDIT_API_URL: api.url,
+          BUILDIT_TOKEN_STORE: 'file',
+          APPDATA: home,
+          HOME: home,
+          XDG_CONFIG_HOME: home,
+          ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+        },
+        encoding: 'utf8',
+        timeout: 10_000,
+      });
+      expect(run.status).toBe(2);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toContain('connect --project <KEY>');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('prints the help of a session command', () => {
+    const help = spawnSync(process.execPath, [BIN, 'connect', '--help'], { encoding: 'utf8' });
+    expect(help.stdout).toContain('Usage: buildit-mcp connect --project <KEY>');
   });
 });

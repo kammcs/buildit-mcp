@@ -10,11 +10,23 @@
  * token lists only whoami. A 2025-era client (initialize handshake) and a
  * 2026-07-28 client (per-request _meta) are both served from the same
  * factory.
+ *
+ * Channel mode (--channel) adds what makes the server a Claude Code
+ * channel: the `claude/channel` capability, the reply tool, and the channel
+ * loop (src/channel/loop.ts), started once the client has initialized and
+ * stopped when the connection closes. Claude Code doesn't register a
+ * channel that negotiates protocol revision 2026-07-28, so in this mode a
+ * 2026-07-28 opening is answered as unsupported and the client falls back
+ * to the 2025 handshake.
  */
 import type { Readable, Writable } from 'node:stream';
 
 import {
+  isJSONRPCNotification,
   isJSONRPCRequest,
+  PROTOCOL_VERSION_META_KEY,
+  ProtocolErrorCode,
+  SUPPORTED_PROTOCOL_VERSIONS,
   type JSONRPCMessage,
   type Transport,
   type TransportSendOptions,
@@ -26,6 +38,13 @@ import {
 } from '@modelcontextprotocol/server/stdio';
 
 import { ApiClient } from '../api/client.js';
+import {
+  CHANNEL_NOTIFICATION,
+  ChannelLoop,
+  ChannelState,
+  type ChannelLoopOptions,
+  type EndReason,
+} from '../channel/loop.js';
 import type { Config } from '../config.js';
 import { invalidatesIdentity } from '../identity.js';
 import type { Logger } from '../log.js';
@@ -38,8 +57,9 @@ import {
   type ListedTools,
   type SwitchableServer,
 } from '../server.js';
+import { createReplyTool } from '../tools/reply.js';
 import { CATALOG } from '../toolsets/catalog.js';
-import type { ToolDefinition } from '../toolsets/registry.js';
+import type { ToolDefinition, ToolPolicy } from '../toolsets/registry.js';
 import { compareVersions, SERVER_VERSION } from '../version.js';
 
 export interface StdioOptions {
@@ -50,6 +70,10 @@ export interface StdioOptions {
   stdout?: Writable;
   /** For tests: the clock that times identity refreshes. */
   now?: () => number;
+  /** Channel mode: called once when the session can't continue (to clear its saved token). */
+  onSessionEnded?: (reason: EndReason) => void | Promise<void>;
+  /** For tests: the channel loop's poll interval and wait. */
+  channelLoop?: Pick<ChannelLoopOptions, 'intervalMs' | 'sleep'>;
 }
 
 /** A known identity is read again at most this often. */
@@ -165,6 +189,8 @@ class GatedTransport implements Transport {
   constructor(
     private readonly inner: Transport,
     private readonly before: (message: JSONRPCMessage) => Promise<void>,
+    /** Told when the connection closes (stdin ended, or close()). */
+    private readonly closed: () => void = () => undefined,
   ) {}
 
   start(): Promise<void> {
@@ -175,6 +201,73 @@ class GatedTransport implements Transport {
         .then(() => {
           this.onmessage?.(message, extra);
         });
+    };
+    this.inner.onerror = (error) => this.onerror?.(error);
+    this.inner.onclose = () => {
+      this.closed();
+      this.onclose?.();
+    };
+    return this.inner.start();
+  }
+
+  send(message: JSONRPCMessage, options?: TransportSendOptions): Promise<void> {
+    return this.inner.send(message, options);
+  }
+
+  close(): Promise<void> {
+    return this.inner.close();
+  }
+}
+
+/** Whether a message claims a protocol revision in its _meta (the 2026-07-28 way of opening). */
+function claimsRevision(message: JSONRPCMessage): boolean {
+  if (!isJSONRPCRequest(message) && !isJSONRPCNotification(message)) return false;
+  const params = message.params as { _meta?: Record<string, unknown> } | undefined;
+  return params?._meta?.[PROTOCOL_VERSION_META_KEY] !== undefined;
+}
+
+/**
+ * Keeps a connection on the 2025 handshake (channel mode): until
+ * `initialize`, a request that claims a revision is answered with the
+ * unsupported-version error naming only the 2025-era revisions, which makes
+ * a client fall back to `initialize`; such a notification is dropped.
+ */
+export class LegacyOnlyTransport implements Transport {
+  onclose?: (() => void) | undefined;
+  onerror?: ((error: Error) => void) | undefined;
+  onmessage?: Transport['onmessage'];
+  private initialized = false;
+
+  constructor(private readonly inner: Transport) {}
+
+  start(): Promise<void> {
+    this.inner.onmessage = (message, extra) => {
+      if (!this.initialized && claimsRevision(message)) {
+        if (isJSONRPCRequest(message)) {
+          const meta = (message.params as { _meta?: Record<string, unknown> })._meta ?? {};
+          const requested = meta[PROTOCOL_VERSION_META_KEY];
+          void this.inner
+            .send({
+              jsonrpc: '2.0',
+              id: message.id,
+              error: {
+                code: ProtocolErrorCode.UnsupportedProtocolVersion,
+                message:
+                  'Unsupported protocol version: this channel server speaks the 2025 handshake.',
+                data: {
+                  supported: [...SUPPORTED_PROTOCOL_VERSIONS],
+                  requested: typeof requested === 'string' ? requested : 'unknown',
+                },
+              },
+            })
+            .catch((error: unknown) => {
+              this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+            });
+        }
+        return;
+      }
+      if (isJSONRPCRequest(message) && message.method === 'initialize') this.initialized = true;
+      this.onmessage?.(message, extra);
     };
     this.inner.onerror = (error) => this.onerror?.(error);
     this.inner.onclose = () => this.onclose?.();
@@ -188,6 +281,13 @@ class GatedTransport implements Transport {
   close(): Promise<void> {
     return this.inner.close();
   }
+}
+
+/** The tools only channel mode has (reply), under the operator's read-only and exclude rules. */
+function channelTools(policy: ToolPolicy, state: ChannelState): ToolDefinition[] {
+  const reply = createReplyTool(state);
+  if (policy.readOnly || policy.excludeTools.includes(reply.name)) return [];
+  return [reply];
 }
 
 export function startStdio(
@@ -213,8 +313,16 @@ export function startStdio(
       if (invalidatesIdentity(err)) invalidations.listener();
     },
   });
+  const channel = config.channel !== undefined;
+  const state = new ChannelState();
+  const extraTools = channel ? channelTools(policy, state) : [];
   const identity = new StdioIdentity(
-    () => resolveListedTools(identityFromApi(api), catalog, policy, logger),
+    async () => {
+      const listed = await resolveListedTools(identityFromApi(api), catalog, policy, logger);
+      return extraTools.length > 0
+        ? { ...listed, tools: [...listed.tools, ...extraTools] }
+        : listed;
+    },
     logger,
     options.now,
   );
@@ -243,25 +351,56 @@ export function startStdio(
     options.stdin && options.stdout
       ? new StdioServerTransport(options.stdin, options.stdout)
       : new StdioServerTransport();
-  return serveStdio(
+  let loop: ChannelLoop | undefined;
+  const stopLoop = (): Promise<void> => loop?.stop() ?? Promise.resolve();
+  const handle = serveStdio(
     async () => {
       const listed = await identity.refresh();
       const switchable = createSwitchableMcpServer({
-        tools: allowed.tools,
+        tools: [...allowed.tools, ...extraTools],
         resources: allowed.resources,
         prompts: allowed.prompts,
         api,
         logger,
+        channel,
         ...(listed.identity === 'known' ? {} : { toolsListTtlMs: DEGRADED_LIST_TTL_MS }),
       });
       identity.attach(switchable);
+      if (channel) {
+        const mcp = switchable.server.server;
+        // Notifications sent before the client has initialized would be lost.
+        mcp.oninitialized = () => {
+          if (loop !== undefined) return;
+          loop = new ChannelLoop({
+            api,
+            logger: logger.child({ component: 'channel' }),
+            state,
+            notify: (params) => mcp.notification({ method: CHANNEL_NOTIFICATION, params }),
+            ...(options.onSessionEnded ? { onEnded: options.onSessionEnded } : {}),
+            ...options.channelLoop,
+          });
+          void loop.start();
+        };
+      }
       return switchable.server;
     },
     {
       onerror: (error) => {
         logger.error('stdio transport error', { error });
       },
-      transport: new GatedTransport(wire, (message) => identity.beforeMessage(message)),
+      transport: new GatedTransport(
+        channel ? new LegacyOnlyTransport(wire) : wire,
+        (message) => identity.beforeMessage(message),
+        () => {
+          void stopLoop();
+        },
+      ),
     },
   );
+  return {
+    async close() {
+      await stopLoop();
+      await handle.close();
+    },
+  };
 }
