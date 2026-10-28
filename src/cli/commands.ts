@@ -22,6 +22,7 @@ import {
 import { FORBIDDEN_CHARS, type ConnectOptions, type SessionCommandOptions } from '../config.js';
 import { isTokenRefused, isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
+import { duplicateChannelWarning } from './claude-config.js';
 import {
   forgetSession,
   forgetStaleApi,
@@ -48,6 +49,8 @@ export interface CommandIO {
   entry?: string;
   /** Asks the person a question and returns their answer ('' when there is no one to ask). */
   ask?: (question: string) => Promise<string>;
+  /** For tests: the home folder whose Claude Code files status reads. */
+  home?: string;
 }
 
 /** The answers that confirm: only an explicit yes. */
@@ -393,7 +396,12 @@ export async function runStatus(given: SessionCommandOptions, io: CommandIO): Pr
   const options = { ...given, apiUrl: await apiUrlOf(given, io.store) };
   const key = sessionKey(options.folder, options.apiUrl);
   const token = await io.store.get(key);
-  const header = [`Folder:   ${options.folder}`, `API:      ${options.apiUrl}`];
+  const duplicate = duplicateChannelWarning(options.folder, io.home);
+  const header = [
+    `Folder:   ${options.folder}`,
+    `API:      ${options.apiUrl}`,
+    ...(duplicate === undefined ? [] : [duplicate]),
+  ];
   if (token === undefined) {
     io.out(
       [...header, 'Not connected. Run "buildit-mcp connect --project <KEY>" in this folder.'].join(

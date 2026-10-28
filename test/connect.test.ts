@@ -93,6 +93,8 @@ function harness(onWait: (n: number) => void = () => undefined, answer = 'y'): H
     store,
     logger: createLogger({ sink: () => undefined }),
     machine: 'DESKTOP-TEST',
+    // Claude Code's files: none in the test folder (status reads them).
+    home: dir,
     sleep: (ms) => {
       waits.push(ms);
       onWait(waits.length);

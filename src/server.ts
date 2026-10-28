@@ -16,6 +16,7 @@ import {
 } from '@modelcontextprotocol/server';
 
 import { ApiError, type ApiClient } from './api/client.js';
+import type { ChannelState } from './channel/loop.js';
 import {
   describeApiError,
   SESSION_OVER_CODES,
@@ -78,6 +79,10 @@ export interface CreateServerOptions {
   sessionEnded?: () => string | undefined;
   /** Told when a call finds the session token refused for good (to end the session). */
   onSessionOver?: (code: string) => void;
+  /** Channel mode: the session the tools share. */
+  channelState?: ChannelState;
+  /** Told about every tool call, before it runs (its name). */
+  onToolCall?: (tool: string) => void;
 }
 
 export const DEFAULT_TOOLS_LIST_TTL_MS = 5 * 60_000;
@@ -264,17 +269,29 @@ function registerTool(
     async (args: unknown, ctx): Promise<CallToolResult> => {
       const started = Date.now();
       const logger = options.logger.child({ tool: tool.name });
-      const ended = options.sessionEnded?.();
+      options.onToolCall?.(tool.name);
+      const ended = tool.runsAfterSessionEnd === true ? undefined : options.sessionEnded?.();
       if (ended !== undefined) {
         logger.info('tool call', { status: 'error', code: 'session_ended', duration_ms: 0 });
         return sessionEndedResult(ended);
       }
+      const progressToken = ctx.mcpReq._meta?.progressToken;
+      let beat = 0;
       const context = createToolContext({
         api: options.api,
         logger,
         tool: tool.name,
         signal: ctx.mcpReq.signal,
         client: clientInfo(server, ctx.mcpReq.envelope),
+        channel: options.channelState,
+        progress:
+          progressToken === undefined
+            ? undefined
+            : (message) =>
+                ctx.mcpReq.notify({
+                  method: 'notifications/progress',
+                  params: { progressToken, progress: ++beat, message },
+                }),
       });
       try {
         // One block id for the whole result: its text and its structured content.

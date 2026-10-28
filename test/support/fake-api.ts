@@ -311,6 +311,8 @@ export interface FakePlan {
   usedAt: string | null;
   /** Item versions when proposed, to refuse a stale apply. */
   versions: Record<string, number>;
+  /** Posted as a card (post_plan_card): the owner applies it, the session can't. */
+  cardMessageId?: string;
 }
 
 export interface FakeItem {
@@ -982,6 +984,7 @@ export class FakeApi {
     this.meta = defaultMeta();
     this.store = seedStore();
     this.sessions = this.newSessions();
+    this.refusePlanCards = 0;
     this.identities = structuredClone(this.initialIdentities);
     this.compat = {
       hints: true,
@@ -1768,6 +1771,20 @@ export class FakeApi {
         return this.sessionCheck(() => this.sessions.revokeSelf(call.token));
       case 'session_heartbeat':
         return this.sessionCheck(() => this.sessions.heartbeat(call.token, call.body));
+      case 'update_session_message':
+        return this.sessionCheck(() =>
+          this.sessions.update(call.token, call.params.id ?? '', call.body),
+        );
+      case 'close_session_card':
+        return this.sessionCheck(() => this.sessions.closeCard(call.token, call.params.id ?? ''));
+      case 'answer_session_response':
+        return this.sessionCheck(() =>
+          this.sessions.answer(call.token, call.params.id ?? '', call.body),
+        );
+      case 'session_typing':
+        return this.sessionCheck(() => this.sessions.typing(call.token, call.body));
+      case 'post_plan_card':
+        return this.sessionCheck(() => this.postPlanCard(call));
       default:
         throw new FakeError(
           'not_found',
@@ -3975,12 +3992,85 @@ export class FakeApi {
     };
   }
 
+  /** Plan cards refused before they are posted (tests). */
+  refusePlanCards = 0;
+
+  private postPlanCard({ token, body }: Call): Handled {
+    const handle = String(body.handle);
+    const id = String(body.id);
+    const plan = this.store.plans.find((x) => x.handle === handle && x.token === token);
+    if (!plan) throw new FakeError('not_found', { kind: 'plan', ref: handle });
+    if (plan.cardMessageId === id) {
+      return {
+        status: 200,
+        body: {
+          created: false,
+          message: this.sessions.messageBody(token, id),
+          plan: { handle, expires_at: new Date(plan.expiresAt).toISOString() },
+        },
+      };
+    }
+    if (plan.cardMessageId !== undefined) {
+      throw new FakeError('plan_card_exists', { handle, message_id: plan.cardMessageId });
+    }
+    if (plan.usedAt !== null) throw new FakeError('plan_used', { handle, used_at: plan.usedAt });
+    if (this.clock > plan.expiresAt) throw new FakeError('plan_expired', { handle });
+    if (this.refusePlanCards > 0) {
+      this.refusePlanCards--;
+      throw new FakeError('unavailable', {});
+    }
+    plan.cardMessageId = id;
+    plan.expiresAt = this.clock + 60 * 60_000;
+    this.sessions.postPlanCard(token, {
+      id,
+      threadId: typeof body.thread_id === 'string' ? body.thread_id : null,
+      handle,
+      action: plan.action,
+      text: `Approve: ${plan.preview.summary}`.slice(0, 4000),
+    });
+    return {
+      status: 201,
+      body: {
+        created: true,
+        message: this.sessions.messageBody(token, id),
+        plan: { handle, expires_at: new Date(plan.expiresAt).toISOString() },
+      },
+    };
+  }
+
+  /**
+   * The person's tap on a plan card, or its end: the card closes with the
+   * plan's outcome (a card.closed event with `plan`).
+   */
+  resolvePlanCard(
+    handle: string,
+    outcome: 'applied' | 'cancelled' | 'stale' | 'failed' | 'expired',
+    extra: Record<string, unknown> = {},
+  ): void {
+    const plan = this.store.plans.find((x) => x.handle === handle);
+    if (!plan?.cardMessageId) throw new Error('no plan card for that handle');
+    if (outcome !== 'expired') plan.usedAt = this.now();
+    this.sessions.close(
+      this.sessions.session(plan.token),
+      plan.cardMessageId,
+      outcome === 'expired' ? 'time' : 'app',
+      { handle, action: plan.action, outcome, ...extra },
+    );
+  }
+
   private applyPlan({ identity, token, params }: Call): Handled {
     const handle = params.handle ?? '';
     const plan = this.store.plans.find((x) => x.handle === handle);
     if (!plan) throw new FakeError('not_found', { kind: 'plan', ref: handle });
     // Another token's plan reads as unknown, like a handle that never existed.
     if (plan.token !== token) throw new FakeError('not_found', { kind: 'plan', ref: handle });
+    if (plan.cardMessageId !== undefined && plan.usedAt === null) {
+      throw new FakeError(
+        'plan_awaits_owner',
+        { handle, message_id: plan.cardMessageId },
+        'This plan was posted as a card: the person applies it in buildIt.Social.',
+      );
+    }
     if (plan.usedAt !== null) {
       throw new FakeError(
         'plan_used',

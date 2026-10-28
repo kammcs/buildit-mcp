@@ -23,6 +23,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/server';
 import type { z } from 'zod';
 
 import type { ApiClient, ApiRequestOptions } from '../api/client.js';
+import type { ChannelState } from '../channel/loop.js';
 import type { OperationId } from '../api/generated/operations.js';
 import { callOperation, type OperationArgs, type OperationResponse } from '../api/operations.js';
 import type { Logger } from '../log.js';
@@ -44,6 +45,10 @@ export interface ToolContext {
   apiOptions: ApiRequestOptions;
   /** Calls one API operation on behalf of this tool. */
   call<Id extends OperationId>(id: Id, args?: OperationArgs<Id>): Promise<OperationResponse<Id>>;
+  /** Channel mode: the session the tools share (plan cards use it). */
+  channel?: ChannelState;
+  /** Reports progress to the client, when the call asked for it (a progress token). */
+  progress?: (message: string) => Promise<void>;
 }
 
 /** The context for one call of `tool`. */
@@ -53,6 +58,8 @@ export function createToolContext(init: {
   tool: string;
   signal?: AbortSignal | undefined;
   client?: ClientInfo | undefined;
+  channel?: ChannelState | undefined;
+  progress?: ((message: string) => Promise<void>) | undefined;
 }): ToolContext {
   const apiOptions: ApiRequestOptions = {
     tool: init.tool,
@@ -65,6 +72,8 @@ export function createToolContext(init: {
     ...(init.signal ? { signal: init.signal } : {}),
     apiOptions,
     call: (id, args = {}) => callOperation(init.api, id, args, apiOptions),
+    ...(init.channel ? { channel: init.channel } : {}),
+    ...(init.progress ? { progress: init.progress } : {}),
   };
 }
 
@@ -93,6 +102,11 @@ export interface ToolDefinition<
   scopes: readonly Scope[];
   /** Listed whenever a propose_* tool is listed, instead of by its toolset and scopes. */
   withPlans?: boolean;
+  /**
+   * Still runs once the channel's session has ended, and says so itself
+   * (ask: the plugin's hook must get its own answer, not an error).
+   */
+  runsAfterSessionEnd?: boolean;
   /**
    * Needs a token without project or channel limits (the API answers a
    * limited token with outside_limits), so it isn't listed for one.

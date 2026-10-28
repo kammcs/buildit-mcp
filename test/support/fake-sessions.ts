@@ -6,7 +6,8 @@
  * are checked against the contract like every other operation's. Tests
  * drive the person's side: `approve` or `deny` a code, post a message
  * from the owner (or someone else, or one the owner forwarded) into the
- * session's events with `postFrom`, and `revoke` or `expire` a session.
+ * session's events with `postFrom`, answer or close the session's cards
+ * (`answerCard`, `closeCardBy`), and `revoke` or `expire` a session.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -47,11 +48,132 @@ export interface FakeSession {
     thread_id: string | null;
     reply_to_id: string | null;
     created_at: string;
+    /** The question card, as posted or last changed (null: none). */
+    card?: Record<string, unknown> | null;
   }[];
+  /** The session's cards by message id: their state and the answers. */
+  cards: Map<string, FakeCard>;
+  /** Every typing notice, in order. */
+  typings: { thread_id: string | null; typing: boolean }[];
+  /** Answer this many typing notices with 429 first. */
+  typingRefusals: number;
   revokedAt?: string;
   expiredAt?: string;
   /** Ended by DELETE /v1/session. */
   selfRevoked?: boolean;
+}
+
+/** One of the session's cards in the fake: open or closed, and its answers. */
+export interface FakeCard {
+  kind: 'question' | 'plan';
+  threadId: string | null;
+  closedAt: string | null;
+  closedBy: string | null;
+  /** The plan's handle, for a plan card. */
+  handle?: string;
+  action?: string;
+  responses: {
+    id: string;
+    revision: number;
+    answer: Record<string, unknown>;
+    status: 'recorded' | 'accepted' | 'rejected';
+    note: string | null;
+    created_at: string;
+    updated_at: string;
+  }[];
+  /** Every PATCH of the card, in order (the whole new card). */
+  updates: Record<string, unknown>[];
+}
+
+const ID_RE = /^[a-z0-9_]{1,40}$/;
+// eslint-disable-next-line no-control-regex -- control characters are what it finds
+const CONTROL_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/;
+
+/**
+ * The first path where a question card breaks the card schema's rules that
+ * buildit-mcp must keep (a subset of the server's), or undefined.
+ */
+export function questionCardProblem(card: unknown, nowMs: number): string | undefined {
+  if (card === null || typeof card !== 'object' || Array.isArray(card)) return '(card)';
+  const c = card as Record<string, unknown>;
+  if (JSON.stringify(c).length > 16_384) return '(card)';
+  if ('source' in c) return 'source';
+  if (c.v !== 1) return 'v';
+  const line = (v: unknown, max: number): boolean =>
+    typeof v === 'string' &&
+    v.length >= 1 &&
+    Array.from(v).length <= max &&
+    !/[\n\r]/.test(v) &&
+    !CONTROL_RE.test(v);
+  const text = (v: unknown, max: number): boolean =>
+    typeof v === 'string' && v.length >= 1 && Array.from(v).length <= max && !CONTROL_RE.test(v);
+  const header = c.header as Record<string, unknown> | undefined;
+  if (header !== undefined) {
+    if (!line(header.title, 150)) return 'header.title';
+    if (header.subtitle !== undefined && !line(header.subtitle, 150)) return 'header.subtitle';
+  }
+  const body = (c.body ?? []) as Record<string, unknown>[];
+  let elements = body.length;
+  for (const [i, b] of body.entries()) {
+    if (b.type === 'text' && !text(b.text, 2000)) return `body[${i}].text`;
+    if (b.type === 'context' && !line(b.text, 300)) return `body[${i}].text`;
+    if (b.type === 'facts') {
+      const items = b.items as Record<string, unknown>[];
+      if (!Array.isArray(items) || items.length < 1 || items.length > 10) return `body[${i}].items`;
+      for (const [j, f] of items.entries()) {
+        if (!line(f.label, 40)) return `body[${i}].items[${j}].label`;
+        if (!line(f.value, 200)) return `body[${i}].items[${j}].value`;
+      }
+    }
+  }
+  const inputs = (c.inputs ?? []) as Record<string, unknown>[];
+  const actions = (c.actions ?? []) as Record<string, unknown>[];
+  elements += inputs.length + actions.length;
+  if (elements > 25) return '(card)';
+  for (const [i, input] of inputs.entries()) {
+    if (typeof input.id !== 'string' || !ID_RE.test(input.id)) return `inputs[${i}].id`;
+    if (!line(input.label, 150)) return `inputs[${i}].label`;
+    if (input.type === 'choice') {
+      const options = input.options as Record<string, unknown>[];
+      if (!Array.isArray(options) || options.length < 2 || options.length > 10)
+        return `inputs[${i}].options`;
+      for (const [j, o] of options.entries()) {
+        if (typeof o.id !== 'string' || !ID_RE.test(o.id)) return `inputs[${i}].options[${j}].id`;
+        if (!line(o.label, 80)) return `inputs[${i}].options[${j}].label`;
+      }
+    } else if (input.type === 'text_input') {
+      const max = input.max_length;
+      if (typeof max !== 'number' || max < 1 || max > 500) return `inputs[${i}].max_length`;
+    } else {
+      return `inputs[${i}].type`;
+    }
+  }
+  const buttons = actions.filter((a) => a.type === 'button');
+  const submits = actions.filter((a) => a.type === 'submit');
+  if (buttons.length > 5) return 'actions';
+  if (inputs.length > 0 && (buttons.length > 0 || submits.length !== 1)) return 'actions';
+  if (inputs.length === 0 && (buttons.length === 0 || submits.length > 0)) return 'actions';
+  for (const [i, a] of actions.entries()) {
+    if (!line(a.label, 30)) return `actions[${i}].label`;
+    if (a.type === 'button' && (typeof a.id !== 'string' || !ID_RE.test(a.id)))
+      return `actions[${i}].id`;
+  }
+  if (c.private !== undefined && Buffer.byteLength(JSON.stringify(c.private), 'utf8') > 2048) {
+    return 'private';
+  }
+  const r = c.responses as Record<string, unknown> | undefined;
+  if (r === undefined) return 'responses';
+  const want = {
+    mode: 'once',
+    visibility: 'private',
+    results: 'hidden',
+    guests: false,
+    confirm: true,
+  };
+  for (const [k, v] of Object.entries(want)) if (r[k] !== v) return `responses.${k}`;
+  const closes = typeof r.closes_at === 'string' ? Date.parse(r.closes_at) : NaN;
+  if (!(closes > nowMs) || closes > nowMs + 24 * 3600_000) return 'responses.closes_at';
+  return undefined;
 }
 
 export interface FakeGrant {
@@ -88,7 +210,13 @@ export class SessionRefusal extends Error {
       | 'expired_token'
       | 'validation'
       | 'thread_other_session'
-      | 'idempotency_conflict',
+      | 'idempotency_conflict'
+      | 'card_invalid'
+      | 'card_closed'
+      | 'not_own_message'
+      | 'response_changed'
+      | 'not_found'
+      | 'rate_limited',
     readonly details: Record<string, unknown> = {},
   ) {
     super(code);
@@ -264,15 +392,188 @@ export class FakeSessions {
       if (existing.text !== text) throw new SessionRefusal('idempotency_conflict');
       return { status: 200, body: { created: false, message: this.messageOut(s, existing) } };
     }
+    const card = body.card as Record<string, unknown> | undefined;
+    if (card !== undefined) this.checkCard(card);
+    if (this.refusePosts > 0) {
+      this.refusePosts--;
+      throw new SessionRefusal('card_invalid', {
+        errors: [{ path: 'responses', message: 'Refused by the test.' }],
+      });
+    }
     const message = {
       id,
       text,
       thread_id: threadId,
       reply_to_id: replyTo,
       created_at: this.host.now(),
+      card: card ?? null,
     };
     s.messages.push(message);
+    if (card !== undefined) {
+      s.cards.set(id, {
+        kind: 'question',
+        threadId,
+        closedAt: null,
+        closedBy: null,
+        responses: [],
+        updates: [],
+      });
+    }
     return { status: 201, body: { created: true, message: this.messageOut(s, message) } };
+  }
+
+  /** Posts refused before they are made (tests). */
+  refusePosts = 0;
+
+  private checkCard(card: Record<string, unknown>): void {
+    // Cards are built with the real clock (the fake clock only times plans).
+    const path = questionCardProblem(card, Date.now());
+    if (path !== undefined) {
+      throw new SessionRefusal('card_invalid', {
+        errors: [{ path, message: 'The card is invalid at this path.' }],
+      });
+    }
+  }
+
+  /** The session's own message, or the refusal. */
+  private own(s: FakeSession, id: string): FakeSession['messages'][number] {
+    const m = s.messages.find((x) => x.id === id);
+    if (!m) throw new SessionRefusal('not_found', { kind: 'message', ref: id });
+    if (s.cards.get(id)?.kind === 'plan')
+      throw new SessionRefusal('not_own_message', { message_id: id });
+    return m;
+  }
+
+  /** PATCH /v1/session/messages/{id} */
+  update(
+    token: string,
+    id: string,
+    body: Record<string, unknown>,
+  ): { status: number; body: unknown } {
+    const s = this.live(token);
+    const m = this.own(s, id);
+    if (body.text === undefined && body.card === undefined) {
+      throw new SessionRefusal('validation', {
+        fields: [{ path: 'card', message: 'Give text or card.' }],
+      });
+    }
+    if (typeof body.text === 'string') m.text = body.text;
+    if (body.card !== undefined) {
+      const state = s.cards.get(id);
+      if (state?.closedAt) throw new SessionRefusal('card_closed', { message_id: id });
+      if (body.card !== null) this.checkCard(body.card as Record<string, unknown>);
+      m.card = body.card as Record<string, unknown> | null;
+      state?.updates.push(body.card as Record<string, unknown>);
+    }
+    return { status: 200, body: { message: this.messageOut(s, m) } };
+  }
+
+  /** POST /v1/session/messages/{id}/card/close */
+  closeCard(token: string, id: string): { status: number; body: unknown } {
+    const s = this.live(token);
+    this.own(s, id);
+    const state = s.cards.get(id);
+    if (!state) {
+      throw new SessionRefusal('validation', { fields: [{ path: 'id', message: 'No card.' }] });
+    }
+    if (state.closedAt) throw new SessionRefusal('card_closed', { message_id: id });
+    this.close(s, id, 'app');
+    return { status: 200, body: { closed_at: state.closedAt } };
+  }
+
+  /** PATCH /v1/session/responses/{id} */
+  answer(
+    token: string,
+    responseId: string,
+    body: Record<string, unknown>,
+  ): { status: number; body: unknown } {
+    const s = this.live(token);
+    for (const [messageId, card] of s.cards) {
+      const r = card.responses.find((x) => x.id === responseId);
+      if (!r) continue;
+      if (card.kind === 'plan')
+        throw new SessionRefusal('not_own_message', { message_id: messageId });
+      if (card.closedAt) throw new SessionRefusal('card_closed', { message_id: messageId });
+      if (body.revision !== r.revision) {
+        throw new SessionRefusal('response_changed', { response_id: r.id, revision: r.revision });
+      }
+      r.status = body.status === 'accepted' ? 'accepted' : 'rejected';
+      r.note = typeof body.note === 'string' ? body.note : null;
+      r.updated_at = this.host.now();
+      // Accepting an answer to a question closes its card.
+      if (r.status === 'accepted') this.close(s, messageId, 'app');
+      return {
+        status: 200,
+        body: {
+          response: {
+            id: r.id,
+            message_id: messageId,
+            revision: r.revision,
+            status: r.status,
+            answer: r.answer,
+            note: r.note,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+          },
+        },
+      };
+    }
+    throw new SessionRefusal('not_found', { kind: 'response', ref: responseId });
+  }
+
+  /** POST /v1/session/typing */
+  typing(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
+    const s = this.live(token);
+    if (s.typingRefusals > 0) {
+      s.typingRefusals--;
+      throw new SessionRefusal('rate_limited', {
+        retry_after: 30,
+        bucket: 'session_typing_per_minute',
+      });
+    }
+    s.typings.push({
+      thread_id: typeof body.thread_id === 'string' ? body.thread_id : null,
+      typing: body.typing !== false,
+    });
+    return { status: 204, body: undefined };
+  }
+
+  /** A plan card (FakeApi's post_plan_card): the message and its card. */
+  postPlanCard(
+    token: string,
+    init: { id: string; threadId: string | null; handle: string; action: string; text: string },
+  ): FakeSession['messages'][number] {
+    const s = this.live(token);
+    const existing = s.messages.find((m) => m.id === init.id);
+    if (existing) return existing;
+    const message = {
+      id: init.id,
+      text: init.text,
+      thread_id: init.threadId,
+      reply_to_id: null,
+      created_at: this.host.now(),
+      card: null,
+    };
+    s.messages.push(message);
+    s.cards.set(init.id, {
+      kind: 'plan',
+      threadId: init.threadId,
+      closedAt: null,
+      closedBy: null,
+      handle: init.handle,
+      action: init.action,
+      responses: [],
+      updates: [],
+    });
+    return message;
+  }
+
+  /** The session message as the contract answers it (FakeApi's post_plan_card). */
+  messageBody(token: string, id: string): unknown {
+    const s = this.live(token);
+    const m = s.messages.find((x) => x.id === id);
+    if (!m) throw new Error('no such message');
+    return this.messageOut(s, m);
   }
 
   /** DELETE /v1/session: the session ends itself. */
@@ -324,6 +625,9 @@ export class FakeSessions {
       acks: [],
       heartbeats: [],
       messages: [],
+      cards: new Map(),
+      typings: [],
+      typingRefusals: 0,
     };
     this.sessions.set(token, session);
     return session;
@@ -340,6 +644,8 @@ export class FakeSessions {
       from?: { id: string; name: string };
       threadId?: string;
       type?: string;
+      /** The sender's locale (default en). */
+      locale?: string;
       /** The owner forwarded this message; its first author, a person or an app (or neither). */
       forwardedFrom?: {
         user?: { id: string; name: string } | null;
@@ -382,10 +688,121 @@ export class FakeSessions {
                   app: options.forwardedFrom.app ?? null,
                 },
         },
-        user: { id: user.id, name: user.name, is_guest: false, locale: 'en' },
+        user: { id: user.id, name: user.name, is_guest: false, locale: options.locale ?? 'en' },
       },
-    });
+    } as SessionEvent);
     return messageId;
+  }
+
+  /** The session of a token (tests). */
+  session(token: string): FakeSession {
+    const s = this.sessions.get(token);
+    if (!s) throw new Error('no session for this token');
+    return s;
+  }
+
+  /** The event envelope of the session. */
+  private event(s: FakeSession, type: SessionEvent['type'], data: Record<string, unknown>): void {
+    const identity = this.identity(s.token);
+    s.events.push({
+      v: 1,
+      id: randomUUID(),
+      type,
+      created_at: this.host.now(),
+      org: { id: identity.org.id },
+      app: { id: SESSION_IDS.agent, installation_id: SESSION_IDS.installation },
+      attempt: 1,
+      session: { id: s.id, label: s.label },
+      data,
+    } as SessionEvent);
+  }
+
+  private cardData(s: FakeSession, messageId: string): Record<string, unknown> {
+    const card = s.cards.get(messageId);
+    return {
+      channel: { id: SESSION_IDS.dm, name: null },
+      message: { id: messageId, thread_id: card?.threadId ?? null },
+      card:
+        card?.kind === 'plan'
+          ? { visibility: 'private', results: 'hidden', mode: 'once', confirm: false }
+          : { visibility: 'private', results: 'hidden', mode: 'once', confirm: true },
+    };
+  }
+
+  /** Closes a card and adds its card.closed event (plan: the outcome). */
+  close(s: FakeSession, messageId: string, closedBy: string, plan?: Record<string, unknown>): void {
+    const card = s.cards.get(messageId);
+    if (!card || card.closedAt) return;
+    card.closedAt = this.host.now();
+    card.closedBy = closedBy;
+    this.event(s, 'card.closed', {
+      ...this.cardData(s, messageId),
+      closed_by: closedBy,
+      closed_at: card.closedAt,
+      respondents: card.responses.length,
+      counts: null,
+      private: null,
+      ...(plan === undefined ? {} : { plan }),
+    });
+  }
+
+  /**
+   * The person (the owner unless `from` says otherwise) answers a card: a
+   * new response, or a new revision of a rejected one. Returns its id.
+   */
+  answerCard(
+    token: string,
+    messageId: string,
+    answer: Record<string, unknown>,
+    options: { from?: { id: string; name: string }; locale?: string } = {},
+  ): string {
+    const s = this.session(token);
+    const card = s.cards.get(messageId);
+    if (!card) throw new Error('no card on that message');
+    const now = this.host.now();
+    let r = card.responses[card.responses.length - 1];
+    if (r && r.status !== 'accepted') {
+      r.revision += 1;
+      r.answer = answer;
+      r.status = 'recorded';
+      r.updated_at = now;
+    } else {
+      r = {
+        id: randomUUID(),
+        revision: 1,
+        answer,
+        status: 'recorded',
+        note: null,
+        created_at: now,
+        updated_at: now,
+      };
+      card.responses.push(r);
+    }
+    const user = options.from ?? { id: s.ownerId, name: s.ownerName };
+    this.event(s, 'card.response', {
+      ...this.cardData(s, messageId),
+      response: {
+        id: r.id,
+        revision: r.revision,
+        answer,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+      },
+      user: { id: user.id, name: user.name, is_guest: false, locale: options.locale ?? 'en' },
+      pseudonym: null,
+      private: null,
+    });
+    return r.id;
+  }
+
+  /** The card closes without an answer: by time, the owner, the session's end, ... */
+  closeCardBy(token: string, messageId: string, closedBy: string): void {
+    this.close(this.session(token), messageId, closedBy);
+  }
+
+  /** The card's message, as the fake keeps it (tests). */
+  message(token: string, id: string): FakeSession['messages'][number] | undefined {
+    return this.session(token).messages.find((m) => m.id === id);
   }
 
   revoke(token: string): void {

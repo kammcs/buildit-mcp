@@ -54,6 +54,16 @@ export interface ChannelConfig {
   apiUrlFlag: boolean;
 }
 
+/** How questions reach the person in channel mode (the plugin's settings). */
+export interface AskConfig {
+  /** Ask AskUserQuestion's questions as cards in buildIt.Social (BUILDIT_QUESTIONS_IN_APP, default true). */
+  questionsInApp: boolean;
+  /** How long a question card waits for an answer, 1 to 60 minutes (BUILDIT_ASK_TIMEOUT_MINUTES, default 60). */
+  timeoutMinutes: number;
+}
+
+export const DEFAULT_ASK_TIMEOUT_MINUTES = 60;
+
 export interface Config {
   mode: Mode;
   /** The agent API base URL, without a trailing slash. */
@@ -65,6 +75,8 @@ export interface Config {
   token?: string;
   /** Set in --channel mode (stdio only): push the session's messages into Claude Code. */
   channel?: ChannelConfig;
+  /** Channel mode: questions as cards. */
+  ask: AskConfig;
   toolsets: ToolsetName[];
   readOnly: boolean;
   excludeTools: string[];
@@ -144,6 +156,11 @@ Options (each also has an environment variable):
   --channel                 BUILDIT_CHANNEL=true      Claude Code channel mode (stdio only)
   --folder <path>           BUILDIT_FOLDER            The folder whose saved session --channel uses
                                                       (default: the working directory)
+                            BUILDIT_QUESTIONS_IN_APP  --channel: the plugin's question hook asks in
+                                                      buildIt.Social (default true)
+                            BUILDIT_ASK_TIMEOUT_MINUTES
+                                                      --channel: how long a question card waits,
+                                                      1 to 60 (default 60)
   --allow-any-host          BUILDIT_ALLOW_ANY_HOST=true
                                                       Off loopback, serve without checking the
                                                       Host header (otherwise BUILDIT_ALLOWED_HOSTS
@@ -215,6 +232,38 @@ export function parseBoolean(name: string, raw: string | undefined, fallback: bo
   if (TRUE_VALUES.has(value)) return true;
   if (FALSE_VALUES.has(value)) return false;
   throw new ConfigError(`${name} must be true or false (got "${raw}").`);
+}
+
+/**
+ * The plugin's settings arrive as environment variables it fills in, so a
+ * value that is empty or doesn't parse keeps the default, with a warning,
+ * instead of stopping the server.
+ */
+function parseAsk(env: Env, warnings: string[]): AskConfig {
+  let questionsInApp = true;
+  const rawIn = env.BUILDIT_QUESTIONS_IN_APP?.trim() ?? '';
+  if (rawIn !== '') {
+    const value = rawIn.toLowerCase();
+    if (TRUE_VALUES.has(value)) questionsInApp = true;
+    else if (FALSE_VALUES.has(value)) questionsInApp = false;
+    else
+      warnings.push(
+        'BUILDIT_QUESTIONS_IN_APP is not true or false; questions go to buildIt.Social.',
+      );
+  }
+  let timeoutMinutes = DEFAULT_ASK_TIMEOUT_MINUTES;
+  const rawMinutes = env.BUILDIT_ASK_TIMEOUT_MINUTES?.trim() ?? '';
+  if (rawMinutes !== '') {
+    const n = Number(rawMinutes);
+    if (Number.isFinite(n) && n >= 1 && n <= 60) {
+      timeoutMinutes = Math.floor(n);
+    } else {
+      warnings.push(
+        `BUILDIT_ASK_TIMEOUT_MINUTES must be 1 to 60; using ${DEFAULT_ASK_TIMEOUT_MINUTES}.`,
+      );
+    }
+  }
+  return { questionsInApp, timeoutMinutes };
 }
 
 function splitList(raw: string): string[] {
@@ -601,6 +650,7 @@ export function parseCli(
       apiUrl,
       ...(token === undefined ? {} : { token }),
       ...(channel === undefined ? {} : { channel }),
+      ask: parseAsk(env, warnings),
       toolsets,
       readOnly,
       excludeTools,

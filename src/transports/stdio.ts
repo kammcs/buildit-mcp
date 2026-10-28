@@ -57,7 +57,9 @@ import {
   type ListedTools,
   type SwitchableServer,
 } from '../server.js';
-import { createReplyTool } from '../tools/reply.js';
+import { TypingIndicator } from '../channel/typing.js';
+import { createAskTool, type AskOptions } from '../tools/ask.js';
+import { createReplyTool, createTurnEndedTool } from '../tools/reply.js';
 import { CATALOG } from '../toolsets/catalog.js';
 import type { ToolDefinition, ToolPolicy } from '../toolsets/registry.js';
 import { compareVersions, SERVER_VERSION } from '../version.js';
@@ -74,6 +76,27 @@ export interface StdioOptions {
   onSessionEnded?: (reason: EndReason) => void | Promise<void>;
   /** For tests: the channel loop's poll interval and wait. */
   channelLoop?: Pick<ChannelLoopOptions, 'intervalMs' | 'sleep'>;
+  /**
+   * Channel mode: whether this server holds the folder's channel lock
+   * (default true). Without it there is no loop, and reply and ask say
+   * another server is the channel.
+   */
+  channelOwner?: boolean;
+  /** For tests: ask's timing. */
+  ask?: Pick<AskOptions, 'msPerSecond' | 'now'>;
+  /** For tests: the typing indicator's timing. */
+  typing?: { everyMs?: number; idleMs?: number };
+}
+
+/**
+ * The plugin's AskUserQuestion hook timeout, in seconds (plugin/hooks/hooks.json).
+ * The card's wait ends a minute before it, so the answer arrives in time.
+ */
+export const HOOK_TIMEOUT_S = 3600;
+
+/** How long the hook's question card waits: the configured minutes, a minute under the hook's timeout at most. */
+export function hookWaitSeconds(minutes: number): number {
+  return Math.min(minutes * 60, HOOK_TIMEOUT_S - 60);
 }
 
 /** A known identity is read again at most this often. */
@@ -283,11 +306,16 @@ export class LegacyOnlyTransport implements Transport {
   }
 }
 
-/** The tools only channel mode has (reply), under the operator's read-only and exclude rules. */
-function channelTools(policy: ToolPolicy, state: ChannelState): ToolDefinition[] {
-  const reply = createReplyTool(state);
-  if (policy.readOnly || policy.excludeTools.includes(reply.name)) return [];
-  return [reply];
+/**
+ * The tools only channel mode has (reply, ask, and turn_ended for the
+ * plugin's Stop hook), under the operator's read-only and exclude rules.
+ */
+function channelTools(policy: ToolPolicy, state: ChannelState, ask: AskOptions): ToolDefinition[] {
+  return [createReplyTool(state), createAskTool(state, ask), createTurnEndedTool(state)].filter(
+    (tool) =>
+      (!policy.readOnly || tool.annotations.readOnlyHint) &&
+      !policy.excludeTools.includes(tool.name),
+  );
 }
 
 export function startStdio(
@@ -315,7 +343,21 @@ export function startStdio(
   });
   const channel = config.channel !== undefined;
   const state = new ChannelState();
-  const extraTools = channel ? channelTools(policy, state) : [];
+  state.isChannel = options.channelOwner ?? true;
+  if (channel && state.isChannel) {
+    state.typing = new TypingIndicator({
+      api,
+      logger: logger.child({ component: 'typing' }),
+      ...options.typing,
+    });
+  }
+  const extraTools = channel
+    ? channelTools(policy, state, {
+        questionsInApp: config.ask.questionsInApp,
+        hookWaitS: hookWaitSeconds(config.ask.timeoutMinutes),
+        ...options.ask,
+      })
+    : [];
   // Once a channel's session has ended, the listing stays as it last was
   // (without reply), so Claude keeps its tools, which then say why.
   let lastKnown: ListedTools | undefined;
@@ -325,7 +367,10 @@ export function startStdio(
       ...listedByPolicy(catalog, policy),
       identity: 'unverified' as const,
     };
-    return { ...base, tools: base.tools.filter((t) => !extraTools.includes(t)) };
+    return {
+      ...base,
+      tools: base.tools.filter((t) => !extraTools.includes(t) || t.runsAfterSessionEnd === true),
+    };
   };
   const identity = new StdioIdentity(
     async () => {
@@ -379,6 +424,10 @@ export function startStdio(
         channel,
         ...(channel
           ? {
+              channelState: state,
+              onToolCall: () => {
+                state.typing?.activity();
+              },
               sessionEnded: () => state.ended,
               onSessionOver: (code: string) => {
                 void loop?.end(code as EndReason);
@@ -393,6 +442,12 @@ export function startStdio(
         // Notifications sent before the client has initialized would be lost.
         mcp.oninitialized = () => {
           if (loop !== undefined) return;
+          if (!state.isChannel) {
+            logger.warn(
+              'another buildit server is the channel for this folder; this one serves its tools without the channel',
+            );
+            return;
+          }
           loop = new ChannelLoop({
             api,
             logger: logger.child({ component: 'channel' }),
