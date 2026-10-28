@@ -44,8 +44,18 @@ export const CHANNEL_NOTIFICATION = 'notifications/claude/channel';
 export type ChannelNotificationParams = {
   /** The message's text: the body of the <channel> tag. */
   content: string;
-  /** Attributes of the tag: where to reply, and which session it came to. */
-  meta: { thread_id: string; message_id: string; session: string };
+  /**
+   * Attributes of the tag: for a message, where to reply and which session
+   * it came to; for the notice that the session ended, `event` and `reason`.
+   */
+  meta: Record<string, string>;
+};
+
+/** Why each end of the session happened, and what the person does next, for the last notice. */
+const ENDED_NOTICES: Partial<Record<EndReason, string>> = {
+  token_revoked: 'the session was revoked in buildIt.Social',
+  token_expired: 'the session expired after 30 days unused',
+  token_invalid: 'buildIt.Social no longer recognises the session token',
 };
 
 /** What the loop and the reply tool share: the session, and the thread of the latest message. */
@@ -312,6 +322,7 @@ export class ChannelLoop {
           : 'the session is no longer accepted; stopping',
         { code: err.code },
       );
+      await this.noticeEnded(ended);
       await this.options.onEnded?.(ended);
       return undefined;
     }
@@ -327,6 +338,29 @@ export class ChannelLoop {
     }
     logger.warn('channel poll refused; trying again later', { code: err.code });
     return Math.max(SUSPENDED_WAIT_MS / 2, this.backoff(interval));
+  }
+
+  /**
+   * One last channel notification when the session ended for good, so
+   * Claude can tell the person: no more messages will arrive until they
+   * connect the folder again. Best effort: a failure is only logged.
+   */
+  private async noticeEnded(reason: EndReason): Promise<void> {
+    const why = ENDED_NOTICES[reason];
+    if (why === undefined) return;
+    const label = this.options.state.session?.session.label;
+    try {
+      await this.options.notify({
+        content: `The buildIt.Social session has ended: ${why}. Messages from buildIt.Social no longer reach this Claude Code session, and reply no longer works. Tell the person to run "buildit-mcp connect --project <KEY>" in this folder, approve it in buildIt.Social, and restart Claude Code to connect again.`,
+        meta: {
+          event: 'session_ended',
+          reason,
+          ...(label === undefined ? {} : { session: sanitizeLabel(label, 40) }),
+        },
+      });
+    } catch (err) {
+      this.options.logger.info('channel notice of the end failed', { error: err });
+    }
   }
 
   private backoff(interval: number): number {

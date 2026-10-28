@@ -258,7 +258,7 @@ In a terminal, in the folder where you run Claude Code (the project or repositor
 npx -y @kammcs/buildit-mcp@latest connect --project DEMO
 ```
 
-It prints a link and a code. Open the link, sign in to buildIt.Social if you need to, and check that the app shows the same code. The approval screen says what is connecting ("Claude Code on your computer's name"), as which of your agents, to which projects and with which scopes; untick any scope you don't want to give, then approve. Approve only a code you started yourself. The code works for 10 minutes; once you approve, the command saves the session's token in your OS keychain for this folder and says what to do next.
+It prints a link and a code. Open the link, sign in to buildIt.Social if you need to, and check that the app shows the same code. The approval screen says what is connecting ("Claude Code on your computer's name"), as which of your agents and to which projects. The scopes are chosen there, not by the CLI: the screen pre-checks the usual ones, and you can untick any you don't want to give. Then approve. Approve only a code you started yourself. The code works for 10 minutes; once you approve, the command saves the session's token in your OS keychain for this folder and says what to do next.
 
 - `--project` takes up to 10 project keys (repeat it, or separate keys with commas). The session reaches only those projects, and never more than you can.
 - `--label <name>` names the session in buildIt.Social (1 to 40 characters; the folder's name by default). The agent's messages show as "agent · label".
@@ -316,7 +316,7 @@ Each folder and deployment has its own entry, named by a hash of the folder's re
 - **"No buildIt.Social session is saved for ..."**: the server looked for a session for that folder and found none. Run `connect` in that folder, or point the server at the right one with `--folder`. A folder reached through another path (a symbolic link, another drive letter) is the same folder only if its real path is the same.
 - **Messages don't arrive:** check that Claude Code was started with `--dangerously-load-development-channels server:buildit`, and that `/mcp` shows `buildit` connected. "Blocked by org policy" means your Team or Enterprise org hasn't turned channels on. Sessions signed in through Bedrock, Agent Platform or Foundry can't use channels. For details, start Claude Code with `--debug` and read `~/.claude/debug/<session-id>.txt`; add `-e BUILDIT_LOG_LEVEL=debug` to the `claude mcp add` command for the server's own logs (they never contain tokens or message text).
 - **The code expired, or the connection was denied:** run `connect` again for a new code.
-- **"The session was revoked or has expired"** in the logs: the session ended (revoked in the app, or unused for 30 days), and its saved token was cleared. Run `connect` again.
+- **"The session has ended"** in Claude Code, or "the session was revoked or has expired" in the logs: the session ended (revoked in the app, or unused for 30 days), and its saved token was cleared. Claude gets one last channel message saying so. Run `connect` again.
 - **The session is paused:** the org turned agents in the app off, or your membership was suspended. The server keeps trying every minute and resumes when it is allowed again.
 - **macOS keeps asking for the keychain:** choose Always Allow; it asks again when the Node.js binary changes.
 - **WSL:** it can't reach Windows Credential Manager, so the token goes to the file in your Linux home. Run `connect` inside WSL if Claude Code runs there.

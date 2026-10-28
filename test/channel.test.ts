@@ -251,13 +251,23 @@ describe('channel mode', () => {
     expect(session.heartbeats).toContain('online');
   });
 
-  it('stops when the session is revoked, and says why', async () => {
-    const session = api.sessions.open(SESSION_TOKENS.first);
-    const { ended, logs } = await start();
+  it('stops when the session is revoked, and tells Claude why', async () => {
+    const session = api.sessions.open(SESSION_TOKENS.first, 'demo-folder');
+    const { ended, logs, notes } = await start();
     await waitFor(() => session.heartbeats.includes('online'));
     api.sessions.revoke(SESSION_TOKENS.first);
     await waitFor(() => ended.length === 1);
     expect(ended).toEqual(['token_revoked']);
+    // One last channel message, before the token is cleared.
+    expect(channelNotes(notes)).toHaveLength(1);
+    const notice = channelNotes(notes)[0]?.params;
+    expect(notice?.meta).toEqual({
+      event: 'session_ended',
+      reason: 'token_revoked',
+      session: 'demo-folder',
+    });
+    expect(notice?.content).toContain('session has ended: the session was revoked');
+    expect(notice?.content).toContain('buildit-mcp connect');
     const polls = api.count('/v1/session/events');
     await new Promise((r) => setTimeout(r, 120));
     expect(api.count('/v1/session/events')).toBe(polls);
@@ -267,9 +277,23 @@ describe('channel mode', () => {
   it('stops when the token has expired', async () => {
     api.sessions.open(SESSION_TOKENS.first);
     api.sessions.expireSession(SESSION_TOKENS.first);
-    const { ended } = await start();
+    const { ended, notes } = await start();
     await waitFor(() => ended.length === 1);
     expect(ended).toEqual(['token_expired']);
+    // The session ended before it could be read: the notice names no session.
+    expect(channelNotes(notes).map((n) => n.params?.meta)).toEqual([
+      { event: 'session_ended', reason: 'token_expired' },
+    ]);
+    expect(channelNotes(notes)[0]?.params?.content).toContain('expired after 30 days unused');
+  });
+
+  it('stops for a token buildIt.Social does not know, and tells Claude', async () => {
+    const { ended, notes } = await start({
+      config: channelConfig({ BUILDIT_TOKEN: 'buildit_ags_test_not_issued' }),
+    });
+    await waitFor(() => ended.length === 1);
+    expect(ended).toEqual(['token_invalid']);
+    expect(channelNotes(notes).map((n) => n.params?.meta?.reason)).toEqual(['token_invalid']);
   });
 
   it('says offline when it stops', async () => {
@@ -281,11 +305,13 @@ describe('channel mode', () => {
   });
 
   it('stops for a personal access token (channel mode needs a session token)', async () => {
-    const { ended } = await start({
+    const { ended, notes } = await start({
       config: channelConfig({ BUILDIT_TOKEN: 'buildit_pat_test_full_access' }),
     });
     await waitFor(() => ended.length === 1);
     expect(ended).toEqual(['session_token_required']);
+    // A configuration problem, not an ended session: the log says it, no channel message.
+    expect(channelNotes(notes)).toEqual([]);
   });
 });
 
