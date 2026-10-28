@@ -46,8 +46,8 @@ export const ALLOWED_EMAIL_DOMAINS = ['example.com', 'example.org', 'example.net
 /** Public addresses that may appear: the security contact and the commit trailer. */
 export const ALLOWED_EMAILS = ['security@buildit.social', 'noreply@anthropic.com'];
 
-/** buildIt.Social hostnames that are public. Any other *.buildit.social host is private. */
-export const ALLOWED_HOSTS = ['api.buildit.social', 'www.buildit.social'];
+/** buildIt.Social hostnames that are public (the API, the web app people sign in to, the site). Any other *.buildit.social host is private. */
+export const ALLOWED_HOSTS = ['api.buildit.social', 'app.buildit.social', 'www.buildit.social'];
 
 const j = (...parts: string[]): string => parts.join('');
 
@@ -184,6 +184,7 @@ export const RULES: Rule[] = [
       ],
       miss: [
         'https://api.buildit.social/functions/v1/agent-api',
+        'https://app.buildit.social/connect?code=BCDF-GHJK',
         'https://buildit.social',
         'security@buildit.social',
       ],

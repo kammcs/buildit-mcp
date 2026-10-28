@@ -122,6 +122,9 @@ const RATE_BUCKETS: Record<RateLimitBucket, string> = {
   token_writes_per_day: 'writes per day for this token',
   org_requests_per_minute: 'requests per minute for the whole org, across all its tokens',
   user_requests_per_minute: 'requests per minute for your account, across all your tokens',
+  session_polls_per_minute: 'polls per minute for this session',
+  connect_starts_per_hour: 'connections started per hour from this address',
+  connect_pending_grants: 'connections waiting for approval on this server',
 };
 
 /** The release operations, as plan_release's actions. */
