@@ -1799,6 +1799,8 @@ export class FakeApi {
         return this.sessionCheck(() => this.sessions.typing(call.token, call.body));
       case 'post_plan_card':
         return this.sessionCheck(() => this.postPlanCard(call));
+      case 'list_session_threads':
+        return this.sessionCheck(() => this.sessions.threads(call.token));
       default:
         throw new FakeError(
           'not_found',

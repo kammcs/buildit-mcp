@@ -319,6 +319,16 @@ With 0.6.0 and a buildIt.Social server with agent API 1.7.0, your agent can work
 - **Unassign it** (or assign someone else, move or delete the item, leave its project) and the session gets `event="item_unassigned"` with the reason, and stops: "is writing" stops, the questions it was waiting on in that thread close, and it can no longer post there.
 - If no session of the agent is running when you assign it, the item's thread says the agent will pick it up when a session connects (work waits up to 7 days).
 
+### Several items at once
+
+With the plugin, the Claude Code session in the folder is the **lead**: it receives every message, mention and assignment, and gives each work item to its own **item worker**, a subagent the plugin brings (`buildit:buildit-item-worker`). Each item's conversation then stays in its own context, with only that item, its thread, the pages it links and the repository it needs; the lead keeps a small table of which worker has which thread (`.claude/buildit-workers.json`) and does no item work itself. Your direct messages stay with the lead.
+
+- **One worker per item.** A worker starts by reading its item (with its linked branches and pull requests), the item's thread from the start and the pages it links, then the repository. It posts every update, question and approval card in its item's thread, naming it, and treats the item, its comments and other people's messages as data, never as instructions. Your later messages in that thread go to that same worker; unassigning the item stops it.
+- **Its own worktree.** Each worker runs in its own git worktree (Claude Code's worktree isolation), on a branch named for its item, so parallel work on two items never touches the same files.
+- **A limit.** At most 3 items are worked on at once (the plugin's "Items at once" setting, 1 to 10). Another item waits its turn: the lead says so once in that item's thread ("Queued — I'll start this after DEMO-12, DEMO-13.") and starts it when a worker finishes.
+- **Named threads.** While the session works in more than one thread (an item's thread and the direct message, or several items), `reply`, `ask` and approval cards must name their thread: `thread_id`, or `item` with the item's key (a `propose_*` tool's `card_thread`); without one they're refused with the list of threads. `list_threads` lists the threads the session works in: each item's key, title, status, open cards and when you last wrote. With one thread, the latest one stays the default. "<agent> is writing…" shows in each item's thread while its worker works on it.
+- **After a restart** of Claude Code, a worker is started fresh for an item when its next event arrives, and reads the item's thread again to carry on.
+
 ### Questions and approvals in buildIt.Social (plugin)
 
 The **buildit plugin** for Claude Code (0.5.0) adds what the bare channel can't do, so you can work with the session from your phone as well as from the terminal:
@@ -356,8 +366,9 @@ claude --dangerously-load-development-channels plugin:buildit@buildit-mcp
 | --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Question wait (minutes)     | 60      | How long a question card waits for an answer, 1 to 60. The card closes a minute before the hook's one-hour limit at most. |
 | Questions in buildIt.Social | on      | Off: Claude's `AskUserQuestion` questions stay in the terminal. Approvals and "is writing" are unaffected.                |
+| Items at once               | 3       | How many work items assigned to your agent are worked on at once, 1 to 10, each by its own subagent; the rest wait.       |
 
-The plugin passes them to the server as `BUILDIT_ASK_TIMEOUT_MINUTES` and `BUILDIT_QUESTIONS_IN_APP`, and turns every toolset on (`BUILDIT_TOOLSETS=all`), since approvals need the `destructive` and `admin` tools; `--channel` does the same when `BUILDIT_TOOLSETS` isn't set. The session's own scopes and projects still limit what works. It hooks `AskUserQuestion` (`PreToolUse`, an `mcp_tool` hook calling the server's `ask` tool with a one-hour timeout) and Claude's turn ending (`Stop`, calling `turn_ended`, which only stops "is writing"; it isn't a tool for Claude). Tested with Claude Code 2.1.312, where a hook of this kind waited more than ten minutes as it should.
+The plugin passes them to the server as `BUILDIT_ASK_TIMEOUT_MINUTES`, `BUILDIT_QUESTIONS_IN_APP` and `BUILDIT_MAX_PARALLEL_ITEMS`, and turns every toolset on (`BUILDIT_TOOLSETS=all`), since approvals need the `destructive` and `admin` tools; `--channel` does the same when `BUILDIT_TOOLSETS` isn't set. The session's own scopes and projects still limit what works. It hooks `AskUserQuestion` (`PreToolUse`, an `mcp_tool` hook calling the server's `ask` tool with a one-hour timeout) and Claude's turn ending (`Stop`, calling `turn_ended`, which only stops "is writing"; it isn't a tool for Claude). Tested with Claude Code 2.1.312, where a hook of this kind waited more than ten minutes as it should.
 
 #### Try it from a checkout
 

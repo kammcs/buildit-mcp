@@ -74,6 +74,7 @@ src/
   tools/setup.ts        create_channel, create_project
   tools/reply.ts        reply, and turn_ended for the plugin's Stop hook (channel mode only;
                         not in the catalog)
+  tools/threads.ts      list_threads (channel mode only)
   tools/ask.ts          ask: questions as a card, the answer back (channel mode only; also the
                         plugin's AskUserQuestion hook, format "hook")
   channel/api.ts        the session operations (connect flow, session, events, messages, heartbeat)
@@ -82,6 +83,8 @@ src/
                         plan cards' outcomes into plan_resolved notifications, acks; work items'
                         events (assigned, mentions and replies in an item's thread, unassigned)
   channel/item-events.ts  the content of a work item's notifications (lead, data blocks)
+  channel/threads.ts    which thread reply, ask and the approval cards post in (named once
+                        several are active)
   channel/waiters.ts    who waits for answers to the session's cards, by message id
   channel/lock.ts       one channel server per folder, the plugin's first (lock files next to
                         the token file)
@@ -115,7 +118,8 @@ evals/                  realistic tasks a maintainer runs by hand against a test
 Dockerfile              the container image (HTTP mode, non-root, no token); .dockerignore is an allowlist
 deploy/                 team self-hosting: Compose with Caddy, and a guide
 bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes from package.json)
-plugin/                 the Claude Code plugin (channel server, AskUserQuestion and Stop hooks);
+plugin/                 the Claude Code plugin (channel server, AskUserQuestion and Stop hooks,
+                        the item worker subagent in agents/);
                         .claude-plugin/marketplace.json lists it (versions match package.json)
 server.json             the MCP Registry entry (its versions must match package.json; a test checks)
 docs/releasing.md       how a release ships through npm, GHCR, the bundle and the Registry

@@ -8,14 +8,14 @@
  * and an installed plugin is copied into its plugin cache, so the plugin
  * can't find the checkout relative to itself: the server's path is written
  * in absolute. The plugin is made from plugin/ (the release plugin: the
- * same hooks, settings and channel), with the server `node
+ * same hooks, subagents, settings and channel), with the server `node
  * <checkout>/dist/index.js` and the version `<package version>-local`.
  *
  * The folder is written where you say (default: .dev-marketplace in this
  * checkout, which git ignores); nothing with an absolute path is written
  * into the repository.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -73,6 +73,8 @@ export function writeDevMarketplace(checkout: string, out: string): { version: s
     join(pluginDir, 'hooks', 'hooks.json'),
     readJson(join(checkout, 'plugin', 'hooks', 'hooks.json')),
   );
+  // The subagents (the item worker), as they are.
+  cpSync(join(checkout, 'plugin', 'agents'), join(pluginDir, 'agents'), { recursive: true });
   const marketplace = readJson(join(checkout, '.claude-plugin', 'marketplace.json'));
   writeJson(join(out, '.claude-plugin', 'marketplace.json'), {
     name: DEV_MARKETPLACE,

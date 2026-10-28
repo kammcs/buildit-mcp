@@ -93,6 +93,8 @@ export interface FakeSession {
   selfRevoked?: boolean;
   /** The items whose threads this session works in, by item id. */
   items: Set<string>;
+  /** The direct-message threads the owner wrote in (their root ids), oldest first. */
+  dmThreads: string[];
 }
 
 /** One of the session's cards in the fake: open or closed, and its answers. */
@@ -648,10 +650,49 @@ export class FakeSessions {
   readonly otherSessionThreads = new Set<string>();
   /** Every item id the fake's item events named (their threads are items' threads). */
   private readonly itemIds = new Set<string>();
+  /** The items the fake's item events named, by id. */
+  private readonly itemsById = new Map<string, FakeEventItem>();
+
+  /** GET /v1/session/threads: the items' threads, then the direct message's, newest first. */
+  threads(token: string): { status: number; body: unknown } {
+    const s = this.live(token);
+    const at = this.host.now();
+    const items = [...s.items].reverse().map((id) => {
+      const item = this.itemsById.get(id);
+      const cards = [...s.cards.values()].filter((c) => c.threadId === id && !c.closedAt).length;
+      return {
+        thread_id: id,
+        conversation_id: SESSION_IDS.demoChannel,
+        kind: 'item' as const,
+        item: {
+          id,
+          key: item?.key ?? 'DEMO-0',
+          title: item?.title ?? '',
+          status: { id: u(7202), key: 'todo', name: 'To do', category: 'not_started' },
+        },
+        bound_reason: 'assigned' as const,
+        bound_at: at,
+        last_owner_message_at: at,
+        open_cards: cards,
+      };
+    });
+    const dms = [...s.dmThreads].reverse().map((id) => ({
+      thread_id: id,
+      conversation_id: SESSION_IDS.dm,
+      kind: 'dm' as const,
+      item: null,
+      bound_reason: 'posted' as const,
+      bound_at: at,
+      last_owner_message_at: at,
+      open_cards: 0,
+    }));
+    return { status: 200, body: { threads: [...items, ...dms] } };
+  }
 
   /** The item event's shared data: the channel, project and item. */
   private itemData(item: FakeEventItem, withExcerpt: boolean): Record<string, unknown> {
     this.itemIds.add(item.id);
+    this.itemsById.set(item.id, item);
     return {
       channel: { id: SESSION_IDS.demoChannel, name: 'demo' },
       project: { id: SESSION_IDS.demoProject, key: item.key.split('-')[0] ?? 'DEMO' },
@@ -824,6 +865,7 @@ export class FakeSessions {
       typings: [],
       typingRefusals: 0,
       items: new Set(),
+      dmThreads: [],
     };
     this.sessions.set(token, session);
     return session;
@@ -854,6 +896,8 @@ export class FakeSessions {
     const messageId = randomUUID();
     const identity = this.identity(token);
     const user = options.from ?? { id: s.ownerId, name: s.ownerName };
+    const root = options.threadId ?? messageId;
+    if (user.id === s.ownerId && !s.dmThreads.includes(root)) s.dmThreads.push(root);
     s.events.push({
       v: 1,
       id: randomUUID(),

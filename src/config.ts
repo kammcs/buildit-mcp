@@ -66,9 +66,15 @@ export interface AskConfig {
   questionsInApp: boolean;
   /** How long a question card waits for an answer, 1 to 60 minutes (BUILDIT_ASK_TIMEOUT_MINUTES, default 60). */
   timeoutMinutes: number;
+  /**
+   * How many work items the plugin's lead session hands to item workers at
+   * once, 1 to 10 (BUILDIT_MAX_PARALLEL_ITEMS, default 3); the rest wait.
+   */
+  maxParallelItems: number;
 }
 
 export const DEFAULT_ASK_TIMEOUT_MINUTES = 60;
+export const DEFAULT_MAX_PARALLEL_ITEMS = 3;
 
 export interface Config {
   mode: Mode;
@@ -173,6 +179,9 @@ Options (each also has an environment variable):
                             BUILDIT_ASK_TIMEOUT_MINUTES
                                                       --channel: how long a question card waits,
                                                       1 to 60 (default 60)
+                            BUILDIT_MAX_PARALLEL_ITEMS
+                                                      --channel with the plugin: how many work items
+                                                      are worked on at once, 1 to 10 (default 3)
   --allow-any-host          BUILDIT_ALLOW_ANY_HOST=true
                                                       Off loopback, serve without checking the
                                                       Host header (otherwise BUILDIT_ALLOWED_HOSTS
@@ -275,7 +284,19 @@ function parseAsk(env: Env, warnings: string[]): AskConfig {
       );
     }
   }
-  return { questionsInApp, timeoutMinutes };
+  let maxParallelItems = DEFAULT_MAX_PARALLEL_ITEMS;
+  const rawParallel = env.BUILDIT_MAX_PARALLEL_ITEMS?.trim() ?? '';
+  if (rawParallel !== '') {
+    const n = Number(rawParallel);
+    if (Number.isFinite(n) && n >= 1 && n <= 10) {
+      maxParallelItems = Math.floor(n);
+    } else {
+      warnings.push(
+        `BUILDIT_MAX_PARALLEL_ITEMS must be 1 to 10; using ${DEFAULT_MAX_PARALLEL_ITEMS}.`,
+      );
+    }
+  }
+  return { questionsInApp, timeoutMinutes, maxParallelItems };
 }
 
 function splitList(raw: string): string[] {

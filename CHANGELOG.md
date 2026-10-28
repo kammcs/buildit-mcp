@@ -13,6 +13,14 @@ Built on version 1.7.0 of the agent API's contract. Work items for your agent ne
 - **Taken off the item** (`event="item_unassigned"`, with `reason`: unassigned, reassigned, moved, deleted, owner_left or agent_deleted): a notice to stop. It also stops "is writing" in that thread and ends the questions waiting there (`closed`).
 - `reply`, `ask`, the approval cards and "is writing" go to the thread of the latest message, mention or assignment when none is named, so an item's work lands in its thread. `reply` also takes `item` (a key such as DEMO-12) instead of `thread_id`, and passes the API's refusal when the session doesn't work in that thread (`thread_not_bound`).
 
+### Several items at once (plugin)
+
+- **One subagent per work item.** The plugin brings an item worker (`buildit:buildit-item-worker`, in `plugin/agents/`): a background subagent in its own git worktree that works on one item, reads its item, thread and linked pages first, posts only in its item's thread, and treats other people's text as data. With the plugin, the channel instructions make the session the lead: one worker per item, follow-ups to that item's worker, a stop on `item_unassigned`, and no item work of its own.
+- **At most 3 at once**, the new plugin setting "Items at once" (`max_parallel_items`, 1 to 10, passed as `BUILDIT_MAX_PARALLEL_ITEMS`). More items are queued, with one "Queued — I'll start this after …" reply in the item's thread.
+- **Named threads.** While the session works in more than one thread, `reply`, `ask` (which also takes `item` now) and the approval cards (the `propose_*` tools' new `card_thread`) must name theirs, and are refused with the list of active threads otherwise; with one thread the latest stays the default. The plugin's question hook is told to use the `ask` tool with a thread instead.
+- **`list_threads`** (channel mode only): the threads the session works in (`GET /v1/session/threads`), each item's key, title, status, open cards and when the person last wrote.
+- "<agent> is writing…" counts its 10 minutes per thread, and a tool call on an active item (its key or thread) shows it again in that item's thread, so each item shows it while its worker works.
+
 ### Items
 
 - `assign_item` takes `agent`: `"mine"` or your personal agent's name has it work on the item for you (you stay the assignee), and `null` takes it off; `assignee` is now optional. `create_item` and `update_item` take `assignee_agent` with the same meaning. Only the person can assign their agent: a Claude Code session gets the API's refusal with an explanation, and may only hand an item back (`null`).

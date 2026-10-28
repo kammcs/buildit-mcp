@@ -61,6 +61,7 @@ import { PREEMPT_WAIT_MS, type ChannelLock } from '../channel/lock.js';
 import { TypingIndicator } from '../channel/typing.js';
 import { createAskTool, type AskOptions } from '../tools/ask.js';
 import { createReplyTool, createTurnEndedTool } from '../tools/reply.js';
+import { createListThreadsTool } from '../tools/threads.js';
 import { CATALOG } from '../toolsets/catalog.js';
 import type { ToolDefinition, ToolPolicy } from '../toolsets/registry.js';
 import { compareVersions, SERVER_VERSION } from '../version.js';
@@ -318,8 +319,45 @@ export class LegacyOnlyTransport implements Transport {
  * The tools only channel mode has (reply, ask, and turn_ended for the
  * plugin's Stop hook), under the operator's read-only and exclude rules.
  */
+/** The tools that post in a thread and stop its "is writing" themselves. */
+const POSTING_TOOLS: ReadonlySet<string> = new Set(['reply', 'ask', 'turn_ended', 'list_threads']);
+
+/**
+ * A tool call is activity for "is writing": for the thread it names (its
+ * thread_id or card_thread, or an item's key that the session works on),
+ * else for the only working thread. A call that works on an active item's
+ * thread (a worker reading or changing its item) shows "is writing" there
+ * again; the posting tools stop it themselves.
+ */
+function noteActivity(state: ChannelState, tool: string, args: unknown): void {
+  const typing = state.typing;
+  if (typing === undefined) return;
+  const a = (args !== null && typeof args === 'object' ? args : {}) as Record<string, unknown>;
+  const str = (v: unknown): string | undefined =>
+    typeof v === 'string' && v !== '' ? v : undefined;
+  const ref = str(a.thread_id) ?? str(a.card_thread) ?? str(a.item);
+  const key = ref?.startsWith('#') ? ref.slice(1) : ref;
+  const thread =
+    key === undefined
+      ? undefined
+      : state.activeItems.has(key)
+        ? key
+        : state.items.get(key.toUpperCase());
+  if (thread === undefined || !state.activeItems.has(thread)) {
+    typing.activity(key !== undefined && thread === undefined ? key : undefined);
+    return;
+  }
+  if (POSTING_TOOLS.has(tool)) typing.activity(thread);
+  else typing.work(thread);
+}
+
 function channelTools(policy: ToolPolicy, state: ChannelState, ask: AskOptions): ToolDefinition[] {
-  return [createReplyTool(state), createAskTool(state, ask), createTurnEndedTool(state)].filter(
+  return [
+    createReplyTool(state),
+    createAskTool(state, ask),
+    createListThreadsTool(state),
+    createTurnEndedTool(state),
+  ].filter(
     (tool) =>
       (!policy.readOnly || tool.annotations.readOnlyHint) &&
       !policy.excludeTools.includes(tool.name),
@@ -433,8 +471,11 @@ export function startStdio(
         ...(channel
           ? {
               channelState: state,
-              onToolCall: () => {
-                state.typing?.activity();
+              ...(config.channel?.fromPlugin === true
+                ? { lead: { maxParallelItems: config.ask.maxParallelItems } }
+                : {}),
+              onToolCall: (tool: string, args: unknown) => {
+                noteActivity(state, tool, args);
               },
               sessionEnded: () => state.ended,
               onSessionOver: (code: string) => {

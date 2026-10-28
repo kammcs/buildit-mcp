@@ -9,6 +9,8 @@ import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { DEFAULT_MAX_PARALLEL_ITEMS } from '../src/config.js';
+
 const read = (path: string): unknown =>
   JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'));
 const readJsonAt = (path: string): Record<string, unknown> =>
@@ -123,9 +125,39 @@ describe('the Claude Code plugin', () => {
       BUILDIT_TOOLSETS: 'all',
       BUILDIT_ASK_TIMEOUT_MINUTES: '${user_config.ask_timeout_minutes}',
       BUILDIT_QUESTIONS_IN_APP: '${user_config.questions_in_app}',
+      BUILDIT_MAX_PARALLEL_ITEMS: '${user_config.max_parallel_items}',
     });
     expect(plugin.userConfig.ask_timeout_minutes?.default).toBe(60);
     expect(plugin.userConfig.questions_in_app?.default).toBe(true);
+    expect(plugin.userConfig.max_parallel_items).toMatchObject({
+      type: 'number',
+      default: DEFAULT_MAX_PARALLEL_ITEMS,
+      min: 1,
+      max: 10,
+    });
+  });
+
+  it('has the item worker subagent that the lead instructions name', async () => {
+    const { ITEM_WORKER_AGENT } = await import('../src/server.js');
+    const text = readFileSync(
+      new URL('../plugin/agents/buildit-item-worker.md', import.meta.url),
+      'utf8',
+    );
+    const front = /^---\n([\s\S]*?)\n---\n/.exec(text.replace(/\r\n/g, '\n'))?.[1] ?? '';
+    const field = (name: string): string | undefined =>
+      new RegExp(`^${name}: (.+)$`, 'm').exec(front)?.[1];
+    // Named <plugin>:<name> once installed.
+    expect(`${plugin.name}:${field('name') ?? ''}`).toBe(ITEM_WORKER_AGENT);
+    expect(field('description')).toBeDefined();
+    // Its own git worktree, and it runs while the lead takes the next events.
+    expect(field('isolation')).toBe('worktree');
+    expect(field('background')).toBe('true');
+    // Only the fields a plugin agent may have.
+    for (const line of front.split('\n')) {
+      expect(['name', 'description', 'isolation', 'background']).toContain(line.split(':')[0]);
+    }
+    expect(text).toContain('untrusted_content');
+    expect(text).toContain('card_thread');
   });
 
   it("makes a local marketplace whose plugin runs the checkout's dist/ with the same hooks and settings", async () => {
@@ -154,6 +186,9 @@ describe('the Claude Code plugin', () => {
         args: [join(checkout, 'dist', 'index.js'), '--channel', '--from-plugin'],
       });
       expect(readJsonAt(join(out, 'buildit', 'hooks', 'hooks.json'))).toEqual(hooks);
+      expect(readFileSync(join(out, 'buildit', 'agents', 'buildit-item-worker.md'), 'utf8')).toBe(
+        readFileSync(new URL('../plugin/agents/buildit-item-worker.md', import.meta.url), 'utf8'),
+      );
       expect(devCommands(out)).toEqual([
         `claude plugin marketplace add ${out}`,
         'claude plugin install buildit@buildit-dev',

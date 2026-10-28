@@ -386,3 +386,11 @@ These need Claude Code with the buildit plugin, a folder connected to the seed o
 - **Success:** Claude calls `assign_item` with `agent: null` (the person stays the assignee) and says so in the thread; asked instead to assign another item to itself, it explains that only the person can, in buildIt.Social.
 - **Tools:** `assign_item`, `reply`.
 - **Good run:** 2 calls.
+
+### 41. Two items at once (channel, plugin)
+
+> (in the app) Assign DEMO-48 and DEMO-49 to "My agent: Claude", with "Items at once" set to 1.
+
+- **Success:** the lead starts one `buildit:buildit-item-worker` for DEMO-48, which posts only in DEMO-48's thread from its own worktree; the lead replies once in DEMO-49's thread that it is queued after DEMO-48, and starts its worker when the first finishes. A reply of yours in DEMO-48's thread reaches the DEMO-48 worker, not a new one. Nothing is posted without naming its thread.
+- **Tools:** the lead: `reply` (with `item`), `list_threads` (optional); each worker: `get_item`, `list_comments`, `reply` and `ask` with `item`.
+- **Good run:** the lead 2 to 3 calls; each worker 3 to 6.

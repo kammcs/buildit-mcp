@@ -1334,29 +1334,6 @@ export const SessionContextMessageSchema = z.strictObject({
 });
 export type SessionContextMessage = z.infer<typeof SessionContextMessageSchema>;
 
-export const SessionEventItemSchema = z.strictObject({
-  id: UuidSchema,
-  key: z.string(),
-  title: z.string(),
-  type: z.strictObject({
-    id: UuidSchema.nullable(),
-    key: z.string().nullable(),
-    name: z.string().nullable(),
-  }),
-  status: z
-    .strictObject({
-      id: UuidSchema,
-      key: z.string().nullable(),
-      name: z.string().nullable(),
-      category: z.string(),
-    })
-    .nullable(),
-  created_at: TimestampSchema,
-  description_excerpt: z.string().optional(),
-  description_truncated: z.boolean().optional(),
-});
-export type SessionEventItem = z.infer<typeof SessionEventItemSchema>;
-
 export const SessionEventMessageSchema = z.strictObject({
   id: UuidSchema,
   thread_id: UuidSchema.nullable(),
@@ -1396,6 +1373,14 @@ export const SessionHeartbeatResponseSchema = z.strictObject({
   last_seen_at: TimestampSchema,
 });
 export type SessionHeartbeatResponse = z.infer<typeof SessionHeartbeatResponseSchema>;
+
+export const SessionItemStatusSchema = z.strictObject({
+  id: UuidSchema,
+  key: z.string().nullable(),
+  name: z.string().nullable(),
+  category: z.string(),
+});
+export type SessionItemStatus = z.infer<typeof SessionItemStatusSchema>;
 
 export const SessionOwnerSchema = z.strictObject({ id: UuidSchema, name: z.string() });
 export type SessionOwner = z.infer<typeof SessionOwnerSchema>;
@@ -1950,6 +1935,22 @@ export const SessionCardResponseDataSchema = z.strictObject({
 });
 export type SessionCardResponseData = z.infer<typeof SessionCardResponseDataSchema>;
 
+export const SessionEventItemSchema = z.strictObject({
+  id: UuidSchema,
+  key: z.string(),
+  title: z.string(),
+  type: z.strictObject({
+    id: UuidSchema.nullable(),
+    key: z.string().nullable(),
+    name: z.string().nullable(),
+  }),
+  status: SessionItemStatusSchema.nullable(),
+  created_at: TimestampSchema,
+  description_excerpt: z.string().optional(),
+  description_truncated: z.boolean().optional(),
+});
+export type SessionEventItem = z.infer<typeof SessionEventItemSchema>;
+
 export const SessionItemAssignmentSchema = z.strictObject({
   agent: AgentBriefSchema,
   owner: SessionOwnerSchema,
@@ -1995,6 +1996,25 @@ export const SessionResponseSchema = z.strictObject({
   poll_interval_s: z.int().min(1),
 });
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
+
+export const SessionThreadSchema = z.strictObject({
+  thread_id: UuidSchema,
+  conversation_id: UuidSchema,
+  kind: z.enum(['dm', 'item']),
+  item: z
+    .strictObject({
+      id: UuidSchema,
+      key: z.string(),
+      title: z.string(),
+      status: SessionItemStatusSchema.nullable(),
+    })
+    .nullable(),
+  bound_reason: z.enum(['posted', 'routed', 'handed', 'assigned', 'mentioned']),
+  bound_at: TimestampSchema,
+  last_owner_message_at: TimestampSchema.nullable(),
+  open_cards: z.int().min(0),
+});
+export type SessionThread = z.infer<typeof SessionThreadSchema>;
 
 export const SprintItemsResponseSchema = z.strictObject({
   sprint: SprintSchema,
@@ -2208,6 +2228,11 @@ export const ListProjectsResponseSchema = z.strictObject({
   next_cursor: z.string().nullable(),
 });
 export type ListProjectsResponse = z.infer<typeof ListProjectsResponseSchema>;
+
+export const ListSessionThreadsResponseSchema = z.strictObject({
+  threads: z.array(SessionThreadSchema).max(50),
+});
+export type ListSessionThreadsResponse = z.infer<typeof ListSessionThreadsResponseSchema>;
 
 export const ListWorkTypesResponseSchema = z.strictObject({ items: z.array(WorkTypeSchema) });
 export type ListWorkTypesResponse = z.infer<typeof ListWorkTypesResponseSchema>;
@@ -2672,6 +2697,7 @@ export const QUERY_SCHEMAS = {
     cursor: z.coerce.number().int().min(0).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
   }),
+  list_session_threads: z.strictObject({}),
   list_sprints: z.strictObject({
     state: z.array(SprintStateSchema).max(3).optional(),
     cursor: CursorSchema.optional(),
@@ -2793,6 +2819,7 @@ export const REQUEST_SCHEMAS = {
   list_projects: null,
   list_releases: null,
   list_session_events: null,
+  list_session_threads: null,
   list_sprints: null,
   list_work_types: null,
   post_plan_card: PostPlanCardRequestSchema,
@@ -2859,6 +2886,7 @@ export const RESPONSE_SCHEMAS = {
   list_projects: ListProjectsResponseSchema,
   list_releases: ListReleasesResponseSchema,
   list_session_events: SessionEventsResponseSchema,
+  list_session_threads: ListSessionThreadsResponseSchema,
   list_sprints: ListSprintsResponseSchema,
   list_work_types: ListWorkTypesResponseSchema,
   post_plan_card: PostPlanCardResponseSchema,
@@ -2942,6 +2970,7 @@ export type ListProjectMembersQuery = z.input<typeof QUERY_SCHEMAS.list_project_
 export type ListProjectsQuery = z.input<typeof QUERY_SCHEMAS.list_projects>;
 export type ListReleasesQuery = z.input<typeof QUERY_SCHEMAS.list_releases>;
 export type ListSessionEventsQuery = z.input<typeof QUERY_SCHEMAS.list_session_events>;
+export type ListSessionThreadsQuery = z.input<typeof QUERY_SCHEMAS.list_session_threads>;
 export type ListSprintsQuery = z.input<typeof QUERY_SCHEMAS.list_sprints>;
 export type ListWorkTypesQuery = z.input<typeof QUERY_SCHEMAS.list_work_types>;
 export type PostPlanCardBody = z.input<typeof PostPlanCardRequestSchema>;
@@ -3021,6 +3050,7 @@ export interface OperationIO {
   list_projects: { query: ListProjectsQuery; body: undefined };
   list_releases: { query: ListReleasesQuery; body: undefined };
   list_session_events: { query: ListSessionEventsQuery; body: undefined };
+  list_session_threads: { query: ListSessionThreadsQuery; body: undefined };
   list_sprints: { query: ListSprintsQuery; body: undefined };
   list_work_types: { query: ListWorkTypesQuery; body: undefined };
   post_plan_card: { query: PostPlanCardQuery; body: PostPlanCardBody };

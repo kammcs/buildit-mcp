@@ -117,6 +117,37 @@ export class ChannelState {
       if (oldest !== undefined) this.items.delete(oldest);
     }
   }
+  /**
+   * The work items whose threads the session works in now, by thread id
+   * (the item's id) to key: from their events (assigned, a mention, a
+   * reply) and list_threads; an item leaves when the agent is taken off it.
+   */
+  readonly activeItems = new Map<string, string>();
+  /** The thread of the owner's latest direct message, while there is one. */
+  lastDmThread: string | undefined;
+  /** An item's thread is active (its key and id). */
+  activateItem(key: string, id: string): void {
+    this.rememberItem(key, id);
+    this.activeItems.delete(id);
+    this.activeItems.set(id, key.toUpperCase());
+    if (this.activeItems.size > ITEMS_MAX) {
+      const oldest = this.activeItems.keys().next().value;
+      if (oldest !== undefined) this.activeItems.delete(oldest);
+    }
+  }
+  /**
+   * The active threads, for the rule that several need an explicit thread:
+   * each active item's thread, and the direct message as one (its latest
+   * thread), when the owner has written there.
+   */
+  activeThreads(): { thread_id: string; item: string | undefined }[] {
+    return [
+      ...[...this.activeItems].map(([thread_id, item]) => ({ thread_id, item })),
+      ...(this.lastDmThread === undefined
+        ? []
+        : [{ thread_id: this.lastDmThread, item: undefined }]),
+    ];
+  }
   /** The owner's locale, from their latest event (the cards' language). */
   ownerLocale: string | undefined;
   /**
@@ -515,6 +546,7 @@ export class ChannelLoop {
       },
     });
     const conversationId = event.data.channel?.id;
+    this.options.state.lastDmThread = threadId;
     this.options.state.last = {
       ...(conversationId === undefined ? {} : { conversation_id: conversationId }),
       thread_id: threadId,
@@ -564,6 +596,7 @@ export class ChannelLoop {
       state.typing?.stop(threadId);
       const closed = state.waiters.closeThread(threadId);
       if (state.last?.thread_id === threadId) state.last = undefined;
+      state.activeItems.delete(threadId);
       await this.send({
         content: unassignedContent(owner, key, reason),
         meta: {
@@ -627,6 +660,7 @@ export class ChannelLoop {
     await this.send({ content, meta });
     this.shown.add(threadId, shown);
     const conversationId = event.data.channel?.id;
+    state.activateItem(item.key, item.id);
     state.last = {
       ...(conversationId === undefined ? {} : { conversation_id: conversationId }),
       thread_id: threadId,

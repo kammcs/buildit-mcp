@@ -1180,29 +1180,6 @@ export const SessionContextMessageSchema = z.looseObject({
 });
 export type SessionContextMessage = z.infer<typeof SessionContextMessageSchema>;
 
-export const SessionEventItemSchema = z.looseObject({
-  id: UuidSchema,
-  key: z.string(),
-  title: z.string(),
-  type: z.looseObject({
-    id: UuidSchema.nullable(),
-    key: z.string().nullable(),
-    name: z.string().nullable(),
-  }),
-  status: z
-    .looseObject({
-      id: UuidSchema,
-      key: z.string().nullable(),
-      name: z.string().nullable(),
-      category: z.string(),
-    })
-    .nullable(),
-  created_at: TimestampSchema,
-  description_excerpt: z.string().optional(),
-  description_truncated: z.boolean().optional(),
-});
-export type SessionEventItem = z.infer<typeof SessionEventItemSchema>;
-
 export const SessionEventMessageSchema = z.looseObject({
   id: UuidSchema,
   thread_id: UuidSchema.nullable(),
@@ -1242,6 +1219,14 @@ export const SessionHeartbeatResponseSchema = z.looseObject({
   last_seen_at: TimestampSchema,
 });
 export type SessionHeartbeatResponse = z.infer<typeof SessionHeartbeatResponseSchema>;
+
+export const SessionItemStatusSchema = z.looseObject({
+  id: UuidSchema,
+  key: z.string().nullable(),
+  name: z.string().nullable(),
+  category: z.string(),
+});
+export type SessionItemStatus = z.infer<typeof SessionItemStatusSchema>;
 
 export const SessionOwnerSchema = z.looseObject({ id: UuidSchema, name: z.string() });
 export type SessionOwner = z.infer<typeof SessionOwnerSchema>;
@@ -1779,6 +1764,22 @@ export const SessionCardResponseDataSchema = z.looseObject({
 });
 export type SessionCardResponseData = z.infer<typeof SessionCardResponseDataSchema>;
 
+export const SessionEventItemSchema = z.looseObject({
+  id: UuidSchema,
+  key: z.string(),
+  title: z.string(),
+  type: z.looseObject({
+    id: UuidSchema.nullable(),
+    key: z.string().nullable(),
+    name: z.string().nullable(),
+  }),
+  status: SessionItemStatusSchema.nullable(),
+  created_at: TimestampSchema,
+  description_excerpt: z.string().optional(),
+  description_truncated: z.boolean().optional(),
+});
+export type SessionEventItem = z.infer<typeof SessionEventItemSchema>;
+
 export const SessionItemAssignmentSchema = z.looseObject({
   agent: AgentBriefSchema,
   owner: SessionOwnerSchema,
@@ -1824,6 +1825,25 @@ export const SessionResponseSchema = z.looseObject({
   poll_interval_s: z.number(),
 });
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
+
+export const SessionThreadSchema = z.looseObject({
+  thread_id: UuidSchema,
+  conversation_id: UuidSchema,
+  kind: openEnum(['dm', 'item']),
+  item: z
+    .looseObject({
+      id: UuidSchema,
+      key: z.string(),
+      title: z.string(),
+      status: SessionItemStatusSchema.nullable(),
+    })
+    .nullable(),
+  bound_reason: openEnum(['posted', 'routed', 'handed', 'assigned', 'mentioned']),
+  bound_at: TimestampSchema,
+  last_owner_message_at: TimestampSchema.nullable(),
+  open_cards: z.number(),
+});
+export type SessionThread = z.infer<typeof SessionThreadSchema>;
 
 export const SprintItemsResponseSchema = z.looseObject({
   sprint: SprintSchema,
@@ -2037,6 +2057,11 @@ export const ListProjectsResponseSchema = z.looseObject({
   next_cursor: z.string().nullable(),
 });
 export type ListProjectsResponse = z.infer<typeof ListProjectsResponseSchema>;
+
+export const ListSessionThreadsResponseSchema = z.looseObject({
+  threads: z.array(SessionThreadSchema),
+});
+export type ListSessionThreadsResponse = z.infer<typeof ListSessionThreadsResponseSchema>;
 
 export const ListWorkTypesResponseSchema = z.looseObject({ items: z.array(WorkTypeSchema) });
 export type ListWorkTypesResponse = z.infer<typeof ListWorkTypesResponseSchema>;

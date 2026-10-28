@@ -32,6 +32,7 @@ import type { CreatePlanResponse, PlanEffect } from '../api/generated/schemas.js
 import type { CreatePlanBody } from '../api/generated/strict.js';
 import { ApiError } from '../api/client.js';
 import { postPlanCard } from '../channel/api.js';
+import { isUuid, resolveThread } from '../channel/threads.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolContext, type ToolOutput } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
@@ -236,9 +237,30 @@ export function cardFailedStep(code: string): string {
   return `The approval card couldn't be posted in buildIt.Social (${sanitizeLabel(code, 60)}), and this session can't apply plans itself. Tell the person; propose again in a moment, or they can make the change in the app.`;
 }
 
-async function propose(ctx: ToolContext, body: CreatePlanBody): Promise<ToolOutput<PlanOut>> {
+/**
+ * Every propose_* tool's card_thread: in channel mode, the thread its
+ * approval card goes to (needed while several threads are active).
+ */
+const CARD_THREAD = {
+  card_thread: z
+    .string()
+    .min(1)
+    .max(60)
+    .optional()
+    .describe(
+      'Channel mode: the thread_id or item key (DEMO-12) to post the approval card in. Needed while you work in several threads.',
+    ),
+};
+
+async function propose(
+  ctx: ToolContext,
+  cardThread: string | undefined,
+  body: CreatePlanBody,
+): Promise<ToolOutput<PlanOut>> {
+  // Which thread the card goes to is settled first: a refusal creates no plan.
+  const thread = await cardThreadOf(ctx, cardThread);
   const out = planOutput(await ctx.call('create_plan', { body }));
-  const carded = await postCard(ctx, out.structured.handle);
+  const carded = await postCard(ctx, out.structured.handle, thread);
   if (carded === undefined) return out;
   if ('failed' in carded) {
     const step = cardFailedStep(carded.failed);
@@ -266,10 +288,10 @@ async function propose(ctx: ToolContext, body: CreatePlanBody): Promise<ToolOutp
 async function postCard(
   ctx: ToolContext,
   handle: string,
+  threadId: string | undefined,
 ): Promise<{ expiresAt: string } | { failed: string } | undefined> {
   if (!ctx.api.sessionToken) return undefined;
   const state = ctx.channel;
-  const threadId = state?.lastThreadId;
   try {
     const r = await postPlanCard(
       ctx.api,
@@ -288,6 +310,23 @@ async function postCard(
     ctx.logger.info('plan card not posted', { code });
     return { failed: code };
   }
+}
+
+/** The approval card's thread with a session token in channel mode (see resolveThread). */
+async function cardThreadOf(
+  ctx: ToolContext,
+  given: string | undefined,
+): Promise<string | undefined> {
+  const state = ctx.channel;
+  if (!ctx.api.sessionToken || state === undefined) return undefined;
+  const named = given === undefined ? {} : isUuid(given) ? { thread_id: given } : { item: given };
+  return resolveThread(
+    state,
+    ctx,
+    named,
+    'a propose_* tool',
+    'card_thread (a thread_id or an item key)',
+  );
 }
 
 function recordOf(v: unknown): Record<string, unknown> {
@@ -681,10 +720,14 @@ export const proposeWorkflowChangeTool = defineTool({
 Needs project admin rights in buildIt.Social.`,
   scopes: planScopesOf('workflow_change'),
   annotations: proposeAnnotations('Propose a workflow change'),
-  inputSchema: z.object({ project: ProjectKeyInput, workflow_def: WorkflowDefInput }),
+  inputSchema: z.object({
+    ...CARD_THREAD,
+    project: ProjectKeyInput,
+    workflow_def: WorkflowDefInput,
+  }),
   outputSchema: PlanOut,
   run: (args, ctx) =>
-    propose(ctx, {
+    propose(ctx, args.card_thread, {
       action: 'workflow_change',
       args: { project: args.project, workflow_def: args.workflow_def },
     }),
@@ -702,6 +745,7 @@ Project admins create types; org admins (or the type's creator) change and archi
   scopes: planScopesOf('work_type_change'),
   annotations: proposeAnnotations('Propose a work type change'),
   inputSchema: z.object({
+    ...CARD_THREAD,
     op: z.enum(['create', 'update', 'archive', 'restore']),
     type: NameRef('For update, archive, restore: the type, by name.').optional(),
     name: NameRef('For create: the name; for update: a new name.').optional(),
@@ -751,7 +795,7 @@ Project admins create types; org admins (or the type's creator) change and archi
       only(op, args, ['op', 'type']);
       planArgs = { op, type: need(args.type, op, 'type') };
     }
-    return propose(ctx, { action: 'work_type_change', args: planArgs });
+    return propose(ctx, args.card_thread, { action: 'work_type_change', args: planArgs });
   },
 });
 
@@ -773,6 +817,7 @@ Needs project admin rights in buildIt.Social.`,
   scopes: planScopesOf('field_change'),
   annotations: proposeAnnotations('Propose a custom field change'),
   inputSchema: z.object({
+    ...CARD_THREAD,
     op: z.enum(['create', 'update', 'archive', 'restore']),
     project: ProjectKeyInput,
     field: NameRef('For update, archive, restore: the field, by name.').optional(),
@@ -853,7 +898,7 @@ Needs project admin rights in buildIt.Social.`,
       only(op, args, ['op', 'project', 'field']);
       planArgs = { op, project, field: need(args.field, op, 'field') };
     }
-    return propose(ctx, { action: 'field_change', args: planArgs });
+    return propose(ctx, args.card_thread, { action: 'field_change', args: planArgs });
   },
 });
 
@@ -869,6 +914,7 @@ Needs project admin rights in buildIt.Social.`,
   scopes: planScopesOf('label_change'),
   annotations: proposeAnnotations('Propose a label change'),
   inputSchema: z.object({
+    ...CARD_THREAD,
     op: z.enum(['create', 'update', 'delete']),
     project: ProjectKeyInput,
     label: z.string().min(1).max(40).optional().describe('For update and delete: the label.'),
@@ -909,7 +955,7 @@ Needs project admin rights in buildIt.Social.`,
       only(op, args, ['op', 'project', 'label']);
       planArgs = { op, project, label: need(args.label, op, 'label') };
     }
-    return propose(ctx, { action: 'label_change', args: planArgs });
+    return propose(ctx, args.card_thread, { action: 'label_change', args: planArgs });
   },
 });
 
@@ -924,9 +970,13 @@ export const proposeDeleteItemTool = defineTool({
   description: `Proposes deleting one item, with its children (an epic's items, a story's subtasks): the preview names everything that would go. ${PREVIEW_NOTE} Deleting another person's item needs project admin rights. To close an item instead, transition it to a done or canceled status.`,
   scopes: planScopesOf('delete_item'),
   annotations: proposeAnnotations('Propose deleting an item'),
-  inputSchema: z.object({ item: ItemRefInput }),
+  inputSchema: z.object({
+    ...CARD_THREAD,
+    item: ItemRefInput,
+  }),
   outputSchema: PlanOut,
-  run: (args, ctx) => propose(ctx, { action: 'delete_item', args: { item: itemRef(args.item) } }),
+  run: (args, ctx) =>
+    propose(ctx, args.card_thread, { action: 'delete_item', args: { item: itemRef(args.item) } }),
 });
 
 export const proposeMoveItemTool = defineTool({
@@ -939,6 +989,7 @@ export const proposeMoveItemTool = defineTool({
   scopes: planScopesOf('move_item'),
   annotations: proposeAnnotations('Propose moving an item'),
   inputSchema: z.object({
+    ...CARD_THREAD,
     item: ItemRefInput,
     project: ProjectKeyInput.describe('The target project key.'),
     type: NameRef('A type of the target project.').optional(),
@@ -946,7 +997,7 @@ export const proposeMoveItemTool = defineTool({
   }),
   outputSchema: PlanOut,
   run: (args, ctx) =>
-    propose(ctx, {
+    propose(ctx, args.card_thread, {
       action: 'move_item',
       args: {
         item: itemRef(args.item),
@@ -995,6 +1046,7 @@ For one or two items, update_item or transition_item is simpler and needs no pla
   scopes: planScopesOf('bulk_update'),
   annotations: proposeAnnotations('Propose a bulk update'),
   inputSchema: z.object({
+    ...CARD_THREAD,
     items: z.array(ItemRefInput).min(1).max(50).describe('Item keys, at most 50.'),
     patch: BulkPatchInput,
   }),
@@ -1007,7 +1059,7 @@ For one or two items, update_item or transition_item is simpler and needs no pla
       throw new ToolInputError('patch is empty: give at least one field to change.');
     }
     if (patch.parent !== undefined && patch.parent !== null) patch.parent = itemRef(patch.parent);
-    return propose(ctx, {
+    return propose(ctx, args.card_thread, {
       action: 'bulk_update',
       args: { items: args.items.map(itemRef), patch },
     });
@@ -1022,6 +1074,7 @@ export const proposeArchiveStatusTool = defineTool({
   scopes: planScopesOf('archive_status'),
   annotations: proposeAnnotations('Propose archiving a status'),
   inputSchema: z.object({
+    ...CARD_THREAD,
     project: ProjectKeyInput,
     status: NameRef('The status to archive.'),
     replacement: NameRef('The status its items move to.'),
@@ -1029,7 +1082,7 @@ export const proposeArchiveStatusTool = defineTool({
   }),
   outputSchema: PlanOut,
   run: (args, ctx) =>
-    propose(ctx, {
+    propose(ctx, args.card_thread, {
       action: 'archive_status',
       args: {
         project: args.project,

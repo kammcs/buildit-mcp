@@ -312,24 +312,45 @@ describe('the plugin settings', () => {
   };
 
   it('default to questions in the app, waiting 60 minutes', () => {
-    expect(config({}).ask).toEqual({ questionsInApp: true, timeoutMinutes: 60 });
+    expect(config({}).ask).toEqual({
+      questionsInApp: true,
+      timeoutMinutes: 60,
+      maxParallelItems: 3,
+    });
     expect(
-      config({ BUILDIT_QUESTIONS_IN_APP: 'false', BUILDIT_ASK_TIMEOUT_MINUTES: '15' }).ask,
+      config({
+        BUILDIT_QUESTIONS_IN_APP: 'false',
+        BUILDIT_ASK_TIMEOUT_MINUTES: '15',
+        BUILDIT_MAX_PARALLEL_ITEMS: '5',
+      }).ask,
     ).toEqual({
       questionsInApp: false,
       timeoutMinutes: 15,
+      maxParallelItems: 5,
     });
   });
 
   it('keep the defaults, with a warning, for values that are empty or wrong', () => {
-    expect(config({ BUILDIT_QUESTIONS_IN_APP: '', BUILDIT_ASK_TIMEOUT_MINUTES: '' }).ask).toEqual({
+    expect(
+      config({
+        BUILDIT_QUESTIONS_IN_APP: '',
+        BUILDIT_ASK_TIMEOUT_MINUTES: '',
+        BUILDIT_MAX_PARALLEL_ITEMS: '',
+      }).ask,
+    ).toEqual({
       questionsInApp: true,
       timeoutMinutes: 60,
+      maxParallelItems: 3,
     });
-    const bad = config({ BUILDIT_QUESTIONS_IN_APP: 'maybe', BUILDIT_ASK_TIMEOUT_MINUTES: '600' });
-    expect(bad.ask).toEqual({ questionsInApp: true, timeoutMinutes: 60 });
+    const bad = config({
+      BUILDIT_QUESTIONS_IN_APP: 'maybe',
+      BUILDIT_ASK_TIMEOUT_MINUTES: '600',
+      BUILDIT_MAX_PARALLEL_ITEMS: '11',
+    });
+    expect(bad.ask).toEqual({ questionsInApp: true, timeoutMinutes: 60, maxParallelItems: 3 });
     expect(bad.warnings.join('\n')).toContain('BUILDIT_ASK_TIMEOUT_MINUTES must be 1 to 60');
     expect(bad.warnings.join('\n')).toContain('BUILDIT_QUESTIONS_IN_APP is not true or false');
+    expect(bad.warnings.join('\n')).toContain('BUILDIT_MAX_PARALLEL_ITEMS must be 1 to 10');
   });
 
   it("end the hook's wait a minute before the hook's timeout", () => {

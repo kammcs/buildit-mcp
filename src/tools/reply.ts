@@ -16,8 +16,9 @@ import { z } from 'zod';
 import { postSessionMessage } from '../channel/api.js';
 import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import type { ChannelState } from '../channel/loop.js';
+import { isUuid, resolveThread } from '../channel/threads.js';
 import { ToolInputError } from '../errors.js';
-import { defineTool, type ToolContext, type ToolDefinition } from '../toolsets/registry.js';
+import { defineTool, type ToolDefinition } from '../toolsets/registry.js';
 import { IdempotencyKeyInput, itemRef, ItemRefInput } from './shared.js';
 
 export const REPLY_MAX_CHARS = 4000;
@@ -35,7 +36,7 @@ export const ReplyInputSchema = z.object({
     .uuid()
     .optional()
     .describe(
-      'The thread_id of the <channel> message you answer. Left out: the thread of the latest message.',
+      'The thread_id of the <channel> message you answer. Left out: the thread of the latest message, while only one thread is active; with several, give it (or item).',
     ),
   item: ItemRefInput.optional().describe(
     "A work item's key (DEMO-12), to answer in its thread: one you work on (the <channel> tag's item). Instead of thread_id.",
@@ -80,17 +81,7 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
     async run(args, ctx) {
       if (!state.isChannel) throw new ToolInputError(NOT_THE_CHANNEL);
       const key = args.idempotency_key ?? randomUUID();
-      const itemThread = args.item === undefined ? undefined : await itemThreadId(args.item, ctx);
-      if (
-        itemThread !== undefined &&
-        args.thread_id !== undefined &&
-        args.thread_id.toLowerCase() !== itemThread.toLowerCase()
-      ) {
-        throw new ToolInputError(
-          "Give item or thread_id, not both: item's thread is the item's own id, and this thread_id is another thread.",
-        );
-      }
-      const threadId = itemThread ?? args.thread_id ?? state.lastThreadId;
+      const threadId = await resolveThread(state, ctx, args, 'reply');
       const r = await postSessionMessage(
         ctx.api,
         {
@@ -105,7 +96,7 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
       const m = r.message;
       const item = args.item === undefined ? undefined : itemRef(args.item).toUpperCase();
       const where = m.thread_id
-        ? item !== undefined && !UUID_RE.test(item)
+        ? item !== undefined && !isUuid(item)
           ? `in the thread of ${item} (${m.thread_id})`
           : `in thread ${m.thread_id}`
         : 'as a new message';
@@ -127,21 +118,6 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
       };
     },
   });
-}
-
-const UUID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
-
-/**
- * An item's thread id (the item's own id): from the items the session's
- * events named, else read with get_item.
- */
-async function itemThreadId(ref: string, ctx: ToolContext): Promise<string> {
-  const key = itemRef(ref);
-  if (UUID_RE.test(key)) return key;
-  const known = ctx.channel?.items.get(key.toUpperCase());
-  if (known !== undefined) return known;
-  const { item } = await ctx.call('get_item', { path: { key } });
-  return item.id;
 }
 
 /**

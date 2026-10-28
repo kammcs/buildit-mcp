@@ -32,6 +32,7 @@ import { ApiError } from '../api/client.js';
 import { answerSessionResponse, closeSessionCard, postSessionMessage } from '../channel/api.js';
 import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import type { ChannelState } from '../channel/loop.js';
+import { resolveThread } from '../channel/threads.js';
 import { CardInbox, eventMessageId, type CardWaiters } from '../channel/waiters.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolContext, type ToolDefinition } from '../toolsets/registry.js';
@@ -615,8 +616,14 @@ export const AskInputSchema = z.object({
     .uuid()
     .optional()
     .describe(
-      "The thread to ask in: the thread_id of the <channel> message you are working on, an item's thread too. Left out: the thread of the latest message, mention or assignment.",
+      "The thread to ask in: the thread_id of the <channel> message you are working on, an item's thread too. Left out: the thread of the latest message, mention or assignment, while only one thread is active; with several, give it (or item).",
     ),
+  item: z
+    .string()
+    .min(1)
+    .max(60)
+    .optional()
+    .describe("A work item's key (DEMO-12): ask in its thread, instead of thread_id."),
   wait_s: z
     .number()
     .int()
@@ -729,7 +736,20 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
         id: ids[i] ?? firstId,
         question: b.question,
       }));
-      const threadId = args.thread_id ?? state.lastThreadId;
+      let threadId: string | undefined;
+      try {
+        threadId = await resolveThread(state, ctx, args, 'ask');
+      } catch (err) {
+        // The hook can't name a thread: Claude is told to ask with the tool instead.
+        if (!(hook && err instanceof ToolInputError)) throw err;
+        ctx.logger.info('ask needs a thread', { reason: 'several_threads' });
+        return {
+          structured: { status: 'not_asked' as const, answers: {}, message_id: null },
+          text: hookDeny(
+            `${err.message} Ask with the ask tool instead, passing thread_id or item, so the question goes to the right thread.`,
+          ),
+        };
+      }
 
       // Registered before the posts, so an answer in the next poll finds it.
       const inbox = new CardInbox();
