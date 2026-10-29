@@ -17450,12 +17450,12 @@
             }
           },
           "needs": {
+            "description": "The item's Needs: the capabilities a session must have to work on it (macos, ios…), sorted; empty when it has none. A personal agent's work on it goes only to a session whose owner confirmed every one of them, and it waits for one otherwise. Sent since API 1.9.0 (absent from older servers: none).",
             "maxItems": 10,
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Capability"
-            },
-            "description": "The item's Needs: the capabilities a session must have to work on it (macos, ios…), sorted; empty when it has none. A personal agent's work on it goes only to a session whose owner confirmed every one of them, and it waits for one otherwise. Sent since API 1.9.0 (absent from older servers: none)."
+            }
           },
           "estimate": {
             "type": [
@@ -17604,7 +17604,6 @@
           "parent",
           "initiative",
           "labels",
-          "needs",
           "estimate",
           "start_date",
           "due_date",
@@ -17772,12 +17771,12 @@
             }
           },
           "needs": {
+            "description": "The item's Needs: the capabilities a session must have to work on it (macos, ios…), sorted; empty when it has none. A personal agent's work on it goes only to a session whose owner confirmed every one of them, and it waits for one otherwise. Sent since API 1.9.0 (absent from older servers: none).",
             "maxItems": 10,
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Capability"
-            },
-            "description": "The item's Needs: the capabilities a session must have to work on it (macos, ios…), sorted; empty when it has none. A personal agent's work on it goes only to a session whose owner confirmed every one of them, and it waits for one otherwise. Sent since API 1.9.0 (absent from older servers: none)."
+            }
           },
           "estimate": {
             "type": [
@@ -17912,7 +17911,6 @@
           "parent",
           "initiative",
           "labels",
-          "needs",
           "estimate",
           "start_date",
           "due_date",
@@ -18013,12 +18011,12 @@
             }
           },
           "needs": {
+            "description": "The item's Needs: the capabilities a session must have to work on it (macos, ios…), sorted; empty when it has none. A personal agent's work on it goes only to a session whose owner confirmed every one of them, and it waits for one otherwise. Sent since API 1.9.0 (absent from older servers: none).",
             "maxItems": 10,
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Capability"
-            },
-            "description": "The item's Needs: the capabilities a session must have to work on it (macos, ios…), sorted; empty when it has none. A personal agent's work on it goes only to a session whose owner confirmed every one of them, and it waits for one otherwise. Sent since API 1.9.0 (absent from older servers: none)."
+            }
           },
           "estimate": {
             "type": [
@@ -18130,7 +18128,6 @@
           "parent",
           "initiative",
           "labels",
-          "needs",
           "estimate",
           "start_date",
           "due_date",
@@ -23013,20 +23010,20 @@
                 "$ref": "#/components/schemas/Timestamp"
               },
               "capabilities": {
+                "description": "The capability tags the owner confirmed for this session: the only ones that count when work with Needs is routed or handed off. They never widen its projects or scopes. Since API 1.9.0 (absent from older servers: none).",
                 "maxItems": 20,
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Capability"
-                },
-                "description": "The capability tags the owner confirmed for this session: the only ones that count when work with Needs is routed or handed off. They never widen its projects or scopes. Since API 1.9.0."
+                }
               },
               "capabilities_detected": {
+                "description": "What this session last suggested (set_session_capabilities, or connect_start's capabilities): suggestions only, never used for matching until the owner confirms them. Since API 1.9.0 (absent from older servers: none).",
                 "maxItems": 20,
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Capability"
-                },
-                "description": "What this session last suggested (set_session_capabilities, or connect_start's capabilities): suggestions only, never used for matching until the owner confirms them. Since API 1.9.0."
+                }
               }
             },
             "required": [
@@ -23039,9 +23036,7 @@
               "channel_ids",
               "approved_at",
               "last_seen_at",
-              "expires_at",
-              "capabilities",
-              "capabilities_detected"
+              "expires_at"
             ]
           },
           "agent": {
@@ -23275,6 +23270,7 @@
             "description": "This session's cards in the thread still waiting for the owner."
           },
           "handoff": {
+            "description": "An item's thread that is part of a handoff for this session: the subtask it was handed, or (for its own item) its newest proposal about a subtask, a live one first; null otherwise. Since API 1.9.0 (absent from older servers: null).",
             "anyOf": [
               {
                 "type": "object",
@@ -23317,8 +23313,7 @@
               {
                 "type": "null"
               }
-            ],
-            "description": "An item's thread that is part of a handoff for this session: the subtask it was handed, or (for its own item) its newest proposal about a subtask, a live one first; null otherwise. Since API 1.9.0."
+            ]
           }
         },
         "required": [
@@ -23329,8 +23324,7 @@
           "bound_reason",
           "bound_at",
           "last_owner_message_at",
-          "open_cards",
-          "handoff"
+          "open_cards"
         ],
         "description": "A thread this session works in."
       },

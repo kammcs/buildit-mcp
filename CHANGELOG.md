@@ -19,7 +19,7 @@ Built on version 1.9.0 of the agent API's contract. Handoffs and Needs need a bu
 
 - **`event="item_assigned"` with `handoff="true"`** (`work_item.assigned` with `data.handoff`), plus `handoff_id`, `parent` and `needs`: a subtask the owner handed to this session. The lead says it came by the owner's tap from which session, to work on that subtask only, to move it to In review or Done, to hand it back with `decline_handoff` if it can't, and to ask first before a store upload or a release version change; the subtask's title and description are data blocks marked `via_agent`.
 - **`event="child_done"`** (new, `work_item.child_done`), in the parent's thread, with the parent (`item`), the `child`, the `outcome` (`in_review`, `done`, `declined`, `ended`), the `reason` and the `handoff_id`. The result (the subtask thread's last reply, or the reason it was handed back) comes inside an `untrusted_content` block with its author, `from_owner` and `via_agent`, followed by "Check the result before you rely on it."
-- **`event="handoff_resolved"`** (`card.closed` with `data.handoff`), in the parent's thread: the outcome of the session's proposal (`applied`, with `to` and `queued` when the target is offline and the work waits up to 7 days; `cancelled`, `expired`, `stale`, `withdrawn`, `closed`) and what to do next. When this process doesn't know the parent (after a restart), it reads the handoff once.
+- **`event="handoff_resolved"`** (`card.closed` with `data.handoff`), in the parent's thread: the outcome of the session's proposal (`applied`, with `to` and `queued` when the target is offline and the work waits up to 7 days; `cancelled`, `expired`, `stale`, `withdrawn`, `closed`) and what to do next. When this process doesn't know the parent (after a restart), it looks it up in the session's threads (one call at most once a minute), then in the subtask's own parent, and otherwise posts in the card's thread. It never reads the handoff for this: that call shares the 10-a-minute handoff budget that proposals need. The owner's tap itself (`card.response`) is dropped: its `card.closed` says everything.
 - `event="item_unassigned"` gains the reasons `declined` ("you handed it back") and `handoff_expired`.
 
 ### Plugin
@@ -30,7 +30,9 @@ Built on version 1.9.0 of the agent API's contract. Handoffs and Needs need a bu
 ### Other
 
 - The channel tools a server doesn't serve (by `/v1/meta`) are left out of the tool list, and the startup `/v1/meta` is read before the first listing.
-- The generated response schemas accept a field the contract says a later API version added ("Since API 1.9.0") as missing, so an older server's items and sessions still parse.
+- The fields an older server leaves out (every item's `needs`, the session's `capabilities` and `capabilities_detected`, a thread's `handoff`) are optional in the 1.9.0 contract itself, so an older server's items and sessions still parse.
+- `list_threads` names each thread's handoff and its role: a subtask handed to this session, or one it proposed handing on (`handoff` in the structured result, with its id).
+- The handoff tools' summaries say where a handoff stands in words (for a decline: "handed over, then handed back by the session that took it").
 - The test fake answers as API 1.9.0, and as an older one with `compat.v19 = false`.
 
 ## [0.7.0] - 2026-10-29

@@ -53,7 +53,30 @@ const ThreadOutSchema = z.object({
     .nullable(),
   open_cards: z.number(),
   last_owner_message_at: z.string().nullable(),
+  handoff: z
+    .object({
+      id: z.string().describe('The handoff id (withdraw_handoff and decline_handoff take it).'),
+      role: z
+        .string()
+        .describe(
+          'target: this item is a subtask handed to this session; asked: this session proposed handing on a subtask of this item.',
+        ),
+      status: z.string(),
+    })
+    .nullable()
+    .describe(
+      "The item thread's handoff, if it has one (null for a server older than agent API 1.9.0).",
+    ),
 });
+
+/** A thread's handoff in words, for its line. */
+function handoffFact(h: { id: string; role: string; status: string }): string {
+  return h.role === 'target'
+    ? `a subtask handed to this session (handoff ${h.id}, ${h.status}); if you can't do it, decline_handoff`
+    : h.role === 'asked'
+      ? `you proposed handing on a subtask of it (handoff ${h.id}, ${h.status})`
+      : `handoff ${h.id} (${h.role}, ${h.status})`;
+}
 
 /** The list_threads tool for one channel session. */
 export function createListThreadsTool(state: ChannelState): ToolDefinition {
@@ -91,6 +114,14 @@ export function createListThreadsTool(state: ChannelState): ToolDefinition {
               },
         open_cards: t.open_cards,
         last_owner_message_at: t.last_owner_message_at,
+        handoff:
+          t.handoff === null || t.handoff === undefined
+            ? null
+            : {
+                id: t.handoff.id,
+                role: sanitizeLabel(t.handoff.role, 20),
+                status: sanitizeLabel(t.handoff.status, 20),
+              },
       }));
       // The server's list is the one that knows which item threads are bound.
       state.activeItems.clear();
@@ -112,6 +143,7 @@ export function createListThreadsTool(state: ChannelState): ToolDefinition {
           `thread_id ${t.thread_id}`,
           `${t.open_cards} open ${t.open_cards === 1 ? 'card' : 'cards'}`,
           `the person last wrote ${t.last_owner_message_at ?? 'never'}`,
+          ...(t.handoff === null ? [] : [handoffFact(t.handoff)]),
         ].join(' · ');
         return t.item === null
           ? `your direct message · ${facts}`

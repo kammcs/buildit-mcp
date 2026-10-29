@@ -255,6 +255,40 @@ async function resolveHandoff(
   );
 }
 
+/** How a card that ended without a handover ended, in words (its status). */
+const NOT_HANDED: Record<string, string> = {
+  cancelled: 'the person cancelled it',
+  expired: 'the card expired',
+  stale: 'the card went stale (the subtask or the sessions changed)',
+  withdrawn: 'this session withdrew it',
+  closed: 'the card was closed',
+};
+
+/**
+ * Where a handoff stands, in words. status is the handoff's own state, and
+ * outcome only how its card ended: after a handover the card's outcome stays
+ * "applied" while the status moves on (declined, ended, finished), so the
+ * words follow the status and never read "declined, outcome applied".
+ */
+function stateText(h: HandoffOutT): string {
+  switch (h.status) {
+    case 'proposed':
+      return "waiting for the person's answer on its card";
+    case 'handed':
+      return 'handed over';
+    case 'declined':
+      return 'handed over, then handed back by the session that took it';
+    case 'ended':
+      return 'handed over, then ended before it was finished';
+    case 'finished':
+      return 'handed over and finished';
+    default: {
+      const why = NOT_HANDED[h.status];
+      return why === undefined ? `status ${h.status}` : `not handed over: ${why}`;
+    }
+  }
+}
+
 function summary(h: HandoffOutT): string {
   const targets = h.targets
     .map(
@@ -263,7 +297,7 @@ function summary(h: HandoffOutT): string {
     )
     .join('\n');
   return [
-    `Handoff ${h.id}: ${h.item} (subtask of ${h.parent}), needs ${h.needs.join(', ') || 'none'}; status ${h.status}${h.outcome === null ? '' : `, outcome ${h.outcome}`}.`,
+    `Handoff ${h.id}: ${h.item} (subtask of ${h.parent}), needs ${h.needs.join(', ') || 'none'}; ${stateText(h)}.`,
     ...(h.target === null
       ? []
       : [
@@ -324,7 +358,7 @@ Returns the handoff's id and the sessions the card offers.`,
           r.created
             ? `Proposed: buildIt.Social posted the handoff card in ${h.item}'s thread. Only the person's tap hands it over; their answer arrives as event=handoff_resolved. Carry on with the rest of ${h.parent}.`
             : ended
-              ? `Nothing new: ${h.item} was proposed before, and that proposal ended (${h.outcome ?? h.status}). Don't propose it again unless the person asks; then pass a new idempotency_key.`
+              ? `Nothing new: ${h.item} was proposed before, and that proposal is over (${stateText(h)}). Don't propose it again unless the person asks; then pass a new idempotency_key.`
               : `Nothing new: ${h.item} was already proposed (this is that proposal); its answer arrives as event=handoff_resolved.`,
           summary(h),
         ].join('\n'),

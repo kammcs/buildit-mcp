@@ -109,14 +109,6 @@ function isSchema(value: Json | undefined): value is Schema {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/**
- * Whether a property's description says an API version added it ("Since API 1.9.0", "Sent
- * since API 1.9.0"): an older server leaves it out, so a response may lack it.
- */
-function addedLater(prop: Schema): boolean {
-  return typeof prop.description === 'string' && /\bsince API \d+\.\d+/i.test(prop.description);
-}
-
 function refName(ref: string, where: string): string {
   const prefix = '#/components/schemas/';
   if (!ref.startsWith(prefix)) fail(where, `unsupported $ref ${ref}`);
@@ -269,9 +261,9 @@ function objectSchema(s: Schema, mode: Mode, where: string): string {
     const prop = props[name];
     if (!isSchema(prop)) fail(`${where}.${name}`, 'property is not a schema');
     let out = convert(prop, mode, `${where}.${name}`);
-    // A field a later API version added is absent from an older server's answers: the
-    // tolerant schemas accept it missing, the strict ones (the fake's) still require it.
-    if (!required.has(name) || (mode === 'tolerant' && addedLater(prop))) out += '.optional()';
+    // A field a later API version added ("Since API 1.9.0") is optional in the contract
+    // itself (the agent API's contract test checks it), so both modes follow `required`.
+    if (!required.has(name)) out += '.optional()';
     return `${lit(name)}: ${out}`;
   });
   const ctor = mode === 'strict' ? 'z.strictObject' : 'z.looseObject';

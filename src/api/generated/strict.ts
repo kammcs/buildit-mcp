@@ -2011,7 +2011,7 @@ export const ItemSummarySchema = z.strictObject({
   parent: ItemBriefSchema.nullable(),
   initiative: InitiativeBriefSchema.nullable(),
   labels: z.array(LabelSchema),
-  needs: z.array(CapabilitySchema).max(10),
+  needs: z.array(CapabilitySchema).max(10).optional(),
   estimate: z.number().nullable(),
   start_date: DateSchema.nullable(),
   due_date: DateSchema.nullable(),
@@ -2323,8 +2323,8 @@ export const SessionResponseSchema = z.strictObject({
     approved_at: TimestampSchema,
     last_seen_at: TimestampSchema.nullable(),
     expires_at: TimestampSchema,
-    capabilities: z.array(CapabilitySchema).max(20),
-    capabilities_detected: z.array(CapabilitySchema).max(20),
+    capabilities: z.array(CapabilitySchema).max(20).optional(),
+    capabilities_detected: z.array(CapabilitySchema).max(20).optional(),
   }),
   agent: AgentBriefSchema,
   owner: SessionOwnerSchema,
@@ -2367,7 +2367,8 @@ export const SessionThreadSchema = z.strictObject({
         'finished',
       ]),
     })
-    .nullable(),
+    .nullable()
+    .optional(),
 });
 export type SessionThread = z.infer<typeof SessionThreadSchema>;
 
@@ -2887,7 +2888,7 @@ export const ItemDetailSchema = z.strictObject({
   parent: ItemBriefSchema.nullable(),
   initiative: InitiativeBriefSchema.nullable(),
   labels: z.array(LabelSchema),
-  needs: z.array(CapabilitySchema).max(10),
+  needs: z.array(CapabilitySchema).max(10).optional(),
   estimate: z.number().nullable(),
   start_date: DateSchema.nullable(),
   due_date: DateSchema.nullable(),
@@ -2925,7 +2926,7 @@ export const ItemSearchResultSchema = z.strictObject({
   parent: ItemBriefSchema.nullable(),
   initiative: InitiativeBriefSchema.nullable(),
   labels: z.array(LabelSchema),
-  needs: z.array(CapabilitySchema).max(10),
+  needs: z.array(CapabilitySchema).max(10).optional(),
   estimate: z.number().nullable(),
   start_date: DateSchema.nullable(),
   due_date: DateSchema.nullable(),

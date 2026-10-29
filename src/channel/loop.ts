@@ -38,6 +38,7 @@
  * network, rate limits and the API's 5xx, with a growing pause.
  */
 import { ApiError, type ApiClient } from '../api/client.js';
+import { callOperation } from '../api/operations.js';
 import { ToolInputError } from '../errors.js';
 import { isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
@@ -58,8 +59,8 @@ import {
 import {
   ackSessionEvents,
   getSession,
-  getSessionHandoff,
   listSessionEvents,
+  listSessionThreads,
   SESSION_ENDED_CODES,
   sessionHeartbeat,
   setSessionCapabilities,
@@ -861,6 +862,10 @@ export class ChannelLoop {
       await this.deliverHandoffResolved(event, info, messageId, data);
       return;
     }
+    // Also the owner's tap on a handoff card (card.response, hand_<i> or cancel): nothing in it is news
+    // to the asking session. An applied or cancelled tap closes the card, and its card.closed carries
+    // the outcome, the target and queued (handoff_resolved); a tap the server rejects
+    // (target_unavailable) leaves the card open for the owner to pick again.
     logger.info('channel event dropped', {
       event_id: event.id,
       reason: 'no_waiter',
@@ -940,10 +945,60 @@ export class ChannelLoop {
   }
 
   /**
+   * The parent item of a handoff this process doesn't remember (it
+   * restarted, or the proposal is older than its memory), without
+   * get_session_handoff: that call takes the session's handoff unit, which
+   * propose, withdraw and decline share (10 a minute), so a restarted asker
+   * with several outcomes waiting would spend the budget its next proposal
+   * needs. First the session's threads (one call, the poll unit, at most once
+   * a minute): the row of the item it works on names its newest proposal
+   * (handoff.role asked). Then the subtask itself (get_item, the read unit):
+   * its parent now. Undefined when neither says.
+   */
+  private async handoffParent(h: {
+    id: string;
+    item: { id: string };
+    reason?: string | undefined;
+  }): Promise<{ id: string; key: string } | undefined> {
+    const { api } = this.options;
+    const signal = (): AbortSignal => AbortSignal.any([this.signal, AbortSignal.timeout(10_000)]);
+    let parent = this.threadParents.get(h.id);
+    if (parent !== undefined) return parent;
+    const now = Date.now();
+    if (this.threadsReadAt === undefined || now - this.threadsReadAt >= 60_000) {
+      this.threadsReadAt = now;
+      const threads = await listSessionThreads(api, { signal: signal() }).catch(() => undefined);
+      for (const t of threads?.threads ?? []) {
+        // The row of an item the session works on names its newest proposal of one of its
+        // subtasks (role asked): that item is the proposal's parent.
+        if (t.item === null || t.handoff === null || t.handoff === undefined) continue;
+        if (t.handoff.role !== 'asked') continue;
+        this.threadParents.set(t.handoff.id, { id: t.item.id, key: t.item.key });
+      }
+      parent = this.threadParents.get(h.id);
+      if (parent !== undefined) return parent;
+    }
+    // The subtask's parent now; not when the card went stale because the subtask moved, changed parent or
+    // was deleted (that parent isn't the proposal's).
+    if (h.reason === 'parent_changed' || h.reason === 'moved' || h.reason === 'deleted')
+      return undefined;
+    return callOperation(api, 'get_item', { path: { key: h.item.id } }, { signal: signal() }).then(
+      (r) =>
+        r.item.parent === null ? undefined : { id: r.item.parent.id, key: r.item.parent.key },
+      () => undefined,
+    );
+  }
+
+  /** When handoffParent last read the session's threads (ms), or never. */
+  private threadsReadAt: number | undefined;
+  /** What that read found: a proposal's id → its parent item (at most 50, one per thread). */
+  private readonly threadParents = new Map<string, { id: string; key: string }>();
+
+  /**
    * A handoff card closed (card.closed with data.handoff): how the owner
    * answered this session's proposal, as event=handoff_resolved, in the
-   * parent's thread when this process knows the parent (else it reads the
-   * handoff once to find it).
+   * parent's thread when this process knows the parent (else it looks the
+   * parent up, never spending the handoff unit: handoffParent).
    */
   private async deliverHandoffResolved(
     event: SessionEvent,
@@ -951,22 +1006,14 @@ export class ChannelLoop {
     messageId: string,
     data: Record<string, unknown>,
   ): Promise<void> {
-    const { api, logger, state } = this.options;
+    const { logger, state } = this.options;
     const parsed = SessionHandoffOutcomeSchema.safeParse(data.handoff);
     if (!parsed.success) {
       logger.warn('channel event dropped', { event_id: event.id, reason: 'shape' });
       return;
     }
     const h = parsed.data;
-    let parent = state.handoffs.get(h.id)?.parent;
-    if (parent === undefined) {
-      parent = await getSessionHandoff(api, h.id, {
-        signal: AbortSignal.any([this.signal, AbortSignal.timeout(10_000)]),
-      }).then(
-        (r) => ({ id: r.handoff.parent.id, key: r.handoff.parent.key }),
-        () => undefined,
-      );
-    }
+    const parent = state.handoffs.get(h.id)?.parent ?? (await this.handoffParent(h));
     state.handoffs.remember({
       id: h.id,
       item: { id: h.item.id, key: h.item.key },

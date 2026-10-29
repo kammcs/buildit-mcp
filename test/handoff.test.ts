@@ -333,6 +333,9 @@ describe('a subtask handed to this session', () => {
     });
     expect(r.isError).toBeFalsy();
     expect(textOf(r)).toContain('Handed back: DEMO-13 is no longer yours');
+    // The status, in words: never "status declined, outcome applied" (the card's outcome).
+    expect(textOf(r)).toContain('; handed over, then handed back by the session that took it.');
+    expect(textOf(r)).not.toContain('outcome');
     expect(session().handoffs.get(id)!.declineReason).toBe(
       "Xcode isn't installed on this computer.",
     );
@@ -343,6 +346,31 @@ describe('a subtask handed to this session', () => {
       reason: 'No.',
     });
     expect(textOf(other)).toContain('No handoff with that id was handed to this session');
+  });
+
+  it('list_threads names the handoff and its role: handed to this session, or proposed by it', async () => {
+    const c = await start();
+    const handed = api.sessions.handOver(TOKEN, sub);
+    api.sessions.assignItem(TOKEN, demoItem(42, { id: story().id, title: story().title }));
+    await notes(c, 2);
+    subtaskWithNeeds();
+    const p = await call(c, 'propose_handoff', { item: 'DEMO-46' });
+    const asked = (p.structuredContent as { handoff: { id: string } }).handoff.id;
+    const r = await call(c, 'list_threads', {});
+    const text = textOf(r);
+    expect(text).toContain(
+      `a subtask handed to this session (handoff ${handed}, handed); if you can't do it, decline_handoff`,
+    );
+    expect(text).toContain(`you proposed handing on a subtask of it (handoff ${asked}, proposed)`);
+    expect(injectionIsInsideBlocks(text)).toBe(true);
+    const rows = (
+      r.structuredContent as {
+        threads: { item: { key: string } | null; handoff: unknown }[];
+      }
+    ).threads;
+    const of = (key: string) => rows.find((t) => t.item?.key === key)?.handoff;
+    expect(of('DEMO-13')).toEqual({ id: handed, role: 'target', status: 'handed' });
+    expect(of('DEMO-42')).toEqual({ id: asked, role: 'asked', status: 'proposed' });
   });
 
   it("after a restart, finds the handoff from the session's threads", async () => {
@@ -421,8 +449,14 @@ describe("the owner's answer to a proposal (handoff_resolved)", () => {
     }
   });
 
-  it('after a restart, reads the handoff once to name the parent', async () => {
+  /** GET /v1/session/handoffs/{id} takes the handoff unit that proposals need (10 a minute). */
+  const handoffReads = () =>
+    api.requests.filter((q) => q.method === 'GET' && q.path.startsWith('/v1/session/handoffs/'));
+
+  it("after a restart, the session's threads name the parent; no handoff unit spent", async () => {
     const c = await start();
+    api.sessions.assignItem(TOKEN, demoItem(42, { id: story().id, title: story().title }));
+    await notes(c, 1);
     const id = await proposed(c);
     await stops.splice(0)[0]!();
     const c2 = await start({ reopen: false });
@@ -430,9 +464,32 @@ describe("the owner's answer to a proposal (handoff_resolved)", () => {
     const [n] = await notes(c2, 1);
     expect(n!.params!.meta).toMatchObject({ parent: 'DEMO-42', thread_id: story().id });
     expect(n!.params!.content).toContain('It works on it from now on.');
+    expect(api.requests.some((q) => q.method === 'GET' && q.path === '/v1/session/threads')).toBe(
+      true,
+    );
+    expect(handoffReads()).toEqual([]);
+    expect(api.requests.some((q) => q.path === `/v1/items/${subtaskWithNeeds().id}`)).toBe(false);
+  });
+
+  it("when the threads don't name it, the subtask's parent does (a read, not the handoff unit)", async () => {
+    const c = await start();
+    const id = await proposed(c);
+    await stops.splice(0)[0]!();
+    const c2 = await start({ reopen: false });
+    api.sessions.resolveHandoff(TOKEN, id, 'cancelled', { forget: true });
+    const [n] = await notes(c2, 1);
+    expect(n!.params!.meta).toMatchObject({
+      outcome: 'cancelled',
+      item: 'DEMO-46',
+      parent: 'DEMO-42',
+      thread_id: story().id,
+    });
     expect(
-      api.requests.some((q) => q.method === 'GET' && q.path === `/v1/session/handoffs/${id}`),
+      api.requests.some(
+        (q) => q.method === 'GET' && q.path === `/v1/items/${subtaskWithNeeds().id}`,
+      ),
     ).toBe(true);
+    expect(handoffReads()).toEqual([]);
   });
 
   it("without the parent, it still tells the session, in the card's thread", async () => {
@@ -440,11 +497,14 @@ describe("the owner's answer to a proposal (handoff_resolved)", () => {
     const id = await proposed(c);
     await stops.splice(0)[0]!();
     const c2 = await start({ reopen: false });
-    api.sessions.resolveHandoff(TOKEN, id, 'cancelled', { forget: true });
+    // The subtask moved: its parent now isn't the proposal's, so it isn't asked.
+    api.sessions.resolveHandoff(TOKEN, id, 'stale', { reason: 'moved', forget: true });
     const [n] = await notes(c2, 1);
     expect(n!.params!.meta!.parent).toBeUndefined();
-    expect(n!.params!.meta).toMatchObject({ outcome: 'cancelled', item: 'DEMO-46' });
+    expect(n!.params!.meta).toMatchObject({ outcome: 'stale', item: 'DEMO-46' });
     expect(n!.params!.meta!.thread_id).toBe(subtaskWithNeeds().id);
+    expect(api.requests.some((q) => q.path.startsWith('/v1/items/'))).toBe(false);
+    expect(handoffReads()).toEqual([]);
   });
 });
 

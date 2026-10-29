@@ -1282,11 +1282,21 @@ export class FakeSessions {
         bound_at: at,
         last_owner_message_at: at,
         open_cards: cards,
-        handoff: ((): { id: string; role: 'target'; status: string } | null => {
+        handoff: ((): { id: string; role: 'target' | 'asked'; status: string } | null => {
           const h = [...s.handoffs.values()].find(
             (x) => x.role === 'target' && (x.json.item as { id: string }).id === id,
           );
-          return h === undefined ? null : { id: h.json.id, role: 'target', status: h.json.status };
+          if (h !== undefined) return { id: h.json.id, role: 'target', status: h.json.status };
+          // As the server: for the session's own item, its newest proposal of a subtask, a live one first.
+          const asked = [...s.handoffs.values()]
+            .filter(
+              (x) => x.role === 'asked' && (x.json.parent as { id: string } | null)?.id === id,
+            )
+            .reverse();
+          const live = (x: FakeHandoff) =>
+            x.json.status === 'proposed' || x.json.status === 'handed';
+          const a = asked.find(live) ?? asked[0];
+          return a === undefined ? null : { id: a.json.id, role: 'asked', status: a.json.status };
         })(),
       };
     });
