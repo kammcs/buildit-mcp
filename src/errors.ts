@@ -106,6 +106,17 @@ const NOT_FOUND_HINTS: Record<string, string> = {
     'The API does not serve this call: it may be older than this buildit-mcp. Check BUILDIT_API_URL, or use another tool.',
 };
 
+/**
+ * The next step for codes whose contract hint names an API operation this
+ * server has no tool for (get_session_handoff): said in this server's terms
+ * instead of the API's hint.
+ */
+const SERVER_HINTS: Record<string, string> = {
+  handoff_exists:
+    "Don't propose it again: the subtask already has a live handoff (details.handoff_id), whose outcome arrives as event=handoff_resolved.",
+  handoff_closed: 'Nothing more to do with this handoff: its card has already ended.',
+};
+
 /** The rate-limit buckets the contract names in a rate_limited error's details.bucket. */
 type RateLimitBucket = Extract<
   ApiErrorBody['error'],
@@ -125,6 +136,7 @@ const RATE_BUCKETS: Record<RateLimitBucket, string> = {
   session_polls_per_minute: 'polls per minute for this session',
   session_typing_per_minute: 'typing notices per minute for this session',
   session_approvals_per_minute: 'tool approval calls per minute for this session',
+  session_handoffs_per_minute: 'handoff calls per minute for this session',
   connect_starts_per_hour: 'connections started per hour from this address',
   connect_pending_grants: 'connections waiting for approval on this server',
   connect_pending_per_address: 'connections waiting for approval from this network',
@@ -348,7 +360,7 @@ export function describeApiError(err: ApiError): string {
     err.code === 'not_found' && typeof details.kind === 'string'
       ? NOT_FOUND_HINTS[details.kind]
       : undefined;
-  const hint = kindHint ?? hintFor(err.code, err.hint);
+  const hint = kindHint ?? SERVER_HINTS[err.code] ?? hintFor(err.code, err.hint);
   if (hint && !(waitShown && RETRY_ADVICE.test(hint))) {
     const text = clean(inServerTerms(hint));
     if (!alreadySaid(text, said)) {

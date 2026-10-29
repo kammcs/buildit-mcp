@@ -51,6 +51,8 @@ src/
   errors.ts             ApiError and ToolInputError -> tool result with isError and actionable text
   identity.ts           /v1/me failures (refused vs passing) and the per-token scope cache
   untrusted.ts          <untrusted_content> wrapping of people-written text
+  capabilities.ts       capability tags: detection (the OS, programs on the PATH, known folders;
+                        nothing run, tag names only), the tag rule, --capabilities
   resources.ts          buildit://items/{key} and buildit://pages/{id}
   prompts.ts            plan_epic, triage, standup
   api/client.ts         fetch wrapper: auth, X-Request-Id, X-Buildit-Tool, X-Buildit-Client, retries, timeouts
@@ -75,6 +77,8 @@ src/
   tools/reply.ts        reply, and turn_ended for the plugin's Stop hook (channel mode only;
                         not in the catalog)
   tools/threads.ts      list_threads (channel mode only)
+  tools/handoff.ts      propose_handoff, withdraw_handoff, decline_handoff (channel mode only;
+                        listed when the API serves them)
   tools/ask.ts          ask: questions as a card, the answer back (channel mode only; also the
                         plugin's AskUserQuestion hook, format "hook")
   tools/approve.ts      approve: tool approvals as cards (the plugin's PermissionRequest hook),
@@ -86,6 +90,7 @@ src/
                         plan cards' outcomes into plan_resolved notifications, acks; work items'
                         events (assigned, mentions and replies in an item's thread, unassigned)
   channel/item-events.ts  the content of a work item's notifications (lead, data blocks)
+  channel/handoffs.ts   the handoffs seen, and the content of child_done and handoff_resolved
   channel/workers.ts    where the question hook posts: the lead's in the DM, a worker's in its
                         item's thread (the lead's table)
   channel/threads.ts    which thread reply, ask and the approval cards post in (named once

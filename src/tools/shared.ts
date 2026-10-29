@@ -95,6 +95,23 @@ export const ItemRefInput = z
   .regex(ITEM_REF_RE, 'An item key such as DEMO-12, or an item uuid.')
   .describe('An item key such as DEMO-12 (any case, a leading # is fine) or the item uuid.');
 
+/** The agent API version that gives items Needs. */
+export const NEEDS_API = '1.9.0';
+
+/** An item's Needs: capability tags (the server lower-cases, sorts and folds duplicates). */
+export const NeedsInput = z
+  .array(
+    z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[a-z0-9][a-z0-9+._-]{0,31}$/, 'A capability tag such as macos (a-z 0-9 + . _ -).'),
+  )
+  .max(10)
+  .describe(
+    'Capability tags (windows, macos, linux, ios, android, xcode, flutter, docker, rust, web, gpu, or your own).',
+  );
+
 export const ProjectKeyInput = z
   .string()
   .regex(/^[A-Za-z][A-Za-z0-9]{1,5}$/, 'A project key such as DEMO.')
@@ -189,6 +206,7 @@ export const ItemOutSchema = z.object({
   assignee_agent: z.string().nullable().describe("The assignee's agent working on it."),
   parent: z.string().nullable().describe("The parent's key."),
   labels: z.array(z.string()),
+  needs: z.array(z.string()),
   estimate: z.number().nullable(),
   sprint: z.string().nullable(),
   fix_release: z.string().nullable(),
@@ -215,6 +233,7 @@ export function itemOut(i: ItemSummary): ItemOut {
     assignee_agent: i.assignee_agent ? label(i.assignee_agent.name, PERSON_NAME_CHARS) : null,
     parent: i.parent?.key ?? null,
     labels: i.labels.map((l) => label(l.name, 40)),
+    needs: (i.needs ?? []).map((n) => label(n, 32)),
     estimate: i.estimate,
     sprint: nameLabel(i.sprint?.name),
     fix_release: nameLabel(i.fix_release?.name),
@@ -529,6 +548,7 @@ export function itemLine(i: ItemOut): string {
     ...(i.sprint ? [i.sprint] : []),
     ...(i.due_date ? [`due ${i.due_date}`] : []),
     ...(i.labels.length > 0 ? [`labels ${i.labels.join(', ')}`] : []),
+    ...(i.needs.length > 0 ? [`needs ${i.needs.join(', ')}`] : []),
   ];
   return `${parts.join(' · ')} — ${i.title}`;
 }

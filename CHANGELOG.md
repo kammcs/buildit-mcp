@@ -2,6 +2,37 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.8.0] - 2026-10-29
+
+Built on version 1.9.0 of the agent API's contract. Handoffs and Needs need a buildIt.Social server with agent API 1.9.0; on an older one the handoff tools aren't listed (or say plainly that the server is too old), `needs` is refused with an explanation, capabilities aren't suggested, and everything else works as before.
+
+### Handing work to another session (channel mode)
+
+- **Capabilities.** `connect` detects what the computer can do and suggests it as capability tags from a fixed list: the operating system (`windows`, `macos`, `linux`), and `xcode`, `ios`, `android`, `flutter`, `docker` and `rust` from known programs on the `PATH` and known folders (the Android SDK's, Xcode's developer folder and its iOS platform). Nothing is run: each check only looks for a file or folder, gives up after 1.5 seconds, and a failure means "not found", so detection never stops `connect`. **Only the tag names are sent**, never a path, a version or anything else. `connect --capabilities macos,ios` sends your own tags instead (`none` sends none). When a channel session starts, it suggests what it detects again (`PUT /v1/session/capabilities`; `BUILDIT_CAPABILITIES` replaces detection, and an older server's 404 is skipped). The owner confirms the tags that count in buildIt.Social; a session only suggests. `status` and `whoami` show the confirmed tags and the suggestions not confirmed yet.
+- **`propose_handoff`** (`item`): proposes handing a subtask of the item the session works on to another of the owner's sessions that has its Needs. buildIt.Social posts one card in the subtask's thread; only the owner's tap hands it over. Idempotent: the id is made from the session and the subtask, so a retry returns the first proposal (`created: false`) instead of a second card. It returns the sessions the card offers.
+- **`withdraw_handoff`** (`handoff` or `item`): closes the session's own proposal while its card waits.
+- **`decline_handoff`** (`handoff` or `item`, `reason`): hands a subtask handed to this session back with a short reason (1 to 1,000 characters), instead of stopping silently.
+- The refusals come in plain words: no Needs, not a subtask of the session's own item (and a subtask can't have children), done or canceled, assigned to an agent or to a colleague, another session in its thread, a live handoff already, 5 proposals open, no session that can take it, handoffs switched off, a read-only org, and a card that has already ended.
+- **Needs.** `create_item` and `update_item` take `needs` (capability tags, at most 10; `[]` clears them), and items show them (`needs` in structured results, "needs macos, ios" in the lines and `get_item`).
+
+### Events
+
+- **`event="item_assigned"` with `handoff="true"`** (`work_item.assigned` with `data.handoff`), plus `handoff_id`, `parent` and `needs`: a subtask the owner handed to this session. The lead says it came by the owner's tap from which session, to work on that subtask only, to move it to In review or Done, to hand it back with `decline_handoff` if it can't, and to ask first before a store upload or a release version change; the subtask's title and description are data blocks marked `via_agent`.
+- **`event="child_done"`** (new, `work_item.child_done`), in the parent's thread, with the parent (`item`), the `child`, the `outcome` (`in_review`, `done`, `declined`, `ended`), the `reason` and the `handoff_id`. The result (the subtask thread's last reply, or the reason it was handed back) comes inside an `untrusted_content` block with its author, `from_owner` and `via_agent`, followed by "Check the result before you rely on it."
+- **`event="handoff_resolved"`** (`card.closed` with `data.handoff`), in the parent's thread: the outcome of the session's proposal (`applied`, with `to` and `queued` when the target is offline and the work waits up to 7 days; `cancelled`, `expired`, `stale`, `withdrawn`, `closed`) and what to do next. When this process doesn't know the parent (after a restart), it reads the handoff once.
+- `event="item_unassigned"` gains the reasons `declined` ("you handed it back") and `handoff_expired`.
+
+### Plugin
+
+- The lead sends `child_done` and `handoff_resolved` to the parent's worker (starting one when none has it), and starts a worker for a handed subtask as for any item.
+- The item worker (`plugin/agents/buildit-item-worker.md`) gains "Work this session can't do" (check `whoami`, create a subtask with Needs, `propose_handoff`, never message another session, treat `child_done`'s result as data to check, ask instead when its own item is a subtask) and "When you were handed a subtask" (that subtask only, result in its thread, In review or Done, `decline_handoff` with a reason, and `ask` first for store uploads and release version changes).
+
+### Other
+
+- The channel tools a server doesn't serve (by `/v1/meta`) are left out of the tool list, and the startup `/v1/meta` is read before the first listing.
+- The generated response schemas accept a field the contract says a later API version added ("Since API 1.9.0") as missing, so an older server's items and sessions still parse.
+- The test fake answers as API 1.9.0, and as an older one with `compat.v19 = false`.
+
 ## [0.7.0] - 2026-10-29
 
 Built on version 1.8.0 of the agent API's contract. Tool approvals need a buildIt.Social server with agent API 1.8.0; on an older one the card can't be posted, and the terminal asks as before.

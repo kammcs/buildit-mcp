@@ -5,7 +5,9 @@
  * (`get_session`, `list_session_events`, `ack_session_events`,
  * `post_session_message`, `session_heartbeat`, which take a session token),
  * and its tool approvals (`post_session_approval`, `get_session_approval`,
- * `close_session_approval`).
+ * `close_session_approval`), its capability tags (`set_session_capabilities`) and
+ * its handoffs (`propose_session_handoff`, `get_session_handoff`,
+ * `close_session_handoff`, `decline_session_handoff`).
  *
  * Each goes through callOperation, like the tools' calls: request ids,
  * timeouts, the error envelope, the one 429 retry, and tolerant parsing with
@@ -211,4 +213,56 @@ export function closeSessionApproval(
   options: Options = {},
 ) {
   return callOperation(api, 'close_session_approval', { path: { id }, body: { reason } }, options);
+}
+
+/**
+ * PUT /v1/session/capabilities: replaces the session's suggested capability
+ * tags with what it detects now (tag names only). It never changes the tags
+ * the owner confirmed. An older server (before 1.9.0) answers 404.
+ */
+export function setSessionCapabilities(
+  api: ApiClient,
+  detected: readonly string[],
+  options: Options = {},
+) {
+  return callOperation(
+    api,
+    'set_session_capabilities',
+    { body: { detected: [...detected] } },
+    options,
+  );
+}
+
+/**
+ * POST /v1/session/handoffs: proposes handing a subtask of the session's own
+ * item to another of the owner's sessions (idempotent by `id`: the same id
+ * again answers the first handoff, created false). Only the owner's tap on
+ * the card hands it over.
+ */
+export function proposeSessionHandoff(
+  api: ApiClient,
+  body: OperationIO['propose_session_handoff']['body'],
+  options: Options = {},
+) {
+  return callOperation(api, 'propose_session_handoff', { body }, options);
+}
+
+/** GET /v1/session/handoffs/{id}: a handoff the session asked for, or was handed. */
+export function getSessionHandoff(api: ApiClient, id: string, options: Options = {}) {
+  return callOperation(api, 'get_session_handoff', { path: { id } }, options);
+}
+
+/** POST /v1/session/handoffs/{id}/close: withdraws the session's own proposal while its card is open. */
+export function closeSessionHandoff(api: ApiClient, id: string, options: Options = {}) {
+  return callOperation(api, 'close_session_handoff', { path: { id }, body: {} }, options);
+}
+
+/** POST /v1/session/handoffs/{id}/decline: hands a subtask handed to this session back, with why. */
+export function declineSessionHandoff(
+  api: ApiClient,
+  id: string,
+  reason: string,
+  options: Options = {},
+) {
+  return callOperation(api, 'decline_session_handoff', { path: { id }, body: { reason } }, options);
 }

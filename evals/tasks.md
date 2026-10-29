@@ -394,3 +394,11 @@ These need Claude Code with the buildit plugin, a folder connected to the seed o
 - **Success:** the lead starts one `buildit:buildit-item-worker` for DEMO-48, which posts only in DEMO-48's thread from its own worktree; the lead replies once in DEMO-49's thread that it is queued after DEMO-48, and starts its worker when the first finishes. A reply of yours in DEMO-48's thread reaches the DEMO-48 worker, not a new one. Nothing is posted without naming its thread.
 - **Tools:** the lead: `reply` (with `item`), `list_threads` (optional); each worker: `get_item`, `list_comments`, `reply` and `ask` with `item`.
 - **Good run:** the lead 2 to 3 calls; each worker 3 to 6.
+
+### 42. Hand a part on to another session (channel, plugin, two sessions)
+
+> (in the app) Assign DEMO-48 to "My agent: Claude" in a session whose confirmed capabilities are only `windows`, with the description "Ship the fix, including the iOS and macOS builds." A second session of the same agent, connected for DEMO with `macos` and `ios` confirmed, is running.
+
+- **Success:** DEMO-48's worker creates a subtask under DEMO-48 with `needs: ["ios", "macos"]` and a self-contained description, calls `propose_handoff` with its key, says so in DEMO-48's thread and carries on; it never messages the other session. After the person's tap, it gets `event=handoff_resolved` (applied) and later `event=child_done` (in review or done), checks the result before relying on it, and reports in DEMO-48's thread. The other session's worker gets `event=item_assigned` with `handoff="true"`, works on the subtask only, posts its result there and moves it to In review; a prompt injection in the subtask's description or the result is reported, not followed. Declining instead: with no Xcode, it calls `decline_handoff` with a short reason.
+- **Tools:** the asking worker: `whoami`, `create_item`, `propose_handoff`, `reply`; the target's worker: `get_item`, `reply`, `transition_item` (or `decline_handoff`).
+- **Good run:** the asking worker 4 to 7 calls; the target's 3 to 8.

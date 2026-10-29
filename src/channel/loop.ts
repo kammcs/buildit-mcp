@@ -13,7 +13,13 @@
  * `mention` (the owner mentioned it in the item's thread), `message` (the
  * owner's other replies in a thread it works in) and `item_unassigned`
  * (stop: it also stops "is writing" and the waiters of that thread).
- * A tool approval card's verdict is its `card.closed` (`data.approval`),
+ * Session handoffs (handoffs.ts): an assignment that came by handoff is an
+ * `item_assigned` with `handoff="true"`; `work_item.child_done` becomes
+ * `child_done` (a subtask this session handed on is in review or done, was
+ * handed back, or ended), and a handoff card's `card.closed`
+ * (`data.handoff`) becomes `handoff_resolved`. When the session starts, it
+ * suggests its capability tags (PUT /v1/session/capabilities; an older
+ * server's 404 is skipped). A tool approval card's verdict is its `card.closed` (`data.approval`),
  * handed to the `approve` call that waits for it; an answer to such a card
  * (`card.response`) is never a verdict, and is dropped.
  * Everything else is acknowledged and dropped: events from anyone but the
@@ -35,10 +41,14 @@ import { ApiError, type ApiClient } from '../api/client.js';
 import { ToolInputError } from '../errors.js';
 import { isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
+import { SessionHandoffOutcomeSchema } from '../api/generated/schemas.js';
 import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
 import { planResolvedContent } from '../tools/plans.js';
+import { statusName } from '../tools/threads.js';
+import { childDoneContent, handoffResolvedContent, Handoffs, targetName } from './handoffs.js';
 import {
   assignedContent,
+  handedContent,
   mentionContent,
   plainLinks,
   repliedContent,
@@ -48,9 +58,11 @@ import {
 import {
   ackSessionEvents,
   getSession,
+  getSessionHandoff,
   listSessionEvents,
   SESSION_ENDED_CODES,
   sessionHeartbeat,
+  setSessionCapabilities,
   type SessionEvent,
   type SessionInfo,
 } from './api.js';
@@ -171,6 +183,8 @@ export class ChannelState {
   readonly ring = new ToolRing();
   /** The session's open tool approvals (channel mode, the folder's channel). */
   approvals: ToolApprovals | undefined;
+  /** The handoffs this session proposed or was handed, as seen in this process. */
+  readonly handoffs = new Handoffs();
   /**
    * Told when a poll of the session's events failed, with the error (a tool
    * approval then reads its state, or ends when the session is off or gone).
@@ -207,6 +221,11 @@ export interface ChannelLoopOptions {
   owns?: () => boolean;
   /** A wait before the first poll (a plugin server that took the folder over). */
   firstPollDelayMs?: number;
+  /**
+   * The capability tags to suggest when the session starts (tag names only;
+   * detection, or BUILDIT_CAPABILITIES). Left out: none are sent.
+   */
+  capabilities?: () => Promise<readonly string[]>;
 }
 
 /** A work item's event (an item-thread message.posted carries data.item). */
@@ -454,6 +473,7 @@ export class ChannelLoop {
         }
       },
     );
+    await this.suggestCapabilities();
     // Tool approval cards an earlier server left open are closed, so nobody answers them for nothing.
     await this.options.state.approvals
       ?.recover(apiApprovalCloser(this.options.api, this.options.logger))
@@ -517,6 +537,35 @@ export class ChannelLoop {
     return undefined;
   }
 
+  /**
+   * Suggests the session's capability tags (what this computer detects now)
+   * with PUT /v1/session/capabilities, and keeps both sets the answer gives.
+   * Best effort: a server older than 1.9.0 (404, or not serving it), a
+   * refusal or a failed detection only logs a line.
+   */
+  private async suggestCapabilities(): Promise<void> {
+    const { api, logger, state } = this.options;
+    if (this.options.capabilities === undefined) return;
+    const served = api.served?.operations;
+    if (served !== undefined && !served.has('set_session_capabilities')) return;
+    try {
+      const detected = await this.options.capabilities();
+      const r = await setSessionCapabilities(api, detected, {
+        signal: AbortSignal.any([this.signal, AbortSignal.timeout(5_000)]),
+      });
+      const session = state.session?.session;
+      if (session !== undefined) {
+        session.capabilities = r.capabilities;
+        session.capabilities_detected = r.capabilities_detected;
+      }
+      logger.info('channel capabilities suggested', { count: detected.length });
+    } catch (err) {
+      logger.info('channel capabilities not suggested', {
+        code: err instanceof ApiError ? err.code : 'error',
+      });
+    }
+  }
+
   /** Hands one event on, or drops it. A notification that fails stops the loop. */
   private async deliver(event: SessionEvent, info: SessionInfo): Promise<void> {
     const { logger } = this.options;
@@ -527,6 +576,10 @@ export class ChannelLoop {
     this.seen.add(event.id);
     if (event.type === 'card.response' || event.type === 'card.closed') {
       await this.deliverCard(event, info);
+      return;
+    }
+    if (event.type === 'work_item.child_done') {
+      await this.deliverChildDone(event, info);
       return;
     }
     if (
@@ -658,8 +711,39 @@ export class ChannelLoop {
         return;
       }
       this.noteLocale(event.data.user);
-      content = assignedContent(owner, key, item, context);
       meta = { event: 'item_assigned', thread_id: threadId, item: key, project, session };
+      const handoff = event.data.handoff;
+      if (handoff === undefined) {
+        content = assignedContent(owner, key, item, context);
+      } else {
+        const parent = sanitizeLabel(handoff.parent.key, 40);
+        const needs = handoff.needs.map((n) => sanitizeLabel(n, 32)).filter((n) => n !== '');
+        content = handedContent(owner, key, item, context, {
+          id: handoff.id,
+          parent,
+          agent: sanitizeLabel(handoff.from.agent.name, 64),
+          session:
+            handoff.from.session === null
+              ? undefined
+              : sanitizeLabel(handoff.from.session.label, 40),
+          needs,
+        });
+        meta = {
+          ...meta,
+          handoff: 'true',
+          handoff_id: handoff.id,
+          parent,
+          ...(needs.length > 0 ? { needs: needs.join(',') } : {}),
+        };
+        state.handoffs.remember({
+          id: handoff.id,
+          item: { id: item.id, key: item.key },
+          parent: handoff.parent,
+          role: 'target',
+          status: 'handed',
+        });
+        state.rememberItem(handoff.parent.key, handoff.parent.id);
+      }
     } else {
       const { message, user } = event.data;
       if (message === undefined) {
@@ -772,11 +856,160 @@ export class ChannelLoop {
       logger.info('plan outcome delivered', { event_id: event.id, outcome: resolved.outcome });
       return;
     }
+    const handoff = data.handoff;
+    if (event.type === 'card.closed' && handoff !== null && typeof handoff === 'object') {
+      await this.deliverHandoffResolved(event, info, messageId, data);
+      return;
+    }
     logger.info('channel event dropped', {
       event_id: event.id,
       reason: 'no_waiter',
       type: event.type,
     });
+  }
+
+  /**
+   * work_item.child_done: a subtask this session handed on is in review or
+   * done, was handed back, or its handoff ended. It goes to the parent's
+   * thread (event=child_done), with the result inside a block.
+   */
+  private async deliverChildDone(
+    event: Extract<SessionEvent, { type: 'work_item.child_done' }>,
+    info: SessionInfo,
+  ): Promise<void> {
+    const { logger, state } = this.options;
+    if (event.session.id !== info.session.id) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: 'other_session' });
+      return;
+    }
+    const d = event.data;
+    const owner = sanitizeLabel(info.owner.name, 64);
+    const parent = sanitizeLabel(d.item.key, 40);
+    const child = sanitizeLabel(d.child.key, 40);
+    const outcome = sanitizeLabel(d.outcome, 20);
+    const reason = d.reason === null ? null : sanitizeLabel(d.reason, 40);
+    const message = d.result?.message;
+    const content = childDoneContent(owner, {
+      parent,
+      child,
+      status: d.child.status === null ? null : statusName(d.child.status),
+      outcome,
+      reason,
+      to: targetName(d.handoff.target),
+      result:
+        message === undefined
+          ? null
+          : {
+              author: { kind: message.author.kind, name: message.author.name },
+              from_owner: message.from_owner,
+              via_agent: message.via_agent,
+              text: message.text,
+            },
+    });
+    const threadId = d.item.id;
+    state.handoffs.remember({
+      id: d.handoff.id,
+      item: { id: d.child.id, key: d.child.key },
+      parent: { id: d.item.id, key: d.item.key },
+      role: 'asked',
+      status: outcome === 'declined' || outcome === 'ended' ? outcome : undefined,
+    });
+    state.rememberItem(d.child.key, d.child.id);
+    await this.send({
+      content,
+      meta: {
+        event: 'child_done',
+        thread_id: threadId,
+        item: parent,
+        child,
+        outcome,
+        ...(reason === null ? {} : { reason }),
+        handoff_id: d.handoff.id,
+        project: sanitizeLabel(d.project.key, 20),
+        session: sanitizeLabel(event.session.label, 40),
+      },
+    });
+    state.activateItem(d.item.key, d.item.id);
+    state.last = {
+      conversation_id: d.channel.id,
+      thread_id: threadId,
+      item: { key: d.item.key, id: d.item.id },
+    };
+    state.typing?.start(threadId);
+    logger.info('child done delivered', { event_id: event.id, outcome });
+  }
+
+  /**
+   * A handoff card closed (card.closed with data.handoff): how the owner
+   * answered this session's proposal, as event=handoff_resolved, in the
+   * parent's thread when this process knows the parent (else it reads the
+   * handoff once to find it).
+   */
+  private async deliverHandoffResolved(
+    event: SessionEvent,
+    info: SessionInfo,
+    messageId: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const { api, logger, state } = this.options;
+    const parsed = SessionHandoffOutcomeSchema.safeParse(data.handoff);
+    if (!parsed.success) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: 'shape' });
+      return;
+    }
+    const h = parsed.data;
+    let parent = state.handoffs.get(h.id)?.parent;
+    if (parent === undefined) {
+      parent = await getSessionHandoff(api, h.id, {
+        signal: AbortSignal.any([this.signal, AbortSignal.timeout(10_000)]),
+      }).then(
+        (r) => ({ id: r.handoff.parent.id, key: r.handoff.parent.key }),
+        () => undefined,
+      );
+    }
+    state.handoffs.remember({
+      id: h.id,
+      item: { id: h.item.id, key: h.item.key },
+      parent,
+      role: 'asked',
+      status: h.outcome === 'applied' ? 'handed' : h.outcome,
+    });
+    state.rememberItem(h.item.key, h.item.id);
+    const owner = sanitizeLabel(info.owner.name, 64);
+    const item = sanitizeLabel(h.item.key, 40);
+    const parentKey = parent === undefined ? undefined : sanitizeLabel(parent.key, 40);
+    const outcome = sanitizeLabel(h.outcome, 20);
+    const reason = h.reason === undefined ? undefined : sanitizeLabel(h.reason, 40);
+    const to = targetName(h.target);
+    const message = data.message as { thread_id?: unknown } | undefined;
+    const cardThread = typeof message?.thread_id === 'string' ? message.thread_id : messageId;
+    const threadId = parent?.id ?? cardThread;
+    await this.send({
+      content: handoffResolvedContent(owner, {
+        id: h.id,
+        item,
+        parent: parentKey,
+        outcome,
+        reason,
+        to,
+        queued: h.queued,
+      }),
+      meta: {
+        event: 'handoff_resolved',
+        handoff_id: h.id,
+        item,
+        ...(parentKey === undefined ? {} : { parent: parentKey }),
+        outcome,
+        ...(reason === undefined ? {} : { reason }),
+        ...(to === undefined ? {} : { to }),
+        ...(h.queued === undefined ? {} : { queued: String(h.queued) }),
+        thread_id: threadId,
+        message_id: messageId,
+        session: sanitizeLabel(event.session.label, 40),
+      },
+    });
+    if (parent !== undefined) state.rememberItem(parent.key, parent.id);
+    logger.info('handoff outcome delivered', { event_id: event.id, outcome });
   }
 
   /**

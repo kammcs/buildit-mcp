@@ -97,6 +97,7 @@ describe('whoami', () => {
         { key: 'OPS', name: 'Operations', id: uid(11) },
       ],
       features: { projects: true },
+      capabilities: null,
       rate_limits: {
         requests_per_minute: 120,
         user_requests_per_minute: 300,
@@ -107,7 +108,7 @@ describe('whoami', () => {
       server: {
         name: 'buildit-mcp',
         version: SERVER_VERSION,
-        api_version: '1.5.0',
+        api_version: '1.9.0',
         update_required: false,
         not_served: [],
       },

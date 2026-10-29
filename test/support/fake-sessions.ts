@@ -9,7 +9,10 @@
  * session's events with `postFrom`, answer or close the session's cards
  * (`answerCard`, `closeCardBy`), assign a work item to the agent and take
  * it off (`assignItem`, `unassignItem`), mention it or reply in an item's
- * thread (`itemMessage`), and `revoke` or `expire` a session.
+ * thread (`itemMessage`), and `revoke` or `expire` a session. For
+ * handoffs: the owner's answer to a proposal's card (`resolveHandoff`), a
+ * subtask handed to this session (`handOver`), and a handed subtask's
+ * result (`childDone`).
  */
 import { randomUUID } from 'node:crypto';
 
@@ -97,6 +100,29 @@ export interface FakeSession {
   items: Set<string>;
   /** The direct-message threads the owner wrote in (their root ids), oldest first. */
   dmThreads: string[];
+  /** The tags the owner confirmed, and the session's own suggestion. */
+  capabilities: string[];
+  capabilitiesDetected: string[];
+  /** Every PUT /v1/session/capabilities body's tags, in order. */
+  suggestions: string[][];
+  /** The handoffs this session proposed (asked) or was handed (target), by id. */
+  handoffs: Map<string, FakeHandoff>;
+}
+
+/** A handoff in the fake, as the API answers it, and which side this session is on. */
+export interface FakeHandoff {
+  role: 'asked' | 'target';
+  json: Record<string, unknown> & { id: string; status: string };
+  /** A decline's reason, as sent. */
+  declineReason?: string;
+}
+
+/** The item a handoff names (FakeApi looks it up in its store). */
+export interface FakeHandoffItem {
+  id: string;
+  key: string;
+  parent: { id: string; key: string } | null;
+  needs: string[];
 }
 
 /** One of the session's cards in the fake: open or closed, and its answers. */
@@ -128,7 +154,7 @@ export interface FakeApproval {
 }
 
 export interface FakeCard {
-  kind: 'question' | 'plan' | 'approval';
+  kind: 'question' | 'plan' | 'approval' | 'handoff';
   /** A tool approval card's state. */
   approval?: FakeApproval;
   threadId: string | null;
@@ -266,6 +292,8 @@ export interface FakeGrant {
   token?: string;
   /** The project keys the approval chose, when it changed the ones asked for. */
   approvedProjects?: string[];
+  /** The capability tags connect_start sent (undefined: none). */
+  capabilities?: string[];
   lastPolledAt?: number;
 }
 
@@ -274,6 +302,8 @@ export interface SessionHost {
   identities: Record<string, FakeIdentity>;
   now(): string;
   clockMs(): number;
+  /** An item by key or id, for handoffs (undefined: none). */
+  findItem?(ref: string): FakeHandoffItem | undefined;
 }
 
 export class SessionRefusal extends Error {
@@ -299,7 +329,12 @@ export class SessionRefusal extends Error {
       | 'too_many_open'
       | 'approvals_off'
       | 'outside_reach'
-      | 'unavailable',
+      | 'unavailable'
+      | 'handoff_not_allowed'
+      | 'not_parent_session'
+      | 'handoff_exists'
+      | 'handoff_closed'
+      | 'no_target',
     readonly details: Record<string, unknown> = {},
   ) {
     super(code);
@@ -343,6 +378,7 @@ export class FakeSessions {
       client: String(body.client),
       projects: (body.projects as string[]).map((p) => p.toUpperCase()),
       status: 'pending',
+      ...(Array.isArray(body.capabilities) ? { capabilities: body.capabilities as string[] } : {}),
     };
     this.grants.push(grant);
     return {
@@ -412,6 +448,8 @@ export class FakeSessions {
           approved_at: '2026-10-07T12:00:00.000Z',
           last_seen_at: null,
           expires_at: '2026-11-27T10:00:00.000Z',
+          capabilities: s.capabilities,
+          capabilities_detected: s.capabilitiesDetected,
         },
         agent: { id: SESSION_IDS.agent, name: 'Claude' },
         owner: { id: s.ownerId, name: s.ownerName },
@@ -910,6 +948,310 @@ export class FakeSessions {
     return { status: 200, body: { state: body.state, last_seen_at: this.host.now() } };
   }
 
+  // -- capabilities and handoffs ----------------------------------------------
+
+  /** The session a handoff card offers (made-up: another of the owner's sessions). */
+  static readonly TARGET = {
+    kind: 'session' as const,
+    agent: { id: SESSION_IDS.agent, name: 'Claude' },
+    session: { id: u(7301), label: 'mac-mini' },
+    online: true,
+  };
+
+  /** PUT /v1/session/capabilities: only the suggestion changes, never the confirmed tags. */
+  setCapabilities(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
+    const s = this.live(token);
+    const raw = body.detected as string[];
+    s.suggestions.push([...raw]);
+    const tags = [...new Set(raw.map((t) => t.trim().toLowerCase()))];
+    if (tags.some((t) => !/^[a-z0-9][a-z0-9+._-]{0,31}$/.test(t)) || tags.length > 20) {
+      throw new SessionRefusal('validation', {
+        fields: [{ path: 'detected', message: 'Not a capability tag, or more than 20.' }],
+      });
+    }
+    s.capabilitiesDetected = tags.sort();
+    return {
+      status: 200,
+      body: { capabilities: s.capabilities, capabilities_detected: s.capabilitiesDetected },
+    };
+  }
+
+  /** POST /v1/session/handoffs: a subtask of an item with a parent and Needs gets a card. */
+  proposeHandoff(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
+    const s = this.live(token);
+    const id = String(body.id);
+    const ref = String(body.item).replace(/^#/, '').toUpperCase();
+    const item = this.host.findItem?.(ref);
+    const replay = s.handoffs.get(id);
+    if (replay !== undefined) {
+      const same = item !== undefined && (replay.json.item as { id: string }).id === item.id;
+      if (!same) throw new SessionRefusal('idempotency_conflict');
+      return { status: 200, body: { handoff: replay.json, created: false } };
+    }
+    if (item === undefined) {
+      throw new SessionRefusal('not_found', { kind: 'item', ref: String(body.item) });
+    }
+    if (item.parent === null) throw new SessionRefusal('not_parent_session', { item_id: item.id });
+    if (item.needs.length === 0) {
+      throw new SessionRefusal('handoff_not_allowed', { reason: 'needs_missing' });
+    }
+    const live = [...s.handoffs.values()].find(
+      (h) =>
+        h.role === 'asked' &&
+        (h.json.item as { id: string }).id === item.id &&
+        (h.json.status === 'proposed' || h.json.status === 'handed'),
+    );
+    if (live !== undefined)
+      throw new SessionRefusal('handoff_exists', { handoff_id: live.json.id });
+    const cardId = randomUUID();
+    s.cards.set(cardId, {
+      kind: 'handoff',
+      threadId: item.id,
+      closedAt: null,
+      closedBy: null,
+      responses: [],
+      updates: [],
+    });
+    const json = {
+      id,
+      item: { id: item.id, key: item.key },
+      parent: item.parent,
+      needs: item.needs,
+      status: 'proposed',
+      card_message_id: cardId,
+      closes_at: '2026-10-14T15:00:00.000Z',
+      targets: [FakeSessions.TARGET],
+    };
+    s.handoffs.set(id, { role: 'asked', json });
+    return { status: 201, body: { handoff: json, created: true } };
+  }
+
+  private ownHandoff(s: FakeSession, id: string): FakeHandoff {
+    const h = s.handoffs.get(id);
+    if (h === undefined) throw new SessionRefusal('not_found', { kind: 'handoff', ref: id });
+    return h;
+  }
+
+  /** GET /v1/session/handoffs/{id} */
+  getHandoff(token: string, id: string): { status: number; body: unknown } {
+    const s = this.live(token);
+    return { status: 200, body: { handoff: this.ownHandoff(s, id).json } };
+  }
+
+  /** POST /v1/session/handoffs/{id}/close: the asking session withdraws its open proposal. */
+  closeHandoff(token: string, id: string): { status: number; body: unknown } {
+    const s = this.live(token);
+    const h = this.ownHandoff(s, id);
+    if (h.role !== 'asked') throw new SessionRefusal('not_found', { kind: 'handoff', ref: id });
+    if (h.json.status !== 'proposed') {
+      throw new SessionRefusal('handoff_closed', { handoff_id: id });
+    }
+    h.json.status = 'withdrawn';
+    h.json.outcome = 'withdrawn';
+    const card = s.cards.get(String(h.json.card_message_id));
+    if (card) {
+      card.closedAt = this.host.now();
+      card.closedBy = 'withdrawn';
+    }
+    return { status: 200, body: { handoff: h.json } };
+  }
+
+  /** POST /v1/session/handoffs/{id}/decline: the target hands the subtask back. */
+  declineHandoff(
+    token: string,
+    id: string,
+    body: Record<string, unknown>,
+  ): { status: number; body: unknown } {
+    const s = this.live(token);
+    const h = this.ownHandoff(s, id);
+    if (h.role !== 'target') throw new SessionRefusal('not_found', { kind: 'handoff', ref: id });
+    const reason = String(body.reason).trim();
+    if (reason.length === 0 || reason.length > 1000) {
+      throw new SessionRefusal('validation', {
+        fields: [{ path: 'reason', message: '1 to 1,000 characters.' }],
+      });
+    }
+    if (h.json.status !== 'handed') throw new SessionRefusal('handoff_closed', { handoff_id: id });
+    h.json.status = 'declined';
+    h.declineReason = reason;
+    return { status: 200, body: { handoff: h.json } };
+  }
+
+  /**
+   * The owner answers this session's proposal: the card closes with
+   * data.handoff (applied, with the target and queued; or another outcome).
+   */
+  resolveHandoff(
+    token: string,
+    id: string,
+    outcome: 'applied' | 'cancelled' | 'expired' | 'stale' | 'withdrawn' | 'closed',
+    options: { queued?: boolean; reason?: string; forget?: boolean } = {},
+  ): void {
+    const s = this.session(token);
+    const h = this.ownHandoff(s, id);
+    const cardId = String(h.json.card_message_id);
+    const card = s.cards.get(cardId);
+    if (!card) throw new Error('no card for that handoff');
+    const target = {
+      kind: 'session',
+      agent: FakeSessions.TARGET.agent,
+      session: FakeSessions.TARGET.session,
+    };
+    h.json.status = outcome === 'applied' ? 'handed' : outcome;
+    h.json.outcome = outcome;
+    if (outcome === 'applied') {
+      h.json.target = target;
+      h.json.queued = options.queued ?? false;
+    }
+    if (options.reason !== undefined) h.json.reason = options.reason;
+    card.closedAt = this.host.now();
+    card.closedBy =
+      outcome === 'applied' || outcome === 'cancelled'
+        ? 'owner'
+        : outcome === 'expired'
+          ? 'time'
+          : 'app';
+    this.event(s, 'card.closed', {
+      ...this.cardData(s, cardId),
+      closed_by: card.closedBy,
+      closed_at: card.closedAt,
+      respondents: outcome === 'applied' || outcome === 'cancelled' ? 1 : 0,
+      counts: null,
+      private: null,
+      handoff: {
+        id,
+        item: h.json.item,
+        outcome,
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+        ...(outcome === 'applied' ? { target, queued: options.queued ?? false } : {}),
+      },
+    });
+    // A server process that restarted knows nothing of it (tests of the lookup).
+    if (options.forget === true) s.handoffs.delete(id);
+  }
+
+  /**
+   * The owner hands this session a subtask another session proposed: a
+   * work_item.assigned with data.handoff; the session works in its thread.
+   */
+  handOver(
+    token: string,
+    item: FakeEventItem,
+    options: {
+      id?: string;
+      parent?: { id: string; key: string };
+      needs?: string[];
+      from?: { agent: { id: string; name: string }; session: { id: string; label: string } | null };
+      queued?: boolean;
+      context?: FakeContextMessage[];
+    } = {},
+  ): string {
+    const s = this.session(token);
+    const id = options.id ?? randomUUID();
+    const parent = options.parent ?? { id: u(7401), key: 'DEMO-1' };
+    const needs = options.needs ?? ['ios', 'macos'];
+    s.items.add(item.id);
+    s.handoffs.set(id, {
+      role: 'target',
+      json: {
+        id,
+        item: { id: item.id, key: item.key },
+        parent,
+        needs,
+        status: 'handed',
+        card_message_id: randomUUID(),
+        closes_at: '2026-10-14T15:00:00.000Z',
+        targets: [FakeSessions.TARGET],
+        target: {
+          kind: 'session',
+          agent: FakeSessions.TARGET.agent,
+          session: { id: s.id, label: s.label },
+        },
+        queued: options.queued ?? false,
+        outcome: 'applied',
+      },
+    });
+    this.event(s, 'work_item.assigned', {
+      ...this.itemData(item, true),
+      assignment: this.assignment(s),
+      context: this.context(s, options.context ?? []),
+      user: { id: s.ownerId, name: s.ownerName, is_guest: false, locale: 'en' },
+      handoff: {
+        id,
+        parent,
+        from: options.from ?? {
+          agent: { id: SESSION_IDS.agent, name: 'Claude' },
+          session: { id: u(7302), label: 'windows-desktop' },
+        },
+        needs,
+        queued: options.queued ?? false,
+      },
+    });
+    return id;
+  }
+
+  /**
+   * A subtask this session handed on reached In review or Done, was handed
+   * back, or its handoff ended: work_item.child_done about the parent.
+   */
+  childDone(
+    token: string,
+    parent: FakeEventItem,
+    child: { id: string; key: string; title: string },
+    outcome: 'in_review' | 'done' | 'declined' | 'ended',
+    options: {
+      handoffId?: string;
+      reason?: string;
+      result?: {
+        text: string;
+        author?: { kind: 'user' | 'app' | 'agent'; id: string | null; name: string };
+        viaAgent?: string | null;
+        fromOwner?: boolean;
+      } | null;
+    } = {},
+  ): void {
+    const s = this.session(token);
+    const data = this.itemData(parent, false);
+    const r = options.result;
+    this.event(s, 'work_item.child_done', {
+      channel: data.channel,
+      project: data.project,
+      item: data.item,
+      child: {
+        id: child.id,
+        key: child.key,
+        title: child.title,
+        status:
+          outcome === 'done'
+            ? { key: 'done', name: null, category: 'done' }
+            : outcome === 'in_review'
+              ? { key: 'in_review', name: null, category: 'started' }
+              : { key: 'todo', name: null, category: 'not_started' },
+      },
+      handoff: {
+        id: options.handoffId ?? randomUUID(),
+        needs: ['ios', 'macos'],
+        target: { agent: FakeSessions.TARGET.agent, session: FakeSessions.TARGET.session },
+      },
+      outcome,
+      reason: options.reason ?? null,
+      result:
+        r === undefined || r === null
+          ? null
+          : {
+              untrusted: true,
+              message: {
+                id: randomUUID(),
+                author: r.author ?? { kind: 'user', id: s.ownerId, name: s.ownerName },
+                from_owner: r.fromOwner ?? false,
+                via_agent: r.viaAgent === undefined ? 'Claude' : r.viaAgent,
+                text: r.text,
+                created_at: this.host.now(),
+              },
+            },
+    });
+  }
+
   // -- the person's side -----------------------------------------------------
 
   /** Threads that belong to another session of the agent (replies there are refused). */
@@ -940,6 +1282,12 @@ export class FakeSessions {
         bound_at: at,
         last_owner_message_at: at,
         open_cards: cards,
+        handoff: ((): { id: string; role: 'target'; status: string } | null => {
+          const h = [...s.handoffs.values()].find(
+            (x) => x.role === 'target' && (x.json.item as { id: string }).id === id,
+          );
+          return h === undefined ? null : { id: h.json.id, role: 'target', status: h.json.status };
+        })(),
       };
     });
     const dms = [...s.dmThreads].reverse().map((id) => ({
@@ -951,6 +1299,7 @@ export class FakeSessions {
       bound_at: at,
       last_owner_message_at: at,
       open_cards: 0,
+      handoff: null,
     }));
     return { status: 200, body: { threads: [...items, ...dms] } };
   }
@@ -1146,6 +1495,10 @@ export class FakeSessions {
       typingRefusals: 0,
       items: new Set(),
       dmThreads: [],
+      capabilities: [],
+      capabilitiesDetected: [],
+      suggestions: [],
+      handoffs: new Map(),
     };
     this.sessions.set(token, session);
     return session;

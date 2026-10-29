@@ -3,6 +3,7 @@
  */
 import { z } from 'zod';
 
+import { getSession } from '../channel/api.js';
 import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import { OPERATIONS, type OperationId } from '../api/generated/operations.js';
 import type { MetaResponse } from '../api/generated/schemas.js';
@@ -74,6 +75,23 @@ const OutputSchema = z.object({
       .number()
       .describe("The org's requests a minute, across all its tokens."),
   }),
+  capabilities: z
+    .object({
+      confirmed: z
+        .array(z.string())
+        .describe(
+          'The tags the person confirmed: what work with Needs can be handed to this session for.',
+        ),
+      suggested: z
+        .array(z.string())
+        .describe(
+          'What this computer detected and suggests, not confirmed yet (they never count).',
+        ),
+    })
+    .nullable()
+    .describe(
+      "An agent session's capability tags; null for a personal token or an API older than 1.9.0.",
+    ),
   server: z.object({
     name: z.string(),
     version: z.string(),
@@ -148,6 +166,30 @@ export const whoamiTool = defineTool({
       }),
     ]);
 
+    // An agent session's capability tags, read fresh (the person may have confirmed some since).
+    const session =
+      ctx.channel !== undefined && me.token.kind === 'session'
+        ? await getSession(ctx.api, options).then(
+            (info) => {
+              const channel = ctx.channel;
+              if (channel?.session?.session.id === info.session.id) channel.session = info;
+              return info;
+            },
+            () => ctx.channel?.session,
+          )
+        : undefined;
+    const confirmed = session?.session.capabilities;
+    const detected = session?.session.capabilities_detected;
+    const capabilities =
+      confirmed === undefined && detected === undefined
+        ? null
+        : {
+            confirmed: (confirmed ?? []).map((t) => sanitizeLabel(t, 32)),
+            suggested: (detected ?? [])
+              .map((t) => sanitizeLabel(t, 32))
+              .filter((t) => !(confirmed ?? []).includes(t)),
+          };
+
     const minVersion = meta?.min_mcp_version;
     const updateRequired =
       minVersion !== undefined && compareVersions(SERVER_VERSION, minVersion) < 0;
@@ -180,6 +222,7 @@ export const whoamiTool = defineTool({
         id: p.id,
       })),
       features: { projects: me.features.projects },
+      capabilities,
       rate_limits: {
         requests_per_minute: me.rate_limits.requests_per_minute,
         user_requests_per_minute: me.rate_limits.user_requests_per_minute,
@@ -235,6 +278,12 @@ export const whoamiTool = defineTool({
             : `only the ${s.limits.channels.length} channel(s) listed above, among those the user can see`
       }.`,
     ];
+    if (s.capabilities !== null) {
+      const { confirmed: mine, suggested } = s.capabilities;
+      lines.push(
+        `Capabilities of this session: ${mine.length > 0 ? mine.join(', ') : 'none confirmed'}${suggested.length > 0 ? `; suggested, not confirmed: ${suggested.join(', ')}` : ''}. Only confirmed ones count: work that needs others goes to another of the person's sessions (propose_handoff), or the person confirms them in buildIt.Social (Settings → Agents).`,
+      );
+    }
     if (s.org.test === true) {
       lines.push('This org is a test org: its data may be wiped and seeded by test tools.');
     }

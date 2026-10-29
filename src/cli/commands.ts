@@ -11,6 +11,7 @@ import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { ApiError, ApiClient } from '../api/client.js';
+import { detectCapabilities, type DetectionHost } from '../capabilities.js';
 import {
   connectPoll,
   connectStart,
@@ -55,6 +56,8 @@ export interface CommandIO {
   home?: string;
   /** For tests: the folder of the channel lock files status reads. */
   lockDir?: string;
+  /** For tests: the machine that capability detection reads. */
+  detection?: DetectionHost;
 }
 
 /** The answers that confirm: only an explicit yes. */
@@ -119,11 +122,28 @@ function sessionLines(info: SessionInfo): string[] {
   if (s.scopes.length > 0) {
     lines.push(`Scopes:   ${s.scopes.map((x) => plain(x, 40)).join(', ')}`);
   }
-  lines.push(
-    `Projects: ${s.project_ids.length}`,
-    `Expires:  ${plain(s.expires_at, 40)} (30 days after it was last used)`,
-  );
+  lines.push(`Projects: ${s.project_ids.length}`);
+  const capabilities = capabilitiesLine(s.capabilities, s.capabilities_detected);
+  if (capabilities !== undefined) lines.push(`Capabilities: ${capabilities}`);
+  lines.push(`Expires:  ${plain(s.expires_at, 40)} (30 days after it was last used)`);
   return lines;
+}
+
+/**
+ * A session's capability tags in words: the confirmed ones, then the
+ * suggestions not confirmed yet ("macos, ios; suggested, not confirmed:
+ * flutter"). Undefined when the server is older than 1.9.0 (no tags).
+ */
+export function capabilitiesLine(
+  confirmed: readonly string[] | undefined,
+  detected: readonly string[] | undefined,
+): string | undefined {
+  if (confirmed === undefined && detected === undefined) return undefined;
+  const tag = (t: string): string => plain(t, 32);
+  const mine = (confirmed ?? []).map(tag);
+  const pending = (detected ?? []).map(tag).filter((t) => !mine.includes(t));
+  const head = mine.length > 0 ? mine.join(', ') : 'none confirmed';
+  return pending.length > 0 ? `${head}; suggested, not confirmed: ${pending.join(', ')}` : head;
 }
 
 /** The commands to start Claude Code with this folder's session, after connecting. */
@@ -252,11 +272,16 @@ export async function runConnect(options: ConnectOptions, io: CommandIO): Promis
   }
 
   const api = apiFor(options, io);
+  // Only tag names leave the machine; detection never fails connect.
+  const capabilities =
+    options.capabilities ?? (await detectCapabilities(io.detection).catch(() => []));
   const body = {
     client: CONNECT_CLIENT,
     machine: io.machine ?? machineName(),
     label: options.label,
     projects: options.projects,
+    // A server older than 1.9.0 ignores it.
+    ...(capabilities.length > 0 ? { capabilities } : {}),
   };
   let start;
   try {
@@ -288,6 +313,11 @@ export async function runConnect(options: ConnectOptions, io: CommandIO): Promis
       `  ${link ?? '(the server sent no usable link)'}`,
       `and check that buildIt.Social shows this code: ${code}`,
       ...(page !== undefined && page !== link ? [`(Or open ${page} and type the code.)`] : []),
+      capabilities.length > 0
+        ? `Capabilities ${options.capabilities === undefined ? 'detected' : 'given'} on this computer: ${capabilities.join(', ')}. You confirm the ones that count when you approve (only the tag names were sent).`
+        : options.capabilities === undefined
+          ? 'No capabilities detected on this computer; you can add them when you approve.'
+          : 'No capabilities sent (--capabilities none).',
       `Approve it only if you started this. The code works for ${minutes} minutes.`,
       'Waiting for approval...',
     ].join('\n') + '\n',

@@ -252,12 +252,14 @@ describe('the tool list', () => {
   it('keeps the whole list within budget', async () => {
     const all = await client(TOKENS.full);
     const { tools } = await all.client.listTools();
-    expect(JSON.stringify(tools).length).toBeLessThan(160_000);
+    // 160,000 until the items' Needs (needs on create_item and update_item, and in every item).
+    expect(JSON.stringify(tools).length).toBeLessThan(161_500);
     const defaults = await client(TOKENS.full, { toolsets: DEFAULT_TOOLSETS });
     // About 16,000 tokens: 60,000 until get_item's feedback block (62,000),
     // then search_items' link and activity filters and find_users without a project (64,000),
-    // then the items' agent assignee (assign_item's agent, assignee_agent).
-    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(65_500);
+    // then the items' agent assignee (assign_item's agent, assignee_agent),
+    // then the items' Needs (65,500 before).
+    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(66_800);
   });
 });
 

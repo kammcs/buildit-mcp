@@ -329,6 +329,8 @@ export interface FakeItem {
   assigneeId: string | null;
   /** The assignee's personal agent working on it (then assigneeId is its owner). */
   assigneeAgentId?: string | null;
+  /** The item's Needs (capability tags, normalised). */
+  needs?: string[];
   reporterId: string;
   parentId: string | null;
   labels: string[];
@@ -830,9 +832,32 @@ const V12_OPS = new Set<OperationId>(['search_pages', 'list_members']);
 /** The operations APIs 1.3.0 and 1.4.0 added (compat.v14 false leaves them out). */
 const V14_OPS = new Set<OperationId>(['list_pins', 'list_emoji']);
 
+/** The operations API 1.9.0 added (compat.v19 false leaves them out). */
+export const V19_OPS = new Set<OperationId>([
+  'set_session_capabilities',
+  'propose_session_handoff',
+  'get_session_handoff',
+  'close_session_handoff',
+  'decline_session_handoff',
+]);
+
+/** An item's Needs as the API stores them: trimmed, lower case, unique, sorted; at most 10. */
+function normalNeeds(raw: unknown): string[] {
+  const tags = [
+    ...new Set((raw as string[]).map((t) => t.trim().toLowerCase()).filter((t) => t !== '')),
+  ];
+  const bad = tags.find((t) => !/^[a-z0-9][a-z0-9+._-]{0,31}$/.test(t));
+  if (bad !== undefined || tags.length > 10) {
+    throw new FakeError('validation', {
+      fields: [{ path: 'needs', message: 'Not a capability tag, or more than 10.' }],
+    });
+  }
+  return tags.sort();
+}
+
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.5.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.9.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -978,6 +1003,7 @@ export class FakeApi {
     servedList: true,
     v12: true,
     v14: true,
+    v19: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -1009,6 +1035,7 @@ export class FakeApi {
       servedList: true,
       v12: true,
       v14: true,
+      v19: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1200,7 +1227,8 @@ export class FakeApi {
         (route.id === 'list_project_members' && !this.compat.membersRoute) ||
         (OLDER_RELEASE_OPS.has(route.id) && !this.compat.releaseOps) ||
         (V12_OPS.has(route.id) && !this.compat.v12) ||
-        (V14_OPS.has(route.id) && !this.compat.v14);
+        (V14_OPS.has(route.id) && !this.compat.v14) ||
+        (V19_OPS.has(route.id) && !this.compat.v19);
       if (olderRoute) {
         this.send(res, {
           status: 404,
@@ -1466,6 +1494,7 @@ export class FakeApi {
         const l = p.labels.find((x) => x.name === name)!;
         return { id: l.id, name: l.name, color: null };
       }),
+      needs: i.needs ?? [],
       estimate: i.estimate,
       start_date: i.startDate,
       due_date: i.dueDate,
@@ -1611,6 +1640,7 @@ export class FakeApi {
       .filter((id) => this.compat.membersRoute || id !== 'list_project_members')
       .filter((id) => this.compat.v12 || !V12_OPS.has(id))
       .filter((id) => this.compat.v14 || !V14_OPS.has(id))
+      .filter((id) => this.compat.v19 || !V19_OPS.has(id))
       .sort();
   }
 
@@ -1810,6 +1840,20 @@ export class FakeApi {
         return this.sessionCheck(() =>
           this.sessions.closeApproval(call.token, call.params.id ?? '', call.body),
         );
+      case 'set_session_capabilities':
+        return this.sessionCheck(() => this.sessions.setCapabilities(call.token, call.body));
+      case 'propose_session_handoff':
+        return this.sessionCheck(() => this.sessions.proposeHandoff(call.token, call.body));
+      case 'get_session_handoff':
+        return this.sessionCheck(() => this.sessions.getHandoff(call.token, call.params.id ?? ''));
+      case 'close_session_handoff':
+        return this.sessionCheck(() =>
+          this.sessions.closeHandoff(call.token, call.params.id ?? ''),
+        );
+      case 'decline_session_handoff':
+        return this.sessionCheck(() =>
+          this.sessions.declineHandoff(call.token, call.params.id ?? '', call.body),
+        );
       default:
         throw new FakeError(
           'not_found',
@@ -1828,6 +1872,25 @@ export class FakeApi {
       },
       now: () => this.now(),
       clockMs: () => this.clock,
+      findItem: (ref) => {
+        const clean = ref.replace(/^#/, '');
+        const m = /^([A-Za-z][A-Za-z0-9]{1,5})-(\d+)$/.exec(clean);
+        const item = m
+          ? this.store.items.find(
+              (i) => lower(i.project) === lower(m[1] ?? '') && i.number === Number(m[2]),
+            )
+          : this.store.items.find((i) => i.id === lower(clean));
+        if (!item) return undefined;
+        const parent = item.parentId
+          ? this.store.items.find((x) => x.id === item.parentId)
+          : undefined;
+        return {
+          id: item.id,
+          key: `${item.project}-${item.number}`,
+          parent: parent ? { id: parent.id, key: `${parent.project}-${parent.number}` } : null,
+          needs: item.needs ?? [],
+        };
+      },
     });
   }
 
@@ -2243,6 +2306,7 @@ export class FakeApi {
       assignee_agent?: string;
       priority?: FakeItem['priority'];
       labels?: string[];
+      needs?: string[];
       estimate?: number;
       start_date?: string;
       due_date?: string;
@@ -2315,6 +2379,7 @@ export class FakeApi {
       reporterId: identity.user.id,
       parentId: parent?.id ?? null,
       labels: (b.labels ?? []).map((l) => this.label(p, l)),
+      needs: b.needs === undefined ? [] : normalNeeds(b.needs),
       estimate: b.estimate ?? null,
       startDate: b.start_date ?? null,
       dueDate: b.due_date ?? null,
@@ -2433,6 +2498,7 @@ export class FakeApi {
       const remove = (b.remove_labels as string[]).map((l) => this.label(p, l));
       item.labels = item.labels.filter((l) => !remove.includes(l));
     }
+    if (Array.isArray(b.needs)) item.needs = normalNeeds(b.needs);
     if ('estimate' in b) {
       if (b.estimate !== null && !p.estimateValues.includes(b.estimate as number)) {
         throw new FakeError('validation', {

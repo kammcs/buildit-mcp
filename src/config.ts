@@ -8,6 +8,7 @@
 import { basename, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
+import { parseCapabilitiesOption } from './capabilities.js';
 import { LOG_LEVELS, scrubString, type LogLevel } from './log.js';
 import {
   DEFAULT_TOOLSETS,
@@ -58,6 +59,11 @@ export interface ChannelConfig {
    * folder's channel over from a server without the plugin.
    */
   fromPlugin: boolean;
+  /**
+   * BUILDIT_CAPABILITIES: the capability tags to suggest when the session
+   * starts, instead of detecting them ([] for "none"); undefined detects.
+   */
+  capabilities?: string[];
 }
 
 /** How questions reach the person in channel mode (the plugin's settings). */
@@ -126,6 +132,8 @@ export interface ConnectOptions extends SessionCommandOptions {
   label: string;
   /** Save without asking "Is this you?" (--yes, for scripts; unsafe if anyone else could see the code). */
   yes: boolean;
+  /** --capabilities: the tags to suggest instead of detecting them ([] for "none"). */
+  capabilities?: string[];
 }
 
 export type SessionCommand = 'connect' | 'disconnect' | 'status';
@@ -199,6 +207,9 @@ Options (each also has an environment variable):
                             BUILDIT_APPROVAL_TIMEOUT_MINUTES
                                                       --channel: how long a tool approval card waits,
                                                       1 to 60 (default 60)
+                            BUILDIT_CAPABILITIES      --channel: the capability tags the session
+                                                      suggests when it starts (macos,ios, or none),
+                                                      instead of detecting them
   --allow-any-host          BUILDIT_ALLOW_ANY_HOST=true
                                                       Off loopback, serve without checking the
                                                       Host header (otherwise BUILDIT_ALLOWED_HOSTS
@@ -226,6 +237,11 @@ Options:
   --folder <path>           The folder (default: the working directory)
   --api-url <url>           BUILDIT_API_URL  Agent API base URL
                             (default ${DEFAULT_API_URL})
+  --capabilities <tags>     The capability tags to suggest (macos,ios), or
+                            none, instead of detecting them. Detection looks
+                            at the operating system and for known programs
+                            (flutter, docker, cargo, adb, Xcode) without
+                            running them, and sends only the tag names
   --yes                     Save without asking "Is this you?" once it is
                             approved. For scripts only: unsafe if anyone else
                             could have seen the code, since whoever approves
@@ -510,6 +526,15 @@ export function parseProjects(values: readonly string[]): string[] {
   return keys;
 }
 
+/** --capabilities or BUILDIT_CAPABILITIES, checked (ConfigError names what is wrong). */
+function capabilitiesOption(raw: string, what: string): string[] {
+  try {
+    return parseCapabilitiesOption(raw);
+  } catch (err) {
+    throw new ConfigError(`${what}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /** The --label given, checked; or the folder's name, made to fit. */
 export function sessionLabel(raw: string | undefined, folder: string): string {
   if (raw !== undefined) {
@@ -557,6 +582,7 @@ function parseSessionCommand(
           ? {
               project: { type: 'string', multiple: true },
               label: { type: 'string' },
+              capabilities: { type: 'string' },
               yes: { type: 'boolean' },
             }
           : {}),
@@ -589,6 +615,10 @@ function parseSessionCommand(
   const projectFlags = values.project;
   const projects = parseProjects(Array.isArray(projectFlags) ? projectFlags : []);
   const label = sessionLabel(typeof values.label === 'string' ? values.label : undefined, folder);
+  const capabilities =
+    typeof values.capabilities === 'string'
+      ? capabilitiesOption(values.capabilities, '--capabilities')
+      : undefined;
   return {
     kind: 'connect',
     options: {
@@ -597,6 +627,7 @@ function parseSessionCommand(
       projects,
       label,
       yes: values.yes === true,
+      ...(capabilities === undefined ? {} : { capabilities }),
       ...(note === undefined ? {} : { apiUrlNote: note }),
     },
   };
@@ -718,6 +749,10 @@ export function parseCli(
       apiUrlFlag: typeof values['api-url'] === 'string',
       fromPlugin: values['from-plugin'] === true || nonEmpty(env.CLAUDE_PLUGIN_ROOT) !== undefined,
     };
+    const rawCapabilities = nonEmpty(env.BUILDIT_CAPABILITIES);
+    if (rawCapabilities !== undefined) {
+      channel.capabilities = capabilitiesOption(rawCapabilities, 'BUILDIT_CAPABILITIES');
+    }
     const envToken = rawToken?.trim() ?? '';
     if (envToken.startsWith('buildit_ags_')) {
       if (/\s/.test(envToken)) {

@@ -610,6 +610,7 @@ The result carries version and description_version: pass them to update_item (if
       `assignee ${i.assignee_agent && i.assignee ? `${i.assignee_agent} · for ${personText(i.assignee)}` : personText(i.assignee)} · reporter ${personText(i.reporter)}`,
       [
         `labels ${i.labels.join(', ') || 'none'}`,
+        ...(i.needs.length > 0 ? [`needs ${i.needs.join(', ')}`] : []),
         `sprint ${i.sprint ?? 'none'}`,
         `fix release ${i.fix_release ?? 'none'}`,
       ].join(' · '),

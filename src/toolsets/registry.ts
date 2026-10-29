@@ -112,6 +112,11 @@ export interface ToolDefinition<
    * limited token with outside_limits), so it isn't listed for one.
    */
   unlimitedOnly?: boolean;
+  /**
+   * The API operations it needs (channel tools newer than some servers):
+   * not listed once /v1/meta shows the server doesn't serve them all.
+   */
+  requiresOperations?: readonly OperationId[];
   annotations: ToolHints;
   inputSchema: I;
   outputSchema: O;

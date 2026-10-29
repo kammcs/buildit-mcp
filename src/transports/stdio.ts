@@ -70,6 +70,8 @@ import {
 import { createAskTool, type AskOptions } from '../tools/ask.js';
 import { createReplyTool, createTurnEndedTool } from '../tools/reply.js';
 import { createListThreadsTool } from '../tools/threads.js';
+import { createHandoffTools } from '../tools/handoff.js';
+import { suggestedCapabilities } from '../capabilities.js';
 import { CATALOG } from '../toolsets/catalog.js';
 import type { ToolDefinition, ToolPolicy } from '../toolsets/registry.js';
 import { compareVersions, SERVER_VERSION } from '../version.js';
@@ -85,7 +87,7 @@ export interface StdioOptions {
   /** Channel mode: called once when the session can't continue (to clear its saved token). */
   onSessionEnded?: (reason: EndReason) => void | Promise<void>;
   /** For tests: the channel loop's poll interval and wait. */
-  channelLoop?: Pick<ChannelLoopOptions, 'intervalMs' | 'sleep'>;
+  channelLoop?: Pick<ChannelLoopOptions, 'intervalMs' | 'sleep' | 'capabilities'>;
   /**
    * Channel mode: whether this server holds the folder's channel lock
    * (default true). Without it there is no loop, and reply and ask say
@@ -384,11 +386,23 @@ function channelTools(
     createTurnEndedTool(state),
     createApproveTool(state, approve),
     ...createApprovalHookTools(state),
+    ...createHandoffTools(state),
   ].filter(
     (tool) =>
       (!policy.readOnly || tool.annotations.readOnlyHint || READ_ONLY_SAFE_HOOKS.has(tool.name)) &&
       !policy.excludeTools.includes(tool.name),
   );
+}
+
+/**
+ * The channel tools this server's API serves: a tool that needs operations
+ * the API's /v1/meta leaves out is not listed (when the API doesn't say,
+ * every tool is, and an older one says so when called).
+ */
+function servedTools(api: ApiClient, tools: readonly ToolDefinition[]): ToolDefinition[] {
+  const served = api.served?.operations;
+  if (served === undefined) return [...tools];
+  return tools.filter((t) => (t.requiresOperations ?? []).every((op) => served.has(op)));
 }
 
 export function startStdio(
@@ -459,12 +473,26 @@ export function startStdio(
       tools: base.tools.filter((t) => !extraTools.includes(t) || t.runsAfterSessionEnd === true),
     };
   };
+  // Read what the API serves at startup: it warns when the API needs a newer server, and
+  // channel tools newer than the server (the handoffs) are left out of the listing.
+  const metaRead = api
+    .getMeta()
+    .then((meta) => {
+      if (meta.min_mcp_version && compareVersions(SERVER_VERSION, meta.min_mcp_version) < 0) {
+        logger.warn('this buildit-mcp is older than the API supports; update it', {
+          version: SERVER_VERSION,
+          min_version: meta.min_mcp_version,
+        });
+      }
+    })
+    .catch(() => undefined);
   const identity = new StdioIdentity(
     async () => {
       if (isEnded()) return frozen();
       const listed = await resolveListedTools(identityFromApi(api), catalog, policy, logger);
-      const shown =
-        extraTools.length > 0 ? { ...listed, tools: [...listed.tools, ...extraTools] } : listed;
+      if (extraTools.length > 0) await metaRead;
+      const served = servedTools(api, extraTools);
+      const shown = served.length > 0 ? { ...listed, tools: [...listed.tools, ...served] } : listed;
       if (shown.identity === 'known') lastKnown = shown;
       // The session may have ended while the identity was read.
       return isEnded() ? frozen() : shown;
@@ -478,19 +506,6 @@ export function startStdio(
   // Read the identity at startup.
   void identity.refresh();
 
-  // Warn early when the API needs a newer server.
-  void api
-    .getMeta()
-    .then((meta) => {
-      if (meta.min_mcp_version && compareVersions(SERVER_VERSION, meta.min_mcp_version) < 0) {
-        logger.warn('this buildit-mcp is older than the API supports; update it', {
-          version: SERVER_VERSION,
-          min_version: meta.min_mcp_version,
-        });
-      }
-    })
-    .catch(() => undefined);
-
   // Everything the configuration allows is registered; the identity decides what is shown.
   const allowed = listedByPolicy(catalog, policy);
   const wire =
@@ -503,7 +518,9 @@ export function startStdio(
     async () => {
       const listed = await identity.refresh();
       const switchable = createSwitchableMcpServer({
-        tools: [...allowed.tools, ...extraTools],
+        // What /v1/meta said is known by now (refresh waited for it): the instructions leave out
+        // the channel tools this API doesn't serve.
+        tools: [...allowed.tools, ...servedTools(api, extraTools)],
         resources: allowed.resources,
         prompts: allowed.prompts,
         api,
@@ -543,6 +560,8 @@ export function startStdio(
             logger: logger.child({ component: 'channel' }),
             state,
             notify: (params) => mcp.notification({ method: CHANNEL_NOTIFICATION, params }),
+            // What this computer can do, as tag names only (BUILDIT_CAPABILITIES replaces it).
+            capabilities: () => suggestedCapabilities(config.channel?.capabilities),
             ...(options.channelLock === undefined
               ? {}
               : {

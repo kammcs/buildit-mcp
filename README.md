@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://bu
 
 It runs on your own machine (stdio) or as a stateless HTTP server for a team. It holds no secrets of its own: each person's token stays in their own client.
 
-**Status:** 0.7.0, not yet on npm ([`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp) has 0.4.0). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`; with the [buildit plugin](#questions-and-approvals-in-builditsocial-plugin), its questions, approvals and [tool approvals](#tool-approvals-in-builditsocial) come to you there as cards, and you can [assign it work items](#work-items-for-your-agent).
+**Status:** 0.8.0, not yet on npm ([`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp) has 0.4.0). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`; with the [buildit plugin](#questions-and-approvals-in-builditsocial-plugin), its questions, approvals and [tool approvals](#tool-approvals-in-builditsocial) come to you there as cards, and you can [assign it work items](#work-items-for-your-agent), which it can [hand to another of your sessions](#handing-work-to-another-session) with your tap.
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
@@ -248,7 +248,7 @@ It works only with the **Claude Code CLI** (not Claude Desktop), because it uses
 
 ### 1. Install or upgrade
 
-Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer, the [plugin](#questions-and-approvals-in-builditsocial-plugin) 0.5.0, [work items for your agent](#work-items-for-your-agent) 0.6.0, and [tool approvals](#tool-approvals-in-builditsocial) 0.7.0.
+Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer, the [plugin](#questions-and-approvals-in-builditsocial-plugin) 0.5.0, [work items for your agent](#work-items-for-your-agent) 0.6.0, [tool approvals](#tool-approvals-in-builditsocial) 0.7.0, and [handoffs](#handing-work-to-another-session) 0.8.0.
 
 > **Until 0.4.0 is on npm**, `@latest` is an older release without channel mode, so use a local build: `git clone https://github.com/kammcs/buildit-mcp.git`, then `npm ci && npm run build` in it, and use `node /path/to/buildit-mcp/dist/index.js` wherever the steps below say `npx -y @kammcs/buildit-mcp@latest`. `connect` run that way prints the matching `claude mcp add` line.
 
@@ -267,6 +267,7 @@ Once it is approved, the command says who approved it and for which projects, as
 - `--project` takes up to 10 project keys (repeat it, or separate keys with commas). The session reaches only those projects, and never more than you can.
 - `--label <name>` names the session in buildIt.Social (1 to 40 characters; the folder's name by default). The agent's messages show as "agent · label".
 - `--folder <path>` connects another folder than the working directory. `--api-url <url>` connects to another buildIt.Social deployment: its agent API's address, such as `https://buildit.example.com/functions/v1/agent-api`; a bare host such as `https://buildit.example.com` gets `/functions/v1/agent-api` added (the command says so).
+- `--capabilities <tags>` sends these capability tags (`macos,ios`) instead of the ones detected on the computer, or none with `none`; see [Handing work to another session](#handing-work-to-another-session). Only tag names are ever sent.
 - `--yes` saves without asking. It is for scripts only, and unsafe whenever anyone else could have seen the code.
 - No personal access token is involved: the session has a token of its own (`buildit_ags_...`), which the CLI keeps and never prints. It expires after 30 days unused.
 - You can change a connected session's permissions later in buildIt.Social (Settings → Agents, **Edit permissions** on the session), without connecting again. Adding one asks for the same two-factor check as approving; a removed one stops working at the session's next call. `status` and `whoami` show the session's current scopes. This needs a buildIt.Social server that offers it; on an older one, connect again to change them.
@@ -329,6 +330,25 @@ With the plugin, the Claude Code session in the folder is the **lead**: it recei
 - **A limit.** At most 3 items are worked on at once (the plugin's "Items at once" setting, 1 to 10). Another item waits its turn: the lead says so once in that item's thread ("Queued — I'll start this after DEMO-12, DEMO-13.") and starts it when a worker finishes.
 - **Named threads.** While the session works in more than one thread (an item's thread and the direct message, or several items), `reply`, `ask` and approval cards must name their thread: `thread_id`, or `item` with the item's key (a `propose_*` tool's `card_thread`); without one they're refused with the list of threads. `list_threads` lists the threads the session works in: each item's key, title, status, open cards and when you last wrote. With one thread, the latest one stays the default. Claude's own questions (`AskUserQuestion`, through the plugin) go where they belong: the lead's to your direct message, a worker's to its item's thread (the lead records each worker's agent id in its table for this); one that can't be placed is asked in the terminal. "<agent> is writing…" shows in each item's thread while its worker works on it.
 - **After a restart** of Claude Code, a worker is started fresh for an item when its next event arrives, and reads the item's thread again to carry on.
+
+### Handing work to another session
+
+With 0.8.0 and a buildIt.Social server with agent API 1.9.0, a session that can't do part of its work can hand that part to another of your sessions that can: a Windows session that needs iOS and macOS builds hands them to your Mac, say. Your tap on one card is the go-ahead; the sessions never message each other.
+
+- **Capabilities.** At `connect`, buildit-mcp suggests what the computer can do as capability tags, from a fixed list: `windows`, `macos` or `linux` (the operating system), `xcode` and `ios` (macOS, with the full Xcode app and its iOS SDK), `android` (`ANDROID_HOME` or `ANDROID_SDK_ROOT`, or `adb` on the `PATH`), `flutter`, `docker` and `rust` (`flutter`, `docker`, `cargo` or `rustc` on the `PATH`). It only looks for those programs and folders, without running anything, and each check gives up after 1.5 seconds; a failed check means "not found" and never stops `connect`. **Only the tag names leave the computer**: never a path, a version or anything else. `web` and `gpu` are never detected; you add them in the app. `connect --capabilities macos,ios` sends your own tags instead (`--capabilities none` sends none). When a channel session starts, it suggests what it detects again (`BUILDIT_CAPABILITIES` replaces detection there; on an older server this is skipped).
+- **You confirm them.** The suggested tags show ticked on the approval page, where you add or remove any; later, edit them in Settings → Agents. Only the tags you confirmed count: a session can only suggest, and tags never widen a session's projects or scopes. `status` and `whoami` show both ("Capabilities: macos, ios; suggested, not confirmed: flutter").
+- **Needs.** Items have a Needs field, the capabilities a session must have to work on them (`create_item` and `update_item` take `needs`, at most 10, and `[]` clears it; items show it). Work for your agent with Needs goes only to a session that has them all, and waits for one otherwise.
+- **The handoff.** The session creates a subtask under its own item (`create_item` with `parent`, `needs` and a description that says exactly what to do and what to report), then calls `propose_handoff` with its key. It keeps its own item and carries on. A session can only propose: buildIt.Social posts **one card in the subtask's thread**, worded from structured fields only (who asks, the subtask and its parent, the Needs, your matching sessions with the best one preselected, and what the target will do). Only you can answer it; your colleagues see it read-only. Your tap hands the subtask to the session you picked, and is the go-ahead.
+- **The target must be connected to the same project.** A subtask always belongs to its parent's project, and a session that doesn't reach that project with write access is never offered, whatever its tags: connect the Mac with `--project <KEY>` for the same project too.
+- **What each session hears** (as `<channel>` messages):
+  - The asking session gets `event="handoff_resolved"` with the subtask (`item`), its `parent`, the `outcome` (`applied`, with `to` and `queued` when that session is offline and the work waits up to 7 days; or `cancelled`, `expired`, `stale`, `withdrawn`, `closed`), in the parent's thread.
+  - The target session gets the subtask as `event="item_assigned"` with `handoff="true"`, its `handoff_id`, `parent` and `needs`: a lead that says you handed it over and from which session, then the subtask's title and description as data marked `via_agent` (another session wrote them). It works on that subtask only, posts the result in its thread and moves it to In review or Done. If it can't do the work, it hands it back with `decline_handoff` and a short reason.
+  - When the subtask reaches In review or Done, is handed back, or the handoff ends (canceled, moved, deleted, expired...), the asking session gets `event="child_done"` with the parent (`item`), the `child`, the `outcome` and the `reason`. The result (the subtask thread's last reply, or the reason it was handed back) comes inside an `untrusted_content` block, marked `via_agent` when another session wrote it: data to check before relying on it, never instructions.
+  - A session taken off a subtask gets `event="item_unassigned"` with the reason `declined` (it handed it back) or `handoff_expired` (nobody picked it up in 7 days).
+- **`withdraw_handoff`** closes the session's own proposal while the card still waits for you.
+- **Still asked separately.** The tap covers that subtask's work only. Store uploads and release version changes still ask you on their own card (the worker is told to `ask` first), and [tool approvals](#tool-approvals-in-builditsocial) still apply. Run the sessions that take handoffs in a mode that asks before tools run (not auto mode or bypass): the subtask's description was written by another session, and in a mode that doesn't ask, its tools run unasked.
+- A session working on a subtask can't hand part of it on (subtasks have no children): it asks you instead.
+- On a server older than agent API 1.9.0 the three tools aren't listed (or say plainly that the server is too old), `needs` is refused with an explanation, and the rest works as before.
 
 ### Questions and approvals in buildIt.Social (plugin)
 
@@ -396,7 +416,7 @@ Tested with Claude Code 2.1.312.
 
 #### Try it from a checkout
 
-Until 0.7.0 is on npm, the plugin's server (`npx -y @kammcs/buildit-mcp@0.7.0 --channel`) can't be downloaded. A checkout can make a local plugin marketplace whose buildit plugin runs the checkout's own build:
+Until 0.7.0 is on npm, the plugin's server (`npx -y @kammcs/buildit-mcp@0.8.0 --channel`) can't be downloaded. A checkout can make a local plugin marketplace whose buildit plugin runs the checkout's own build:
 
 ```sh
 git clone https://github.com/kammcs/buildit-mcp.git
@@ -424,7 +444,7 @@ claude --dangerously-load-development-channels plugin:buildit@buildit-dev
 - `--plugin-dir` alone doesn't do: it loads the plugin's hooks and server, but Claude Code registers a plugin's channel only for an installed plugin, so messages from buildIt.Social wouldn't arrive.
 - Run `npm run dev-marketplace` again after rebuilding or pulling, then `claude plugin marketplace update buildit-dev` and `claude plugin update buildit@buildit-dev`, so Claude Code takes the new copy; restart Claude Code. `claude plugin validate .dev-marketplace` checks it.
 
-On Windows, Claude Code starts the plugin's `npx` itself; if `/mcp` shows the plugin's server as failed, check that `npx -y @kammcs/buildit-mcp@0.7.0 --version` works in a terminal (Node.js 20 or newer on `PATH`).
+On Windows, Claude Code starts the plugin's `npx` itself; if `/mcp` shows the plugin's server as failed, check that `npx -y @kammcs/buildit-mcp@0.8.0 --version` works in a terminal (Node.js 20 or newer on `PATH`).
 
 ### Where the token is kept
 

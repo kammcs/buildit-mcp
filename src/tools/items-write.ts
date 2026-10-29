@@ -24,7 +24,10 @@ import {
   itemRef,
   ItemRefInput,
   KEEP_IMAGE_TITLES,
+  NEEDS_API,
+  NeedsInput,
   ProjectKeyInput,
+  requireApi,
   scopesOf,
   UserRefInput,
   wrapLines,
@@ -112,6 +115,7 @@ export const createItemTool = defineTool({
 - type, status, labels, sprint, fix_release and custom fields are names from describe_project. Without type, the project's default type at the parent's child level is used; without status, the workflow's initial status.
 - assignee: "me", an email or an exact display name. Mention people in the description as @email or @[Display Name].
 - assignee_agent: your agent works on it for you (you are then the assignee); a channel-mode session can't set it.
+- needs: capabilities a session must have to work on it, such as ["macos", "ios"]; an agent's work goes only to a session that has them.
 - position: {"before": "DEMO-3"} or {"after": "DEMO-3"}; default is last.
 - idempotency_key: retrying with the same key returns the first item instead of creating a second; one is generated and returned if you leave it out.
 Returns the new item's key and versions.`,
@@ -136,6 +140,7 @@ Returns the new item's key and versions.`,
     assignee_agent: AgentInput.optional(),
     priority: PriorityInput.optional(),
     labels: z.array(z.string().min(1).max(40)).max(100).optional().describe('Label names.'),
+    needs: NeedsInput.optional(),
     estimate: EstimateInput.optional(),
     start_date: DateInput.optional().describe('YYYY-MM-DD.'),
     due_date: DateInput.optional().describe('YYYY-MM-DD.'),
@@ -167,6 +172,7 @@ Returns the new item's key and versions.`,
     ) {
       throw new ToolInputError('position takes exactly one of before or after.');
     }
+    if (args.needs !== undefined) requireApi(ctx.api, NEEDS_API, 'needs');
     const key = args.idempotency_key ?? randomUUID();
     const r = await writeItem(() =>
       ctx.call('create_item', {
@@ -181,6 +187,7 @@ Returns the new item's key and versions.`,
           ...(args.assignee_agent !== undefined ? { assignee_agent: args.assignee_agent } : {}),
           ...(args.priority !== undefined ? { priority: args.priority } : {}),
           ...(args.labels !== undefined ? { labels: args.labels } : {}),
+          ...(args.needs !== undefined ? { needs: args.needs } : {}),
           ...(args.estimate !== undefined ? { estimate: args.estimate } : {}),
           ...(args.start_date !== undefined ? { start_date: args.start_date } : {}),
           ...(args.due_date !== undefined ? { due_date: args.due_date } : {}),
@@ -246,6 +253,7 @@ const UpdateInput = z.object({
   labels: z.array(z.string().min(1).max(40)).max(100).optional().describe('Replaces all labels.'),
   add_labels: z.array(z.string().min(1).max(40)).max(100).optional(),
   remove_labels: z.array(z.string().min(1).max(40)).max(100).optional(),
+  needs: NeedsInput.optional().describe('Replaces all Needs; [] clears them.'),
   estimate: EstimateInput.nullable().optional(),
   start_date: DateInput.nullable().optional(),
   due_date: DateInput.nullable().optional(),
@@ -295,6 +303,7 @@ function updateBody(args: z.infer<typeof UpdateInput>): UpdateItemBody {
     ...(args.labels !== undefined ? { labels: args.labels } : {}),
     ...(args.add_labels !== undefined ? { add_labels: args.add_labels } : {}),
     ...(args.remove_labels !== undefined ? { remove_labels: args.remove_labels } : {}),
+    ...(args.needs !== undefined ? { needs: args.needs } : {}),
     ...(args.estimate !== undefined ? { estimate: args.estimate } : {}),
     ...(args.start_date !== undefined ? { start_date: args.start_date } : {}),
     ...(args.due_date !== undefined ? { due_date: args.due_date } : {}),
@@ -318,6 +327,7 @@ export const updateItemTool = defineTool({
 - if_version (from get_item or search_items) refuses the update if someone changed the item since you read it.
 - Labels: labels replaces all; add_labels and remove_labels change some.
 - assignee_agent: as in create_item; null takes the agent off (a channel-mode session may only do that).
+- needs: as in create_item; it replaces them all, and [] clears them.
 - To change the status use transition_item; to only assign, assign_item is simpler.
 Returns the item with its new versions.`,
   scopes: scopesOf('update_item'),
@@ -332,6 +342,7 @@ Returns the item with its new versions.`,
   outputSchema: z.object({ item: ItemOutSchema }),
   async run(args, ctx) {
     const body = updateBody(args);
+    if (args.needs !== undefined) requireApi(ctx.api, NEEDS_API, 'needs');
     const r = await writeItem(() =>
       ctx.call('update_item', { path: { key: itemRef(args.item) }, body }),
     );

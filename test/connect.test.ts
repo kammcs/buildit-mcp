@@ -94,6 +94,14 @@ function harness(onWait: (n: number) => void = () => undefined, answer = 'y'): H
     store,
     logger: createLogger({ sink: () => undefined }),
     machine: 'DESKTOP-TEST',
+    // A stand-in computer for capability detection: Windows with docker on the PATH.
+    detection: {
+      platform: 'win32',
+      env: { Path: 'C:\\Tools', PATHEXT: '.EXE' },
+      isExecutable: (path) => Promise.resolve(path === 'C:\\Tools\\docker.exe'),
+      isDirectory: () => Promise.resolve(false),
+      readLink: () => Promise.resolve(undefined),
+    },
     // Claude Code's files: none in the test folder (status reads them).
     home: dir,
     sleep: (ms) => {
@@ -188,6 +196,56 @@ describe('connect', () => {
     expect(h.err()).toContain('could not be cancelled (internal)');
     expect(h.err()).toContain('revoke the session "demo-folder" in buildIt.Social');
     expect(await h.store.get(sessionKey(dir, api.url))).toBeUndefined();
+  });
+
+  it('sends the capabilities it detects, tag names only, and says so', async () => {
+    const h = harness((n) => {
+      if (n === 1) api.sessions.approve();
+    });
+    expect(await runConnect(options(), h.io)).toBe(0);
+    expect(api.sessions.grants[0]?.capabilities).toEqual(['docker', 'windows']);
+    const start = api.requests.find((r) => r.path === '/v1/connect/start');
+    expect(Object.keys(start?.body as object).sort()).toEqual([
+      'capabilities',
+      'client',
+      'label',
+      'machine',
+      'projects',
+    ]);
+    expect(h.out()).toContain(
+      'Capabilities detected on this computer: docker, windows. You confirm the ones that count when you approve (only the tag names were sent).',
+    );
+  });
+
+  it('sends --capabilities instead of detecting, and none for "none"', async () => {
+    const h = harness((n) => {
+      if (n === 1) api.sessions.approve();
+    });
+    expect(await runConnect(options({ capabilities: ['ios', 'macos'] }), h.io)).toBe(0);
+    expect(api.sessions.grants[0]?.capabilities).toEqual(['ios', 'macos']);
+    expect(h.out()).toContain('Capabilities given on this computer: ios, macos.');
+    await h.store.delete(sessionKey(dir, api.url));
+    const none = harness((n) => {
+      if (n === 1) api.sessions.approve();
+    });
+    expect(await runConnect(options({ capabilities: [] }), none.io)).toBe(0);
+    expect(api.sessions.grants[1]?.capabilities).toBeUndefined();
+    expect(none.out()).toContain('No capabilities sent (--capabilities none).');
+  });
+
+  it('connects even when detection fails', async () => {
+    const h = harness((n) => {
+      if (n === 1) api.sessions.approve();
+    });
+    h.io.detection = {
+      platform: 'linux',
+      env: { PATH: '/usr/bin' },
+      isExecutable: () => Promise.reject(new Error('boom')),
+      isDirectory: () => Promise.reject(new Error('boom')),
+      readLink: () => Promise.reject(new Error('boom')),
+    };
+    expect(await runConnect(options(), h.io)).toBe(0);
+    expect(api.sessions.grants[0]?.capabilities).toEqual(['linux']);
   });
 
   it('names the projects as approved, not as asked for', async () => {
@@ -430,7 +488,13 @@ describe('status', () => {
     expect(await runStatus({ apiUrl: api.url, folder: dir }, h.io)).toBe(0);
     expect(h.out()).toContain('Claude · demo-folder');
     expect(h.out()).toContain('Owner:    Test User');
+    expect(h.out()).toContain('Capabilities: none confirmed');
     expect(h.out()).toContain('in Test Keychain');
+    const s = api.sessions.session(SESSION_TOKENS.first);
+    s.capabilities = ['macos'];
+    s.capabilitiesDetected = ['flutter', 'macos'];
+    await runStatus({ apiUrl: api.url, folder: dir }, h.io);
+    expect(h.out()).toContain('Capabilities: macos; suggested, not confirmed: flutter');
     expect(h.out()).not.toContain(SESSION_TOKENS.first);
 
     api.sessions.revoke(SESSION_TOKENS.first);

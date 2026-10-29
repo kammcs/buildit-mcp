@@ -9,13 +9,13 @@
     "id": "1409250712"
   },
   "websiteUrl": "https://github.com/kammcs/buildit-mcp#readme",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@kammcs/buildit-mcp",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "transport": {
         "type": "stdio"
       },
@@ -46,7 +46,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/kammcs/buildit-mcp:0.7.0",
+      "identifier": "ghcr.io/kammcs/buildit-mcp:0.8.0",
       "transport": {
         "type": "stdio"
       },
