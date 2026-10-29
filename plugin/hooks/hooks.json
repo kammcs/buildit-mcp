@@ -1,5 +1,29 @@
 {
   "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:buildit:buildit",
+            "tool": "approve",
+            "input": {
+              "tool_name": "${tool_name}",
+              "tool_input": "${tool_input}",
+              "tool_use_id": "${tool_use_id}",
+              "agent_id": "${agent_id}",
+              "agent_type": "${agent_type}",
+              "session_id": "${session_id}",
+              "prompt_id": "${prompt_id}",
+              "suggestions": "${permission_suggestions}",
+              "mode": "${permission_mode}"
+            },
+            "timeout": 3600
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "AskUserQuestion",
@@ -17,6 +41,88 @@
               "agent_type": "${agent_type}"
             },
             "timeout": 3600
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:buildit:buildit",
+            "tool": "tool_seen",
+            "input": {
+              "tool_name": "${tool_name}",
+              "tool_input": "${tool_input}",
+              "tool_use_id": "${tool_use_id}",
+              "agent_id": "${agent_id}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:buildit:buildit",
+            "tool": "tool_done",
+            "input": {
+              "tool_use_id": "${tool_use_id}",
+              "agent_id": "${agent_id}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:buildit:buildit",
+            "tool": "tool_done",
+            "input": {
+              "tool_use_id": "${tool_use_id}",
+              "agent_id": "${agent_id}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:buildit:buildit",
+            "tool": "agent_done",
+            "input": {
+              "agent_id": "${agent_id}",
+              "agent_type": "${agent_type}"
+            },
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:buildit:buildit",
+            "tool": "prompt_typed",
+            "input": {
+              "prompt": "${prompt}"
+            },
+            "timeout": 30
           }
         ]
       }

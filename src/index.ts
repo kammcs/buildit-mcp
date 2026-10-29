@@ -4,9 +4,10 @@
  * a Claude Code channel with --channel; and the session commands
  * (connect, disconnect, status), which run in a terminal.
  */
+import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
-import { acquireChannelLock, type ChannelLock } from './channel/lock.js';
+import { acquireChannelLock, defaultLockDir, type ChannelLock } from './channel/lock.js';
 import { runConnect, runDisconnect, runStatus, type CommandIO } from './cli/commands.js';
 import { COMMAND_USAGE, ConfigError, parseApiUrl, parseCli, USAGE } from './config.js';
 import { createLogger } from './log.js';
@@ -162,6 +163,15 @@ async function main(): Promise<void> {
     const handle = startStdio(config, logger, {
       channelOwner,
       ...(channelLock === undefined ? {} : { channelLock }),
+      // The folder's open tool approvals, next to its lock files.
+      ...(config.channel !== undefined && channelOwner
+        ? {
+            approvalJournal: join(
+              defaultLockDir(),
+              `${sessionKey(config.channel.folder, config.apiUrl)}.approvals.json`,
+            ),
+          }
+        : {}),
       onSessionEnded: async (reason) => {
         if (reason !== 'token_revoked' && reason !== 'token_expired') return;
         if (clearSaved === undefined) return;

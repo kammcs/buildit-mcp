@@ -122,7 +122,9 @@ export function createReplyTool(state: ChannelState): ToolDefinition {
 
 /**
  * turn_ended: called by the plugin's Stop hook when Claude's turn ends, so
- * buildIt.Social stops showing that the agent is writing. Not for Claude.
+ * buildIt.Social stops showing that the agent is writing, and the main
+ * agent's tool approvals still open (the person answered "No" in the
+ * terminal, so the turn went on) close as no longer needed. Not for Claude.
  */
 export function createTurnEndedTool(state: ChannelState): ToolDefinition {
   return defineTool({
@@ -130,7 +132,7 @@ export function createTurnEndedTool(state: ChannelState): ToolDefinition {
     toolset: 'chat',
     title: 'Turn ended (plugin hook)',
     description:
-      "Called by the buildit plugin's Stop hook when your turn ends; it tells buildIt.Social that the agent is no longer writing. Not for you to call: it does nothing you need.",
+      "Called by the buildit plugin's Stop hook when your turn ends; it tells buildIt.Social that the agent is no longer writing, and closes your tool approvals that no longer need an answer. Not for you to call: it does nothing you need.",
     scopes: [],
     runsAfterSessionEnd: true,
     annotations: {
@@ -144,6 +146,8 @@ export function createTurnEndedTool(state: ChannelState): ToolDefinition {
     outputSchema: z.object({ stopped: z.number().describe('Threads that were working.') }),
     async run() {
       const working = state.typing?.working.length ?? 0;
+      // The main agent's open tool approvals are no longer needed.
+      state.approvals?.agentDone('');
       await state.typing?.stopAll();
       // The Stop hook reads the text as its output: an empty object lets the turn end.
       return { structured: { stopped: working }, text: '{}' };

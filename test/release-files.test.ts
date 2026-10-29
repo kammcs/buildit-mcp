@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_MAX_PARALLEL_ITEMS } from '../src/config.js';
+import { DEFAULT_APPROVAL_TIMEOUT_MINUTES, DEFAULT_MAX_PARALLEL_ITEMS } from '../src/config.js';
 
 const read = (path: string): unknown =>
   JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'));
@@ -84,7 +84,7 @@ describe('the Claude Code plugin', () => {
     version: string;
     mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
     channels: { server: string }[];
-    userConfig: Record<string, { default: unknown }>;
+    userConfig: Record<string, { default: unknown; type?: string; min?: number; max?: number }>;
   };
   const hooks = read('plugin/hooks/hooks.json') as {
     hooks: Record<
@@ -126,6 +126,15 @@ describe('the Claude Code plugin', () => {
       BUILDIT_ASK_TIMEOUT_MINUTES: '${user_config.ask_timeout_minutes}',
       BUILDIT_QUESTIONS_IN_APP: '${user_config.questions_in_app}',
       BUILDIT_MAX_PARALLEL_ITEMS: '${user_config.max_parallel_items}',
+      BUILDIT_APPROVALS_IN_APP: '${user_config.approvals_in_app}',
+      BUILDIT_APPROVAL_TIMEOUT_MINUTES: '${user_config.approval_timeout_minutes}',
+    });
+    expect(plugin.userConfig.approvals_in_app).toMatchObject({ type: 'boolean', default: true });
+    expect(plugin.userConfig.approval_timeout_minutes).toMatchObject({
+      type: 'number',
+      default: DEFAULT_APPROVAL_TIMEOUT_MINUTES,
+      min: 1,
+      max: 60,
     });
     expect(plugin.userConfig.ask_timeout_minutes?.default).toBe(60);
     expect(plugin.userConfig.questions_in_app?.default).toBe(true);
@@ -222,5 +231,93 @@ describe('the Claude Code plugin', () => {
       server: 'plugin:buildit:buildit',
       tool: 'turn_ended',
     });
+  });
+
+  it('asks tool approvals from PermissionRequest, and ends them from the other hooks', async () => {
+    const { HOOK_TIMEOUT_S } = await import('../src/transports/stdio.js');
+    const server = 'plugin:buildit:buildit';
+    const only = (event: string) => {
+      const entries = hooks.hooks[event] ?? [];
+      expect(entries, event).toHaveLength(1);
+      expect(entries[0]?.hooks, event).toHaveLength(1);
+      return entries[0];
+    };
+    const approve = only('PermissionRequest');
+    expect(approve?.matcher).toBe('*');
+    expect(approve?.hooks[0]).toEqual({
+      type: 'mcp_tool',
+      server,
+      tool: 'approve',
+      input: {
+        tool_name: '${tool_name}',
+        tool_input: '${tool_input}',
+        tool_use_id: '${tool_use_id}',
+        agent_id: '${agent_id}',
+        agent_type: '${agent_type}',
+        session_id: '${session_id}',
+        prompt_id: '${prompt_id}',
+        suggestions: '${permission_suggestions}',
+        mode: '${permission_mode}',
+      },
+      timeout: HOOK_TIMEOUT_S,
+    });
+    const seen = hooks.hooks.PreToolUse?.find((h) => h.matcher === '*');
+    expect(seen?.hooks).toEqual([
+      {
+        type: 'mcp_tool',
+        server,
+        tool: 'tool_seen',
+        input: {
+          tool_name: '${tool_name}',
+          tool_input: '${tool_input}',
+          tool_use_id: '${tool_use_id}',
+          agent_id: '${agent_id}',
+        },
+        timeout: 10,
+      },
+    ]);
+    for (const event of ['PostToolUse', 'PostToolUseFailure']) {
+      const entry = only(event);
+      expect(entry?.matcher, event).toBe('*');
+      expect(entry?.hooks[0], event).toEqual({
+        type: 'mcp_tool',
+        server,
+        tool: 'tool_done',
+        input: { tool_use_id: '${tool_use_id}', agent_id: '${agent_id}' },
+        timeout: 10,
+      });
+    }
+    expect(only('SubagentStop')?.hooks[0]).toEqual({
+      type: 'mcp_tool',
+      server,
+      tool: 'agent_done',
+      input: { agent_id: '${agent_id}', agent_type: '${agent_type}' },
+      timeout: 30,
+    });
+    // A channel message and a background task's report arrive as prompts too: the tool ignores them.
+    expect(only('UserPromptSubmit')?.hooks[0]).toEqual({
+      type: 'mcp_tool',
+      server,
+      tool: 'prompt_typed',
+      input: { prompt: '${prompt}' },
+      timeout: 30,
+    });
+    // Every hook calls a tool the server has.
+    const { createApprovalHookTools } = await import('../src/tools/approve.js');
+    const { ChannelState } = await import('../src/channel/loop.js');
+    const names = new Set([
+      'ask',
+      'approve',
+      'turn_ended',
+      ...createApprovalHookTools(new ChannelState()).map((t) => t.name),
+    ]);
+    for (const entries of Object.values(hooks.hooks)) {
+      for (const entry of entries) {
+        for (const hook of entry.hooks) {
+          expect(hook.server).toBe(server);
+          expect(names).toContain(hook.tool);
+        }
+      }
+    }
   });
 });

@@ -14,6 +14,9 @@
  * first poll after the post still finds it. It names the card's thread too,
  * so the waiters of a work item's thread can be told to stop when the
  * session is taken off the item (`closeThread`).
+ *
+ * A tool approval's waiter (`approve`) takes only its card's `card.closed`
+ * (the verdict is its `data.approval`); the loop drops answers to those cards.
  */
 import type { SessionEvent } from '../api/generated/schemas.js';
 
@@ -48,6 +51,14 @@ export function eventMessageId(event: SessionEvent): string | undefined {
   return typeof id === 'string' ? id : undefined;
 }
 
+/** How a tool approval ended: its status (and reason), and the hook's answer. */
+export interface ApprovalVerdict {
+  status: string;
+  reason?: string;
+  /** The PermissionRequest hook's output for it. */
+  text: string;
+}
+
 /** How many cards' outcomes are remembered for a repeated ask. */
 const REMEMBERED = 500;
 
@@ -80,6 +91,7 @@ export class CardWaiters {
   private readonly threads = new Map<string, string>();
   private readonly answers = new Bounded<Record<string, string>>();
   private readonly closings = new Bounded<string>();
+  private readonly verdicts = new Bounded<ApprovalVerdict>();
   private ended = false;
 
   constructor(private readonly stepMs: number = WAITER_STEP_MS) {}
@@ -130,6 +142,16 @@ export class CardWaiters {
   /** The answers accepted for a card, if this process saw them. */
   answersOf(messageId: string): Record<string, string> | undefined {
     return this.answers.get(messageId);
+  }
+
+  /** Remembers how a tool approval ended (the hook's answer for it). */
+  rememberApproval(messageId: string, verdict: ApprovalVerdict): void {
+    this.verdicts.set(messageId, verdict);
+  }
+
+  /** How a tool approval ended, if this process saw it: a repeated hook call gets the same answer. */
+  approvalOf(messageId: string): ApprovalVerdict | undefined {
+    return this.verdicts.get(messageId);
   }
 
   /** How a card closed (its closed_by), if this process saw it. */
