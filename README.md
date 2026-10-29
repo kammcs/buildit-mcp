@@ -331,7 +331,7 @@ With the plugin, the Claude Code session in the folder is the **lead**: it recei
 
 ### Questions and approvals in buildIt.Social (plugin)
 
-The **buildit plugin** for Claude Code (0.5.0) adds what the bare channel can't do, so you can work with the session from your phone as well as from the terminal:
+The **buildit plugin** for Claude Code (since 0.5.0; tool approvals since 0.7.0) adds what the bare channel can't do, so you can work with the session from your phone as well as from the terminal:
 
 - **Questions as cards.** When Claude asks you something (its `AskUserQuestion` tool), the question appears in your agent's conversation in buildIt.Social as a card, instead of in the terminal: one card per question: the question in full, a list of its choices with their details (several choices where Claude allows them), and a field to type your own answer instead. Claude gets all the answers together once you have answered every card. Your answer goes back to Claude, and the terminal doesn't ask. Claude can also ask you with the `ask` tool while it works on a message from the app.
 - **Approvals as cards.** A destructive or configuration change (a `propose_*` tool) is posted as a card with **Apply** and **Cancel**. buildIt.Social words the card from its own preview and applies the change itself when you tap Apply, as you through your agent; an agent session can never apply a change itself (`apply_plan` answers `plan_card_required`), so only your tap applies it. Claude learns the outcome (applied, cancelled, not applied because the items changed, failed, expired after 60 minutes, or unknown, when buildIt.Social couldn't confirm it, and then Claude checks the items) as a channel message.
@@ -389,7 +389,7 @@ With the plugin (0.7.0, and a buildIt.Social server with agent API 1.8.0), when 
 - **Where Claude Code doesn't ask, nothing is carded:** auto mode, `acceptEdits` for file edits, `bypassPermissions`, and calls your permission rules already allow. Allow the buildit tools first (`/permissions`: `mcp__plugin_buildit_buildit__*`), so replying and asking never need an approval.
 - **Turning it off.** The plugin setting "Tool approvals in buildIt.Social" (`approvals_in_app`) keeps approvals in the terminal; buildIt.Social can also turn them off for your agent. With `--read-only` the server doesn't offer `approve`, so that hook fails and Claude Code asks in the terminal (the other approval hooks stay, and do nothing).
 - **Remote Control.** If Remote Control is on for the session (Claude Code's `remoteControlAtStartup`), the Claude app asks you too: all of them ask, and the first answer wins. To turn Remote Control off for one folder, set `"remoteControlAtStartup": false` in that folder's `.claude/settings.local.json`.
-- **If the server stops** while a card waits, or a post's answer was lost (the card may exist anyway), the card is closed ("Closed."), by the next buildit server in the folder if need be, so you never approve a call nobody waits for.
+- **If the server stops** while a card waits (Claude Code cancels the waiting call first when it shuts down), or a post's answer was lost (the card may exist anyway), the card is closed ("Closed."), by the next buildit server in the folder if need be, so you never approve a call nobody waits for.
 
 Tested with Claude Code 2.1.312.
 
