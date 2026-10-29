@@ -2,6 +2,22 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.7.0] - 2026-10-29
+
+Built on version 1.8.0 of the agent API's contract. Tool approvals need a buildIt.Social server with agent API 1.8.0; on an older one the card can't be posted, and the terminal asks as before.
+
+### Tool approvals in buildIt.Social (plugin)
+
+- **When Claude Code would ask whether a tool may run**, the plugin asks the session's owner in buildIt.Social too, as a card: a new `PermissionRequest` hook (an `mcp_tool` hook on every tool, with a one-hour timeout) calls the server's new `approve` tool, which posts the card (`POST /v1/session/approvals`) and waits for the owner's tap. In this repository, "approval cards" still means the plan cards of the `propose_*` tools; these are **tool approvals**.
+- **The card** shows everyone in the thread only the tool and who asks, in buildIt.Social's own words; only the owner sees the details: Claude's description (Bash, PowerShell) and each part of the tool's input as plain text. Before they leave the computer, control, bidi and zero-width characters are removed, credential-shaped text is replaced with `[REDACTED]` (private key blocks, Authorization headers and bearer tokens, URL passwords, password and token options and assignments, well-known key formats, JSON Web Tokens, and the whole value of a part whose name says it is a secret), values over 3,500 characters are cut to their start and end, and the whole stays under 12 KB. A secret without a known shape is not caught.
+- **Where it goes:** the main session's in the direct message, an item worker's in its item's thread, any other subagent's in the direct message with the subagent named; an item thread that refuses it sends it to the direct message.
+- **The answers:** Approve; Allow for this session, when Claude Code suggests a session rule (only session-scoped allow rules and accepting edits are ever offered, never a settings file, a directory or another mode); Deny, which tells Claude not to retry and to ask what to do. Only the card's close event (or the approval's own state) is a verdict; answers to the card and messages never are.
+- **The wait:** the new plugin setting "Approval wait (minutes)" (`approval_timeout_minutes`, 1 to 60, default 60, at most a minute under the hook's hour); then the card expires and Claude is told nobody approved it in time. The session ending, or the item being taken from the agent, closes it and tells Claude no.
+- **Both ask, the first answer wins.** The terminal asks the main session at the same time; when it answers first, the card shows "Answered in the terminal" (from the new `PostToolUse` and `PostToolUseFailure` hooks, `tool_done`), and a "No" or Esc there shows "No longer needed" (from `Stop`, `turn_ended`, and the new `UserPromptSubmit` hook, `prompt_typed`, which ignores channel messages and background task reports). A subagent's open cards close when it stops (the new `SubagentStop` hook, `agent_done`). The new `PreToolUse` hook on every tool (`tool_seen`) lets a card name its tool call, so a hook that runs twice posts one card.
+- **Off switch:** the new plugin setting "Tool approvals in buildIt.Social" (`approvals_in_app`, default on), passed as `BUILDIT_APPROVALS_IN_APP` (with `BUILDIT_APPROVAL_TIMEOUT_MINUTES`). Without the plugin, with the setting off, with `--read-only`, or when buildIt.Social turns approvals off for the agent, Claude Code asks in the terminal only.
+- **Shutdown and restarts:** a server that stops closes its open cards; one that died leaves their ids in a journal next to the lock files, and the next server in the folder closes them ("Closed."), so the owner never approves a call nobody waits for.
+- The README's new "Tool approvals in buildIt.Social" says what shows, what is masked, the modes where nothing is carded (auto, acceptEdits for edits, bypass), allowing the buildit tools first, and that Remote Control asks too (`remoteControlAtStartup: false` in a folder's `.claude/settings.local.json` turns it off there). Tested with Claude Code 2.1.312, where a `PermissionRequest` hook waited 700 seconds as it should.
+
 ## [0.6.0] - 2026-10-28
 
 Built on version 1.7.0 of the agent API's contract. Work items for your agent need a buildIt.Social server with agent API 1.7.0; on an older one those events never come, and `assignee_agent` and `assign_item`'s `agent` are refused.
