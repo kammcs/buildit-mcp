@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "buildIt.Social agent API",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "summary": "The versioned API that AI agents (through buildit-mcp) use to work with an org's projects, pages and channels.",
     "description": "Every call runs as the token's owner, so the app's permissions, history and notifications apply. v1 only grows: new operations, optional request fields, response fields and enum values; clients must ignore what they don't know. A breaking change is /v2, with /v1 kept for 12 months. The oldest supported buildit-mcp is 0.1.0. Generated from the API's schemas; don't edit by hand."
   },
@@ -103,7 +103,7 @@
                   "$ref": "#/components/schemas/MetaResponse"
                 },
                 "example": {
-                  "api_version": "1.7.0",
+                  "api_version": "1.8.0",
                   "min_mcp_version": "0.1.0",
                   "deprecations": [],
                   "operations": [
@@ -9767,7 +9767,7 @@
           "session"
         ],
         "summary": "Change a session's message",
-        "description": "Changes a message this session posted: its text, its question card (the whole card; null removes it), or both. Answers already given stay; once the owner has answered, how the card takes answers can't change (422 card_invalid). A closed card can still be replaced by one without buttons or inputs, to show what was decided; making it answerable again is 409 card_closed. Another session's message, or a plan's card, is 403 not_own_message. A message in an item's thread can be changed while the session works there and reaches the project (else 404 not_found, or 403 outside_reach). Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
+        "description": "Changes a message this session posted: its text, its question card (the whole card; null removes it), or both. Answers already given stay; once the owner has answered, how the card takes answers can't change (422 card_invalid). A closed card can still be replaced by one without buttons or inputs, to show what was decided; making it answerable again is 409 card_closed. Another session's message, a plan's card or a tool approval's, is 403 not_own_message. A message in an item's thread can be changed while the session works there and reaches the project (else 404 not_found, or 403 outside_reach). Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
         "parameters": [
           {
             "name": "id",
@@ -9928,7 +9928,7 @@
           "session"
         ],
         "summary": "Close a session's question card",
-        "description": "Closes the question card on a message this session posted: it takes no more answers, and a card.closed event follows (closed_by app). Use it when the question no longer needs an answer (the wait is over, the request was cancelled). Closing a closed card is 409 card_closed; a message without a card is 422 validation; another session's message, or a plan's card, is 403 not_own_message. In an item's thread, as update_session_message. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
+        "description": "Closes the question card on a message this session posted: it takes no more answers, and a card.closed event follows (closed_by app). Use it when the question no longer needs an answer (the wait is over, the request was cancelled). Closing a closed card is 409 card_closed; a message without a card is 422 validation; another session's message, a plan's card or a tool approval's, is 403 not_own_message. In an item's thread, as update_session_message. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
         "parameters": [
           {
             "name": "id",
@@ -10063,7 +10063,7 @@
           "session"
         ],
         "summary": "Accept or reject the owner's answer",
-        "description": "Accepts or rejects the owner's answer to this session's question card (a card.response event), optionally with a note only they see under the card. Accepting closes the card in the same step. Rejecting keeps it open, and the owner may answer again (a new card.response). Send the event's revision: an answer the owner has changed since is 409 response_changed, and a closed card 409 card_closed. An answer to a plan's card is 403 not_own_message (the person's tap applies or cancels it). Only the owner's answers reach the session, in an item's thread too. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
+        "description": "Accepts or rejects the owner's answer to this session's question card (a card.response event), optionally with a note only they see under the card. Accepting closes the card in the same step. Rejecting keeps it open, and the owner may answer again (a new card.response). Send the event's revision: an answer the owner has changed since is 409 response_changed, and a closed card 409 card_closed. An answer to a plan's card or a tool approval's is 403 not_own_message (the person's tap decides those). Only the owner's answers reach the session, in an item's thread too. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
         "parameters": [
           {
             "name": "id",
@@ -10624,6 +10624,462 @@
           "needs_projects": false
         }
       }
+    },
+    "/v1/session/approvals": {
+      "post": {
+        "operationId": "post_session_approval",
+        "tags": [
+          "session"
+        ],
+        "summary": "Ask the owner to approve a tool call",
+        "description": "Posts a tool approval card for the agent's owner, in the direct message or in the thread of an item this session works in (`thread_id`, as post_session_message's). The card shows only the tool's name and who asks (the session, or its subagent), in fixed words of buildIt.Social; the description and the fields (the tool's input, credentials masked) reach only the owner, as plain text. Nothing in the request can choose the buttons or the answer: the card offers Approve, Deny, and Allow for this session when `suggestion` is sent, and only the owner's own tap in buildIt.Social answers it (no text reply, no token). The verdict arrives as a card.closed event with data.approval (ignore the card.response of the tap); get_session_approval reads it too. Close a card that no longer needs an answer (close_session_approval). Idempotent by `id`: a retry with the same id answers the first card and its current state (created: false), so send a UUIDv5 of the tool call. At most 10 open at once (409 too_many_open); 403 approvals_off when they are turned off for the agent or the server (ask in the terminal then). Counts only in the session's own window, 30 a minute by default (429 rate_limited, bucket session_approvals_per_minute). The body is at most 32 KB. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostSessionApprovalRequest"
+              },
+              "example": {
+                "id": "00000000-0000-4000-8000-000000000071",
+                "thread_id": "00000000-0000-4000-8000-00000000005a",
+                "tool_name": "Bash",
+                "tool_use_id": "toolu_01A2b3C4d5E6f7G8h9J0k1L2",
+                "description": "Run the tests",
+                "fields": [
+                  {
+                    "key": "command",
+                    "value": "npm test -- --runInBand"
+                  }
+                ],
+                "suggestion": {
+                  "type": "addRules",
+                  "rules": [
+                    {
+                      "toolName": "Bash",
+                      "ruleContent": "npm test:*"
+                    }
+                  ],
+                  "behavior": "allow",
+                  "destination": "session"
+                },
+                "wait_s": 3540
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Nothing new: a replay of an earlier call (created: false).",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostSessionApprovalResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostSessionApprovalResponse"
+                },
+                "example": {
+                  "created": true,
+                  "message": {
+                    "id": "00000000-0000-4000-8000-000000000071",
+                    "conversation_id": "00000000-0000-4000-8000-000000000067",
+                    "thread_id": "00000000-0000-4000-8000-00000000005a",
+                    "reply_to_id": null,
+                    "text": "Claude wants to use `Bash`",
+                    "created_at": "2026-10-07T14:30:00.000Z",
+                    "session": {
+                      "id": "00000000-0000-4000-8000-000000000066",
+                      "label": "demo-app"
+                    }
+                  },
+                  "approval": {
+                    "id": "00000000-0000-4000-8000-000000000071",
+                    "status": "open",
+                    "tool_name": "Bash",
+                    "thread_id": "00000000-0000-4000-8000-00000000005a",
+                    "created_at": "2026-10-07T14:30:00.000Z",
+                    "closes_at": "2026-10-07T15:30:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": null,
+        "x-buildit-required-scopes": [],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "forbidden",
+          "archived",
+          "not_found",
+          "idempotency_conflict",
+          "body_too_large",
+          "validation",
+          "rate_limited",
+          "internal",
+          "unavailable",
+          "session_token_required",
+          "agent_sessions_off",
+          "thread_other_session",
+          "not_own_message",
+          "thread_not_bound",
+          "outside_reach",
+          "approvals_off",
+          "too_many_open"
+        ],
+        "x-buildit-auth": "session",
+        "x-buildit-hints": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": false,
+          "needs_projects": false
+        }
+      }
+    },
+    "/v1/session/approvals/{id}": {
+      "get": {
+        "operationId": "get_session_approval",
+        "tags": [
+          "session"
+        ],
+        "summary": "A tool approval's state",
+        "description": "Where a tool approval this session posted stands: open, or how it ended. Use it when an event may have been missed; the card.closed event with data.approval is the usual way to learn the verdict. Another session's approval, or none, is 404 not_found (kind approval). Counts in the session's approval window (session_approvals_per_minute). Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "A tool approval this session posted (its id).",
+            "schema": {
+              "$ref": "#/components/schemas/Uuid"
+            },
+            "example": "00000000-0000-4000-8000-000000000071"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetSessionApprovalResponse"
+                },
+                "example": {
+                  "approval": {
+                    "id": "00000000-0000-4000-8000-000000000071",
+                    "status": "approved",
+                    "tool_name": "Bash",
+                    "thread_id": "00000000-0000-4000-8000-00000000005a",
+                    "created_at": "2026-10-07T14:30:00.000Z",
+                    "closes_at": "2026-10-07T15:30:00.000Z",
+                    "decided_at": "2026-10-07T14:31:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": null,
+        "x-buildit-required-scopes": [],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "not_found",
+          "validation",
+          "rate_limited",
+          "internal",
+          "unavailable",
+          "session_token_required",
+          "agent_sessions_off"
+        ],
+        "x-buildit-auth": "session",
+        "x-buildit-hints": {
+          "read_only": true,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": false
+        }
+      }
+    },
+    "/v1/session/approvals/{id}/close": {
+      "post": {
+        "operationId": "close_session_approval",
+        "tags": [
+          "session"
+        ],
+        "summary": "Close a tool approval",
+        "description": "Closes a tool approval this session posted that no longer needs the owner: answered in the terminal (answered_elsewhere), no longer needed (stale), cancelled or left open by a restart (interrupted), the session shutting down (session_ended), or the session's own wait over (expired). The card then shows that, and a card.closed event follows. Answers its final state, whoever ended it: if the owner answered first, their verdict (closing again changes nothing). Works in a read-only org too. Another session's approval is 404 not_found (kind approval). Counts in the session's approval window (session_approvals_per_minute). Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "A tool approval this session posted (its id).",
+            "schema": {
+              "$ref": "#/components/schemas/Uuid"
+            },
+            "example": "00000000-0000-4000-8000-000000000071"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Tool"
+          },
+          {
+            "$ref": "#/components/parameters/X-Buildit-Client"
+          },
+          {
+            "$ref": "#/components/parameters/X-Request-Id"
+          }
+        ],
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseSessionApprovalRequest"
+              },
+              "example": {
+                "reason": "answered_elsewhere"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloseSessionApprovalResponse"
+                },
+                "example": {
+                  "approval": {
+                    "id": "00000000-0000-4000-8000-000000000071",
+                    "status": "answered_elsewhere",
+                    "tool_name": "Bash",
+                    "thread_id": "00000000-0000-4000-8000-00000000005a",
+                    "created_at": "2026-10-07T14:30:00.000Z",
+                    "closes_at": "2026-10-07T15:30:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "x-buildit-scope": null,
+        "x-buildit-required-scopes": [],
+        "x-buildit-errors": [
+          "bad_request",
+          "token_invalid",
+          "token_expired",
+          "token_revoked",
+          "token_suspended",
+          "agent_access_off",
+          "not_found",
+          "body_too_large",
+          "validation",
+          "rate_limited",
+          "internal",
+          "unavailable",
+          "session_token_required",
+          "agent_sessions_off"
+        ],
+        "x-buildit-auth": "session",
+        "x-buildit-hints": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "needs_projects": false
+        }
+      }
     }
   },
   "components": {
@@ -10707,7 +11163,7 @@
         }
       },
       "Error403": {
-        "description": "An error: agent_access_off, projects_off, scope_missing, outside_limits, forbidden, archived, session_token_required, agent_sessions_off, not_own_message, thread_not_bound, outside_reach. The operation's x-buildit-errors lists the codes it can answer.",
+        "description": "An error: agent_access_off, projects_off, scope_missing, outside_limits, forbidden, archived, session_token_required, agent_sessions_off, not_own_message, thread_not_bound, outside_reach, approvals_off. The operation's x-buildit-errors lists the codes it can answer.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"
@@ -10752,7 +11208,7 @@
         }
       },
       "Error409": {
-        "description": "An error: conflict, idempotency_conflict, plan_used, plan_stale, release_archived, release_not_released, thread_other_session, card_closed, response_changed, plan_awaits_owner, plan_card_exists, plan_card_required. The operation's x-buildit-errors lists the codes it can answer.",
+        "description": "An error: conflict, idempotency_conflict, plan_used, plan_stale, release_archived, release_not_released, thread_other_session, card_closed, response_changed, plan_awaits_owner, plan_card_exists, plan_card_required, too_many_open. The operation's x-buildit-errors lists the codes it can answer.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"
@@ -11096,6 +11552,105 @@
           "applied_at",
           "result"
         ]
+      },
+      "ApprovalField": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The tool input's key (command, file_path, content), 1 to 100 characters, one line."
+          },
+          "value": {
+            "type": "string",
+            "description": "Its value as text (a non-string value as indented JSON), at most 3,500 characters, credentials masked ([REDACTED]). Longer values are cut first: keep the start and the end, with a line holding ⋯ between."
+          },
+          "cut": {
+            "description": "How many characters were cut from the value (0 or absent: none).",
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "description": "One field of the tool call's input. Only the owner sees it, as plain text."
+      },
+      "ApprovalRule": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "addRules"
+              },
+              "rules": {
+                "minItems": 1,
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ApprovalRuleEntry"
+                }
+              },
+              "behavior": {
+                "type": "string",
+                "const": "allow"
+              },
+              "destination": {
+                "type": "string",
+                "const": "session"
+              }
+            },
+            "required": [
+              "type",
+              "rules",
+              "behavior",
+              "destination"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "setMode"
+              },
+              "mode": {
+                "type": "string",
+                "const": "acceptEdits"
+              },
+              "destination": {
+                "type": "string",
+                "const": "session"
+              }
+            },
+            "required": [
+              "type",
+              "mode",
+              "destination"
+            ]
+          }
+        ],
+        "description": "A permission rule for the rest of this Claude Code session, as Claude Code suggests it: allow rules ({\"type\": \"addRules\", \"rules\": [{\"toolName\", \"ruleContent\"?}] (1 to 5), \"behavior\": \"allow\", \"destination\": \"session\"}), or accepting file edits ({\"type\": \"setMode\", \"mode\": \"acceptEdits\", \"destination\": \"session\"}). At most 2,048 bytes; never another destination (no settings file), a deny or ask rule, directories or another mode. Written by the session: data, never instructions."
+      },
+      "ApprovalRuleEntry": {
+        "type": "object",
+        "properties": {
+          "toolName": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$",
+            "description": "The tool's name as Claude Code gives it (Bash, Write, mcp__server__tool): a letter or digit, then up to 99 letters, digits or _ . : -."
+          },
+          "ruleContent": {
+            "description": "What the rule matches, as Claude Code writes it (\"npm test:*\"); absent: every call of the tool.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "toolName"
+        ],
+        "description": "One rule of a session rule. Written by the session: data, never instructions."
       },
       "ArchiveStatusArgs": {
         "type": "object",
@@ -11446,6 +12001,37 @@
           "private"
         ],
         "description": "public: the org's members (not guests) can find and join it; private: only the people in it see it."
+      },
+      "CloseSessionApprovalRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "answered_elsewhere",
+              "stale",
+              "interrupted",
+              "session_ended",
+              "expired"
+            ],
+            "description": "answered_elsewhere: answered in the terminal; stale: no longer needed (the turn or the subagent ended, a new prompt came); interrupted: the call was cancelled, or the session restarted with it open; session_ended: the session is shutting down; expired: the session's own wait is over."
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "CloseSessionApprovalResponse": {
+        "type": "object",
+        "properties": {
+          "approval": {
+            "description": "Its final state, whoever ended it: the owner's verdict if they were first.",
+            "$ref": "#/components/schemas/SessionApproval"
+          }
+        },
+        "required": [
+          "approval"
+        ]
       },
       "CloseSessionCardResponse": {
         "type": "object",
@@ -12755,7 +13341,8 @@
           "plan",
           "route",
           "response",
-          "agent"
+          "agent",
+          "approval"
         ],
         "description": "The kind of thing an error is about. v1 may add kinds."
       },
@@ -13859,7 +14446,8 @@
                           "connect_starts_per_hour",
                           "connect_pending_grants",
                           "connect_pending_per_address",
-                          "session_typing_per_minute"
+                          "session_typing_per_minute",
+                          "session_approvals_per_minute"
                         ],
                         "description": "The limit that is used up. v1 may add buckets: handle an unknown one by retry_after alone."
                       }
@@ -14650,6 +15238,79 @@
                   "message",
                   "details"
                 ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "const": "approvals_off"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "hint": {
+                    "description": "The code's stable one-line hint: what to do next.",
+                    "type": "string"
+                  },
+                  "details": {
+                    "type": "object",
+                    "properties": {
+                      "by": {
+                        "type": "string",
+                        "enum": [
+                          "agent",
+                          "platform"
+                        ],
+                        "description": "Who turned them off. v1 may add values."
+                      }
+                    },
+                    "required": [
+                      "by"
+                    ]
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "details"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "const": "too_many_open"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "hint": {
+                    "description": "The code's stable one-line hint: what to do next.",
+                    "type": "string"
+                  },
+                  "details": {
+                    "type": "object",
+                    "properties": {
+                      "open": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "How many are open."
+                      }
+                    },
+                    "required": [
+                      "open"
+                    ]
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "details"
+                ]
               }
             ]
           }
@@ -15172,6 +15833,17 @@
           "links",
           "comments",
           "comments_next_cursor"
+        ]
+      },
+      "GetSessionApprovalResponse": {
+        "type": "object",
+        "properties": {
+          "approval": {
+            "$ref": "#/components/schemas/SessionApproval"
+          }
+        },
+        "required": [
+          "approval"
         ]
       },
       "GetWorkflowResponse": {
@@ -17799,6 +18471,108 @@
           "plan"
         ]
       },
+      "PostSessionApprovalRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The approval's id, yours: a UUIDv5 of the tool call, so a retry of the same call answers the first card (created: false, with its current state); the same id for another message is 409 idempotency_conflict, and another session's is 403 not_own_message.",
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "thread_id": {
+            "description": "Post it in this thread: a top-level message of the direct message, or the id of an item whose thread this session works in (as post_session_message's). Absent or null: a new top-level message of the direct message.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tool_name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$",
+            "description": "The tool's name as Claude Code gives it (Bash, Write, mcp__server__tool): a letter or digit, then up to 99 letters, digits or _ . : -."
+          },
+          "tool_use_id": {
+            "description": "Claude Code's tool_use_id, when known.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "agent": {
+            "description": "A subagent asks, not the session's lead. Leave it out for the lead.",
+            "type": "object",
+            "properties": {
+              "ref": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.:-]{1,200}$",
+                "description": "Claude Code's agent_id of the subagent that asks."
+              },
+              "type": {
+                "description": "Its agent_type (Explore, Plan): the card says the subagent asks.",
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,99}$"
+              }
+            },
+            "required": [
+              "ref"
+            ]
+          },
+          "description": {
+            "description": "What the call does, as Claude Code describes it (a Bash command's description), 1 to 1,000 characters.",
+            "type": "string"
+          },
+          "fields": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApprovalField"
+            },
+            "description": "The tool call's input, a field per top-level key, at most 20 (count the rest in more_fields)."
+          },
+          "more_fields": {
+            "description": "How many more fields the input had (0 or absent: none).",
+            "type": "integer",
+            "minimum": 0
+          },
+          "suggestion": {
+            "description": "The session rule Claude Code suggests: the owner then sees \"Allow for this session\" too.",
+            "$ref": "#/components/schemas/SessionRule"
+          },
+          "wait_s": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 3540,
+            "description": "How long the session waits for the owner, in seconds (60 to 3,540). The card expires a minute later."
+          }
+        },
+        "required": [
+          "id",
+          "tool_name",
+          "fields",
+          "wait_s"
+        ]
+      },
+      "PostSessionApprovalResponse": {
+        "type": "object",
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False for a retry of an earlier post (the same id): approval is its current state."
+          },
+          "message": {
+            "$ref": "#/components/schemas/SessionMessage"
+          },
+          "approval": {
+            "$ref": "#/components/schemas/SessionApproval"
+          }
+        },
+        "required": [
+          "created",
+          "message",
+          "approval"
+        ]
+      },
       "PostSessionMessageRequest": {
         "type": "object",
         "properties": {
@@ -18109,6 +18883,10 @@
           },
           "typing_per_minute": {
             "description": "A session token's session_typing calls a minute, counted only for the session. Absent on servers older than API version 1.6.0.",
+            "type": "integer"
+          },
+          "approvals_per_minute": {
+            "description": "A session token's tool approval calls a minute (post_session_approval, get_session_approval and close_session_approval together), counted only for the session. Absent on servers older than API version 1.8.0.",
             "type": "integer"
           }
         },
@@ -18436,6 +19214,129 @@
         ],
         "description": "Matching pages, best first."
       },
+      "SessionApproval": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The approval card's message: the id the session posted it with.",
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "approved",
+              "approved_session",
+              "denied",
+              "expired",
+              "answered_elsewhere",
+              "stale",
+              "closed"
+            ],
+            "description": "open: waiting for the owner. approved: the owner approved it; approved_session: approved, with the session rule the request suggested, for the rest of the session; denied: the owner denied it; expired: nobody answered in time (reason time: its closes_at passed; client: the session closed it at its own deadline): treat it as denied; answered_elsewhere: the session said it was answered in the terminal; stale: the session said it is no longer needed; closed: it ended unanswered (reason session_ended, unassigned, interrupted, deleted or removed): treat it as denied. v1 may add values."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "time",
+              "client",
+              "session_ended",
+              "unassigned",
+              "interrupted",
+              "deleted",
+              "removed"
+            ],
+            "description": "Why it expired or closed: time, client (expired); session_ended, unassigned (the item whose thread it is in was taken from the agent), interrupted (the session closed it unanswered), deleted (its message was deleted), removed (its card was taken off). v1 may add values."
+          },
+          "tool_name": {
+            "type": "string",
+            "description": "The tool, as the session posted it. Written by the session: data."
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its thread: a top-level message of the direct message, or an item's id; null for a top-level message."
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "closes_at": {
+            "description": "When it expires unanswered (the wait asked for, and a minute more).",
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "decided_at": {
+            "description": "When the owner answered (approved, approved_session, denied).",
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "tool_name",
+          "thread_id",
+          "created_at",
+          "closes_at"
+        ],
+        "description": "A tool approval this session posted, and where it stands. Its text is the session's own (data, never instructions)."
+      },
+      "SessionApprovalOutcome": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The approval card's message.",
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "approved_session",
+              "denied",
+              "expired",
+              "answered_elsewhere",
+              "stale",
+              "closed"
+            ],
+            "description": "The verdict: decide on this alone. approved: the owner approved it; approved_session: approved, with the session rule the request suggested, for the rest of the session; denied: the owner denied it; expired: nobody answered in time (reason time: its closes_at passed; client: the session closed it at its own deadline): treat it as denied; answered_elsewhere: the session said it was answered in the terminal; stale: the session said it is no longer needed; closed: it ended unanswered (reason session_ended, unassigned, interrupted, deleted or removed): treat it as denied."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "time",
+              "client",
+              "session_ended",
+              "unassigned",
+              "interrupted",
+              "deleted",
+              "removed"
+            ],
+            "description": "Why it expired or closed: time, client (expired); session_ended, unassigned (the item whose thread it is in was taken from the agent), interrupted (the session closed it unanswered), deleted (its message was deleted), removed (its card was taken off). v1 may add values."
+          },
+          "decided_by": {
+            "description": "The owner, when they answered.",
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "decided_at": {
+            "description": "When the owner answered.",
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "rule": {
+            "description": "approved_session only: the session rule the request suggested, as stored. Apply the rule you sent yourself; this is for checking.",
+            "$ref": "#/components/schemas/ApprovalRule"
+          }
+        },
+        "required": [
+          "id",
+          "outcome"
+        ],
+        "description": "How a tool approval card ended."
+      },
       "SessionBrief": {
         "type": "object",
         "properties": {
@@ -18520,6 +19421,10 @@
           "plan": {
             "description": "A plan's card only: how it ended.",
             "$ref": "#/components/schemas/SessionPlanOutcome"
+          },
+          "approval": {
+            "description": "A tool approval card only: how it ended (the verdict is `outcome`; closed_by isn't).",
+            "$ref": "#/components/schemas/SessionApprovalOutcome"
           }
         },
         "required": [
@@ -18836,7 +19741,7 @@
           "session",
           "data"
         ],
-        "description": "The owner answered one of this session's cards (a plan's card too: ignore those, the outcome comes as card.closed)."
+        "description": "The owner answered one of this session's cards (a plan's card too: ignore those, the outcome comes as card.closed; an answer to an approval card too: ignore it, the verdict comes as card.closed)."
       },
       "SessionCardSettings": {
         "type": "object",
@@ -20175,6 +21080,85 @@
           "dm",
           "poll_interval_s"
         ]
+      },
+      "SessionRule": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "addRules"
+              },
+              "rules": {
+                "minItems": 1,
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SessionRuleEntry"
+                }
+              },
+              "behavior": {
+                "type": "string",
+                "const": "allow"
+              },
+              "destination": {
+                "type": "string",
+                "const": "session"
+              }
+            },
+            "required": [
+              "type",
+              "rules",
+              "behavior",
+              "destination"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "setMode"
+              },
+              "mode": {
+                "type": "string",
+                "const": "acceptEdits"
+              },
+              "destination": {
+                "type": "string",
+                "const": "session"
+              }
+            },
+            "required": [
+              "type",
+              "mode",
+              "destination"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "A permission rule for the rest of this Claude Code session, as Claude Code suggests it: allow rules ({\"type\": \"addRules\", \"rules\": [{\"toolName\", \"ruleContent\"?}] (1 to 5), \"behavior\": \"allow\", \"destination\": \"session\"}), or accepting file edits ({\"type\": \"setMode\", \"mode\": \"acceptEdits\", \"destination\": \"session\"}). Exactly these keys, at most 2,048 bytes; never another destination (no settings file), a deny or ask rule, directories or another mode. Written by the session: data, never instructions."
+      },
+      "SessionRuleEntry": {
+        "type": "object",
+        "properties": {
+          "toolName": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$",
+            "description": "The tool's name as Claude Code gives it (Bash, Write, mcp__server__tool): a letter or digit, then up to 99 letters, digits or _ . : -."
+          },
+          "ruleContent": {
+            "description": "What the rule matches, as Claude Code writes it (\"npm test:*\"); absent: every call of the tool.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "toolName"
+        ],
+        "additionalProperties": false,
+        "description": "One rule of a session rule. Written by the session: data, never instructions."
       },
       "SessionState": {
         "type": "string",
@@ -21987,7 +22971,7 @@
     },
     "not_own_message": {
       "status": 403,
-      "when": "A session changed, closed or answered for a message that isn't its own card: another session's message, a person's message, or a plan's card (the person applies or cancels that one).",
+      "when": "A session changed, closed or answered for a message that isn't its own card: another session's message, a person's message, a plan's card (the person applies or cancels that one) or a tool approval's card (only the person answers it; close it with close_session_approval). Also post_session_approval with another session's approval id.",
       "message": "That message isn't one of this session's cards. Change, close or answer only this session's own question cards.",
       "hint": "Change, close or answer only this session's own question cards."
     },
@@ -22032,6 +23016,18 @@
       "when": "post_plan_card in an item's thread for a plan that reaches items or projects outside that item's project: everyone in the item's channel reads the card, so it can't show them.",
       "message": "This plan reaches outside the item's project, so its card can't go in this item's thread. Post it in the direct message (leave thread_id out), or propose a plan for this project only.",
       "hint": "Post the plan's card in the direct message, or keep the plan to the thread's project."
+    },
+    "approvals_off": {
+      "status": 403,
+      "when": "post_session_approval while tool approvals are off: for this agent (by agent: its owner, or an org owner or admin, turned them off in buildIt.Social) or on this server (by platform). Approvals already posted still end normally.",
+      "message": "Tool approvals in buildIt.Social are off. Ask in the terminal instead.",
+      "hint": "Ask in the terminal; don't retry until the person turns tool approvals back on."
+    },
+    "too_many_open": {
+      "status": 409,
+      "when": "post_session_approval while 10 of this session's tool approvals are still open.",
+      "message": "This session has too many tool approvals waiting. Close the ones no longer needed (close_session_approval), or ask in the terminal.",
+      "hint": "Close the tool approvals that no longer need an answer, or ask in the terminal."
     }
   }
 }
