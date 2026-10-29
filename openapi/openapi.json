@@ -18509,9 +18509,9 @@
                 "description": "Claude Code's agent_id of the subagent that asks."
               },
               "type": {
-                "description": "Its agent_type (Explore, Plan): the card says the subagent asks.",
+                "description": "Its agent_type (Explore, Plan): the card says the subagent asks. A letter or digit, then up to 63 letters, digits or _ . : -.",
                 "type": "string",
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,99}$"
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$"
               }
             },
             "required": [
@@ -19233,7 +19233,7 @@
               "stale",
               "closed"
             ],
-            "description": "open: waiting for the owner. approved: the owner approved it; approved_session: approved, with the session rule the request suggested, for the rest of the session; denied: the owner denied it; expired: nobody answered in time (reason time: its closes_at passed; client: the session closed it at its own deadline): treat it as denied; answered_elsewhere: the session said it was answered in the terminal; stale: the session said it is no longer needed; closed: it ended unanswered (reason session_ended, unassigned, interrupted, deleted or removed): treat it as denied. v1 may add values."
+            "description": "open: waiting for the owner. approved: the owner approved it; approved_session: approved, with the session rule the request suggested, for the rest of the session; denied: the owner denied it; expired: nobody answered in time (reason time: its closes_at passed; client: the session closed it at its own deadline): treat it as denied; answered_elsewhere: the session said it was answered in the terminal; stale: the session said it is no longer needed; closed: it ended unanswered (reason session_ended, unassigned, interrupted, deleted, removed or switched_off): treat it as denied. v1 may add values."
           },
           "reason": {
             "type": "string",
@@ -19244,9 +19244,10 @@
               "unassigned",
               "interrupted",
               "deleted",
-              "removed"
+              "removed",
+              "switched_off"
             ],
-            "description": "Why it expired or closed: time, client (expired); session_ended, unassigned (the item whose thread it is in was taken from the agent), interrupted (the session closed it unanswered), deleted (its message was deleted), removed (its card was taken off). v1 may add values."
+            "description": "Why it expired or closed: time, client (expired); session_ended, unassigned (the item whose thread it is in was taken from the agent), interrupted (the session closed it unanswered), deleted (its message was deleted), removed (its card was taken off), switched_off (tool approvals or agents were turned off for the agent or the org). v1 may add values."
           },
           "tool_name": {
             "type": "string",
@@ -19303,7 +19304,7 @@
               "stale",
               "closed"
             ],
-            "description": "The verdict: decide on this alone. approved: the owner approved it; approved_session: approved, with the session rule the request suggested, for the rest of the session; denied: the owner denied it; expired: nobody answered in time (reason time: its closes_at passed; client: the session closed it at its own deadline): treat it as denied; answered_elsewhere: the session said it was answered in the terminal; stale: the session said it is no longer needed; closed: it ended unanswered (reason session_ended, unassigned, interrupted, deleted or removed): treat it as denied."
+            "description": "The verdict: decide on this alone. approved: the owner approved it; approved_session: approved, with the session rule the request suggested, for the rest of the session; denied: the owner denied it; expired: nobody answered in time (reason time: its closes_at passed; client: the session closed it at its own deadline): treat it as denied; answered_elsewhere: the session said it was answered in the terminal; stale: the session said it is no longer needed; closed: it ended unanswered (reason session_ended, unassigned, interrupted, deleted, removed or switched_off): treat it as denied."
           },
           "reason": {
             "type": "string",
@@ -19314,9 +19315,10 @@
               "unassigned",
               "interrupted",
               "deleted",
-              "removed"
+              "removed",
+              "switched_off"
             ],
-            "description": "Why it expired or closed: time, client (expired); session_ended, unassigned (the item whose thread it is in was taken from the agent), interrupted (the session closed it unanswered), deleted (its message was deleted), removed (its card was taken off). v1 may add values."
+            "description": "Why it expired or closed: time, client (expired); session_ended, unassigned (the item whose thread it is in was taken from the agent), interrupted (the session closed it unanswered), deleted (its message was deleted), removed (its card was taken off), switched_off (tool approvals or agents were turned off for the agent or the org). v1 may add values."
           },
           "decided_by": {
             "description": "The owner, when they answered.",
@@ -19390,9 +19392,10 @@
               "session_ended",
               "deleted",
               "removed",
-              "unassigned"
+              "unassigned",
+              "switched_off"
             ],
-            "description": "time: its closes_at passed; app: the session closed it (or accepted an answer); owner: the person dismissed it; session_ended: the session ended first; deleted: its message was deleted; removed: the card was taken off its message; unassigned: the item whose thread it is in was taken from the agent (work_item.unassigned). v1 may add values."
+            "description": "time: its closes_at passed; app: the session closed it (or accepted an answer); owner: the person dismissed it, or answered a tool approval; session_ended: the session ended first; deleted: its message was deleted; removed: the card was taken off its message; unassigned: the item whose thread it is in was taken from the agent (work_item.unassigned); switched_off: tool approvals or agents were turned off for the agent or the org. v1 may add values."
           },
           "closed_at": {
             "$ref": "#/components/schemas/Timestamp"

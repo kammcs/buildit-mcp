@@ -1383,7 +1383,16 @@ export const SessionApprovalSchema = z.strictObject({
     'closed',
   ]),
   reason: z
-    .enum(['time', 'client', 'session_ended', 'unassigned', 'interrupted', 'deleted', 'removed'])
+    .enum([
+      'time',
+      'client',
+      'session_ended',
+      'unassigned',
+      'interrupted',
+      'deleted',
+      'removed',
+      'switched_off',
+    ])
     .optional(),
   tool_name: z.string(),
   thread_id: UuidSchema.nullable(),
@@ -2018,7 +2027,7 @@ export const PostSessionApprovalRequestSchema = z.strictObject({
   agent: z
     .strictObject({
       ref: z.string().regex(new RegExp('^[A-Za-z0-9_.:-]{1,200}$', 'u')),
-      type: z.string().regex(new RegExp('^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,99}$', 'u')).optional(),
+      type: z.string().regex(new RegExp('^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$', 'u')).optional(),
     })
     .optional(),
   description: z.string().optional(),
@@ -2067,7 +2076,16 @@ export const SessionApprovalOutcomeSchema = z.strictObject({
     'closed',
   ]),
   reason: z
-    .enum(['time', 'client', 'session_ended', 'unassigned', 'interrupted', 'deleted', 'removed'])
+    .enum([
+      'time',
+      'client',
+      'session_ended',
+      'unassigned',
+      'interrupted',
+      'deleted',
+      'removed',
+      'switched_off',
+    ])
     .optional(),
   decided_by: UuidSchema.optional(),
   decided_at: TimestampSchema.optional(),
@@ -2729,7 +2747,16 @@ export const SessionCardClosedDataSchema = z.strictObject({
   channel: z.strictObject({ id: UuidSchema, name: z.string().nullable() }),
   message: SessionCardMessageSchema,
   card: SessionCardSettingsSchema,
-  closed_by: z.enum(['time', 'app', 'owner', 'session_ended', 'deleted', 'removed', 'unassigned']),
+  closed_by: z.enum([
+    'time',
+    'app',
+    'owner',
+    'session_ended',
+    'deleted',
+    'removed',
+    'unassigned',
+    'switched_off',
+  ]),
   closed_at: TimestampSchema,
   respondents: z.int().min(0),
   counts: z.record(z.string(), z.unknown()).nullable(),
