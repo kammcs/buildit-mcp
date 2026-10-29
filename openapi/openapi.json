@@ -10632,7 +10632,7 @@
           "session"
         ],
         "summary": "Ask the owner to approve a tool call",
-        "description": "Posts a tool approval card for the agent's owner, in the direct message or in the thread of an item this session works in (`thread_id`, as post_session_message's). The card shows only the tool's name and who asks (the session, or its subagent), in fixed words of buildIt.Social; the description and the fields (the tool's input, credentials masked) reach only the owner, as plain text. Nothing in the request can choose the buttons or the answer: the card offers Approve, Deny, and Allow for this session when `suggestion` is sent, and only the owner's own tap in buildIt.Social answers it (no text reply, no token). The verdict arrives as a card.closed event with data.approval (ignore the card.response of the tap); get_session_approval reads it too. Close a card that no longer needs an answer (close_session_approval). Idempotent by `id`: a retry with the same id answers the first card and its current state (created: false), so send a UUIDv5 of the tool call. At most 10 open at once (409 too_many_open); 403 approvals_off when they are turned off for the agent or the server (ask in the terminal then). Counts only in the session's own window, 30 a minute by default (429 rate_limited, bucket session_approvals_per_minute). The body is at most 32 KB. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
+        "description": "Posts a tool approval card for the agent's owner, in the direct message or in the thread of an item this session works in (`thread_id`, as post_session_message's). The card shows only the tool's name and who asks (the session, or its subagent), in fixed words of buildIt.Social; the description and the fields (the tool's input, credentials masked) reach only the owner, as plain text. Nothing in the request can choose the buttons or the answer: the card offers Approve, Deny, and Allow for this session when `suggestion` is sent, and only the owner's own tap in buildIt.Social answers it (no text reply, no token). The verdict arrives as a card.closed event with data.approval (ignore the card.response of the tap); get_session_approval reads it too. Close a card that no longer needs an answer (close_session_approval). Idempotent by `id`: a retry with the same id answers the first card and its current state (created: false), so send a UUIDv5 of the tool call; the same id with a different tool_name, tool_use_id or details is 409 idempotency_conflict. At most 10 open at once (409 too_many_open); 403 approvals_off when they are turned off for the agent or the server (ask in the terminal then). Counts only in the session's own window, 30 a minute by default (429 rate_limited, bucket session_approvals_per_minute). The body is at most 32 KB. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -11574,7 +11574,7 @@
           "key",
           "value"
         ],
-        "description": "One field of the tool call's input. Only the owner sees it, as plain text."
+        "description": "One field of the tool call's input. Only the owner sees it, as plain text. A key, a value, the description and a session rule's content may not hold a control character (a value and the description keep the tab and the line feed), a zero-width, bidi or line-separator character, a soft hyphen, a combining grapheme joiner, the Mongolian vowel separator, a variation selector, a byte order mark or a tag character: 422 validation."
       },
       "ApprovalRule": {
         "oneOf": [
@@ -18475,7 +18475,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "description": "The approval's id, yours: a UUIDv5 of the tool call, so a retry of the same call answers the first card (created: false, with its current state); the same id for another message is 409 idempotency_conflict, and another session's is 403 not_own_message.",
+            "description": "The approval's id, yours: a UUIDv5 of the tool call, so a retry of the same call answers the first card (created: false, with its current state); the same id for another message, or for another tool call (a different tool_name, tool_use_id or details), is 409 idempotency_conflict, and another session's is 403 not_own_message.",
             "$ref": "#/components/schemas/Uuid"
           },
           "thread_id": {
@@ -22809,7 +22809,7 @@
     },
     "idempotency_conflict": {
       "status": 409,
-      "when": "The idempotency_key was already used for something else (another item, comment, page, channel or project).",
+      "when": "The idempotency_key was already used for something else (another item, comment, page, channel or project); or a tool approval's id was already posted for another message or another tool call (a different tool, tool_use_id or details).",
       "message": "That idempotency_key was used for something else. Send a new random uuid.",
       "hint": "Send a new random uuid as idempotency_key."
     },
