@@ -8,7 +8,15 @@
  * merges and is written whole, the hooks under --read-only, and an event
  * that names another approval.
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -37,6 +45,8 @@ import { FakeApi } from './support/fake-api.js';
 import { SESSION_TOKENS } from './support/fake-sessions.js';
 
 const TOKEN = SESSION_TOKENS.first;
+const j = (...p: string[]): string => p.join('');
+const R = (s: string, n: number): string => s.repeat(n);
 
 let api: FakeApi;
 const stops: (() => Promise<void>)[] = [];
@@ -357,6 +367,119 @@ describe('the journal', () => {
     expect(journalIds()).toEqual([other]);
     expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
     expect(existsSync(journalPath())).toBe(true);
+  });
+});
+
+describe('a command too long to check in the app', () => {
+  it("is posted cut; the owner's Deny tells Claude to split it or ask in the terminal", async () => {
+    const c = await started();
+    const command = j('npm run build && ', R('echo step && ', 400), 'echo done');
+    const p = approve(c, { input: { command }, tool_use_id: 'toolu_long' });
+    const a = await posted();
+    const field = (a.posted.fields as { key: string; cut?: number }[])[0];
+    expect(field?.cut).toBeGreaterThan(0);
+    // The server gives such a card no approve buttons; Deny is the owner's answer there.
+    api.sessions.decideApproval(TOKEN, a.id, 'deny');
+    const r = await p;
+    expect(textOf(r)).toBe(permissionDeny(denyText('too_long', session().ownerName, 59)));
+    expect(r.structuredContent).toMatchObject({ status: 'denied', reason: 'too_long' });
+    expect(denyText('too_long', 'Test User', 1)).toBe(
+      'This command was too long to show in full in buildIt.Social, so Test User could not approve it there. Split it into shorter commands, or ask Test User to approve it in the terminal.',
+    );
+  });
+
+  it('is only Bash or PowerShell: a long Write is denied as usual', async () => {
+    const c = await started();
+    const p = approve(c, {
+      tool_name: 'Write',
+      input: { file_path: 'a.md', content: R('x', 5000) },
+      tool_use_id: 'toolu_write',
+    });
+    const a = await posted();
+    api.sessions.decideApproval(TOKEN, a.id, 'deny');
+    expect(textOf(await p)).toBe(permissionDeny(denyText('denied', session().ownerName, 59)));
+  });
+});
+
+describe('switched off while it waits', () => {
+  it('tells Claude approvals were switched off', async () => {
+    const c = await started();
+    const p = approve(c, { input: REAL, tool_use_id: 'toolu_off' });
+    const a = await posted();
+    api.sessions.endApproval(TOKEN, a.id, 'switched_off');
+    const r = await p;
+    expect(textOf(r)).toBe(
+      permissionDeny(
+        'Tool approvals in buildIt.Social were switched off before anyone answered, so this was not run.',
+      ),
+    );
+    expect(r.structuredContent).toMatchObject({ status: 'closed', reason: 'switched_off' });
+  });
+});
+
+describe('who asks', () => {
+  let folder: string;
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'buildit-mcp-who-'));
+  });
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  it("is an item worker only by its exact name, never another plugin's agent of that name", async () => {
+    const { demoItem } = await import('./support/fake-sessions.js');
+    const item = demoItem(31);
+    mkdirSync(join(folder, '.claude'), { recursive: true });
+    writeFileSync(
+      join(folder, '.claude', 'buildit-workers.json'),
+      JSON.stringify({ workers: [{ agent_id: 'agent-w', item: item.key, thread_id: item.id }] }),
+    );
+    const c = await started({ env: { BUILDIT_FOLDER: folder } });
+    api.sessions.assignItem(TOKEN, item);
+    await waitFor(() => channelNotes(c.notes).length === 2);
+    for (const [n, agentType, inItem] of [
+      [1, 'buildit-item-worker', true],
+      [2, 'buildit:buildit-item-worker', true],
+      [3, 'other:buildit-item-worker', false],
+      [4, 'buildit-item-worker-2', false],
+    ] as const) {
+      const p = call(c, 'approve', {
+        tool_name: 'Bash',
+        tool_input: JSON.stringify(REAL),
+        tool_use_id: `toolu_who${n}`,
+        agent_id: 'agent-w',
+        agent_type: agentType,
+      });
+      const a = await posted(n);
+      expect(a.posted.thread_id === item.id, agentType).toBe(inItem);
+      api.sessions.decideApproval(TOKEN, a.id, 'approve');
+      await p;
+    }
+  });
+
+  it('sends the agent type only when it is a plain name of at most 64 characters', async () => {
+    const c = await started();
+    for (const [n, agentType, sent] of [
+      [1, 'Explore', true],
+      [2, 'my-plugin:reviewer_2.1', true],
+      [3, 'Explore agent', false],
+      [4, R('a', 65), false],
+      [5, '-leading', false],
+    ] as const) {
+      const p = call(c, 'approve', {
+        tool_name: 'Bash',
+        tool_input: JSON.stringify(REAL),
+        tool_use_id: `toolu_type${n}`,
+        agent_id: 'agent-x',
+        agent_type: agentType,
+      });
+      const a = await posted(n);
+      expect(a.posted.agent, agentType).toEqual(
+        sent ? { ref: 'agent-x', type: agentType } : { ref: 'agent-x' },
+      );
+      api.sessions.decideApproval(TOKEN, a.id, 'approve');
+      await p;
+    }
   });
 });
 

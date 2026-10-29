@@ -691,7 +691,7 @@ export class FakeSessions {
   endApproval(
     token: string,
     id: string,
-    closedBy: 'time' | 'session_ended' | 'deleted' | 'removed' | 'unassigned',
+    closedBy: 'time' | 'session_ended' | 'deleted' | 'removed' | 'unassigned' | 'switched_off',
   ): void {
     const s = this.session(token);
     const card = this.ownApproval(s, id);

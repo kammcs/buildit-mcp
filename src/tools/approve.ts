@@ -73,12 +73,17 @@ export function permissionDeny(message: string): string {
 }
 
 /** Why Claude was told no, in words Claude reads. */
-export type DenyReason = 'denied' | 'expired' | 'session_ended' | 'unassigned' | 'closed';
+export type DenyReason =
+  'denied' | 'too_long' | 'expired' | 'session_ended' | 'unassigned' | 'switched_off' | 'closed';
 
 export function denyText(reason: DenyReason, owner: string, minutes: number): string {
   switch (reason) {
     case 'denied':
       return `${owner} denied this in buildIt.Social. Don't retry it; ask them what to do instead.`;
+    case 'too_long':
+      return `This command was too long to show in full in buildIt.Social, so ${owner} could not approve it there. Split it into shorter commands, or ask ${owner} to approve it in the terminal.`;
+    case 'switched_off':
+      return 'Tool approvals in buildIt.Social were switched off before anyone answered, so this was not run.';
     case 'expired':
       return `Nobody approved this in buildIt.Social within ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}, so it was not run. Don't retry it now: stop and tell the person what you need, or do the task another way.`;
     case 'session_ended':
@@ -100,7 +105,8 @@ export const APPROVE_NAMESPACE = '6c2f8a14-3b7d-4e91-8d5a-0f4b9c2e7a63';
 const TOOL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/;
 const TOOL_USE_ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
 const AGENT_REF_RE = /^[A-Za-z0-9_.:-]{1,200}$/;
-const AGENT_TYPE_RE = /^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,99}$/;
+/** The agent types sent to buildIt.Social (anything else is left out). */
+const AGENT_TYPE_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 
 /** A hook field: trimmed, and empty when Claude Code left the `${…}` unfilled. */
 export function hookField(value: unknown): string {
@@ -232,6 +238,8 @@ function answerOf(
     owner: string;
     minutes: number;
     rule: SessionRule | undefined;
+    /** A Bash or PowerShell call cut to fit: the card can't approve it. */
+    tooLong?: boolean;
     /** Told when "Allow for this session" can't be granted as a rule. */
     mismatch?: () => void;
   },
@@ -260,7 +268,13 @@ function answerOf(
       init.mismatch?.();
       return at('approved', permissionAllow(), 'rule_mismatch');
     case 'denied':
-      return at('denied', permissionDeny(denyText('denied', init.owner, init.minutes)));
+      return at(
+        'denied',
+        permissionDeny(
+          denyText(init.tooLong === true ? 'too_long' : 'denied', init.owner, init.minutes),
+        ),
+        init.tooLong === true ? 'too_long' : undefined,
+      );
     case 'expired':
       return at(
         'expired',
@@ -269,11 +283,11 @@ function answerOf(
       );
     case 'closed': {
       const why: DenyReason =
-        final.reason === 'session_ended'
-          ? 'session_ended'
-          : final.reason === 'unassigned'
-            ? 'unassigned'
-            : 'closed';
+        final.reason === 'session_ended' ||
+        final.reason === 'unassigned' ||
+        final.reason === 'switched_off'
+          ? final.reason
+          : 'closed';
       return at('closed', permissionDeny(denyText(why, init.owner, init.minutes)), final.reason);
     }
     default:
@@ -453,6 +467,10 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
     const waitS = options.hookWaitS;
     const minutes = Math.max(1, Math.round(waitS / 60));
     const details = buildDetails(toolName, input);
+    // A command cut to fit can't be checked in the app: its card offers only Deny.
+    const tooLong =
+      (toolName === 'Bash' || toolName === 'PowerShell') &&
+      (details.fields.some((f) => (f.cut ?? 0) > 0) || (details.more_fields ?? 0) > 0);
     const rule = sessionRuleFrom(args.suggestions, toolName);
     const subagent = agentId !== '' || agentType !== '';
     const agent =
@@ -540,6 +558,7 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
         owner,
         minutes,
         rule,
+        tooLong,
         mismatch: () => {
           ctx.logger.warn('tool approval rule not granted', { reason: 'rule_mismatch' });
         },

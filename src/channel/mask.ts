@@ -51,51 +51,59 @@ export function cleanApprovalKey(text: string): string {
 /**
  * The masking rules, in the order they apply. Each replaces only the secret.
  *
+ * **Masking never hides what is being approved.** A span becomes
+ * `[REDACTED]` only when all of it is in the token charset
+ * `[A-Za-z0-9._~+=-]`: never shell syntax, a path, a URL, a space or a line
+ * break. A value that holds anything else (`"$(curl … | sh)"`, a path) is
+ * shown as it is, and quotes around a value stay. A key block is masked
+ * only when every line between its BEGIN and END lines is armor (base64, or
+ * a `Name: value` header). Masking twice gives what masking once gave
+ * (`[REDACTED]` is not in the token charset).
+ *
  * They are written so that no input makes them slow: a match may start only
- * where a lookbehind allows it (the start of a name, a token or an option,
- * never inside a run of letters), names are at most 64 characters and
- * spaces 16, and every alternative of a value starts differently, so the
- * same rules behave the same in a regular expression engine that takes the
- * longest match as here (which takes the first alternative). A value that is already
- * `[REDACTED]` is matched as a whole, so masking twice gives what masking
- * once gave.
+ * where a lookbehind allows it (the start of a name, a token, an option or
+ * a URL, never inside a run of letters), names are at most 64 characters
+ * and spaces 16, and the alternatives of a value start differently, so a
+ * regular expression engine that takes the longest match gives the same
+ * result as this one (which takes the first alternative).
  */
 const RULES: { pattern: RegExp; replacement: string }[] = [
-  // R1: a PEM or PGP private key block, to its END line or the end of the text.
+  // R1: a PEM or PGP private key block whose body is all armor, to its END line or the end.
   {
     pattern:
-      /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----|$)/g,
+      /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----\n(?:(?:[A-Za-z0-9+/=]*|[A-Za-z0-9-]{1,64}: [A-Za-z0-9._~+= -]*)\n)*?(?:-----END [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----|(?:[A-Za-z0-9+/=]*|[A-Za-z0-9-]{1,64}: [A-Za-z0-9._~+= -]*)$)/g,
     replacement: REDACTED,
   },
   // R2: an Authorization header's credentials (its quotes may be JSON-escaped).
   {
     pattern:
-      /(authorization(?:\\?["'])?\s{0,16}[:=]\s{0,16}(?:\\?["'])?(?:bearer|basic|token|bot)\s{1,16})[^\s"'\\]+/gi,
+      /(authorization(?:\\?["'])?[ \t\n\v\f\r]{0,16}[:=][ \t\n\v\f\r]{0,16}(?:\\?["'])?(?:bearer|basic|token|bot)[ \t\n\v\f\r]{1,16})[A-Za-z0-9._~+=-]+(?![^ \t\n\v\f\r"'\\&;,])/gi,
     replacement: `$1${REDACTED}`,
   },
   // R3: a bearer token anywhere.
   {
-    pattern: /(?<![A-Za-z0-9_])(bearer\s{1,16})[A-Za-z0-9._~+/=-]{16,}/gi,
+    pattern:
+      /(?<![A-Za-z0-9_])(bearer[ \t\n\v\f\r]{1,16})[A-Za-z0-9._~+=-]{16,}(?![^ \t\n\v\f\r"'\\&;,])/gi,
     replacement: `$1${REDACTED}`,
   },
-  // R4: the password in a URL's user info, up to the last @ of the URL (it may hold / and @).
+  // R4: the password in a URL's user info (the host after it stays).
   {
-    pattern: /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/[^/\s:@]{1,64}:)\S+@/gi,
+    pattern:
+      /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/[^/ \t\n\v\f\r:@]{1,64}:)[A-Za-z0-9._~+=-]+@/gi,
     replacement: `$1${REDACTED}@`,
   },
   // R5: a password, secret, token or API key option's value (--password x, --token=x),
-  // also on the next line after a backslash.
+  // plain or in quotes (which stay).
   {
     pattern:
-      /(?<!\S)(--?[A-Za-z0-9-]{0,64}(?:password|passwd|secret|token|api-?key)(?:\s{1,16}|=)(?:\\\n[ \t]{0,64})?)(?:\[REDACTED\]|"[^"\n]*"|'[^'\n]*'|(?!\[REDACTED\])[^\s"']+)/gi,
+      /(?<![^ \t\n\v\f\r])(--?[A-Za-z0-9-]{0,64}(?:password|passwd|secret|token|api-?key)(?:[ \t\n\v\f\r]{1,16}|=)(?:"(?=[A-Za-z0-9._~+=-]+")|'(?=[A-Za-z0-9._~+=-]+')|(?=[A-Za-z0-9._~+=-]+(?![^ \t\n\v\f\r]))))[A-Za-z0-9._~+=-]+/gi,
     replacement: `$1${REDACTED}`,
   },
   // R6: an assignment or JSON member whose name says it holds a secret: the value
-  // plain, quoted, a JSON string (with escaped quotes), a JSON-escaped string
-  // inside a shell string, or on the next line after a backslash.
+  // plain, in quotes, or in JSON-escaped quotes inside a shell string (the quotes stay).
   {
     pattern:
-      /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{0,64}(?:password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key)(?:\\?["'])?\s{0,16}[:=]\s{0,16}(?:\\\n[ \t]{0,64})?)(?:\[REDACTED\]|\\"(?:[^\\"\n]|\\\\\\"|\\\\)*\\"|"(?:[^"\\\n]|\\[^\n])*"|'[^'\n]*'|(?!\[REDACTED\])[^\s"'&;,]+)/gi,
+      /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{0,64}(?:password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key)(?:\\?["'])?[ \t\n\v\f\r]{0,16}[:=][ \t\n\v\f\r]{0,16}(?:\\"(?=[A-Za-z0-9._~+=-]+\\")|"(?=[A-Za-z0-9._~+=-]+")|'(?=[A-Za-z0-9._~+=-]+')|(?=[A-Za-z0-9._~+=-]+(?![^ \t\n\v\f\r"'\\&;,]))))[A-Za-z0-9._~+=-]+/gi,
     replacement: `$1${REDACTED}`,
   },
   // R7: well-known API key and token prefixes.
@@ -115,6 +123,9 @@ const RULES: { pattern: RegExp; replacement: string }[] = [
 const SECRET_KEY =
   /^[A-Za-z0-9_-]{0,64}(?:password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key|authorization|credentials?)$/i;
 
+/** The only characters a masked span may hold. */
+const TOKEN_CHARSET = /^[A-Za-z0-9._~+=-]+$/;
+
 /** Replaces every credential-shaped part of a text with `[REDACTED]` (rules R1 to R8). */
 export function maskCredentials(text: string): string {
   let out = text;
@@ -122,10 +133,14 @@ export function maskCredentials(text: string): string {
   return out;
 }
 
-/** A field's value masked: R1 to R8, then the whole value when the field's name is a secret's (R9). */
+/**
+ * A field's value masked: R1 to R8, then, when the field's name is a
+ * secret's and the (masked) value is all token charset, the whole value
+ * (R9). A value with anything else in it keeps what R1 to R8 made of it.
+ */
 export function maskField(key: string, value: string): string {
   const masked = maskCredentials(value);
-  return SECRET_KEY.test(key) && masked !== '' ? REDACTED : masked;
+  return SECRET_KEY.test(key) && TOKEN_CHARSET.test(masked) ? REDACTED : masked;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +313,9 @@ export function buildDetails(toolName: string, input: Record<string, unknown>): 
       continue;
     }
     const cleanedKey = cleanApprovalKey(rawKey);
-    const key = cutWithEllipsis(cleanedKey === '' ? '_' : cleanedKey, KEY_MAX);
+    // A key is shown too, so it is masked like a value (R9 reads the name as given).
+    const shownKey = maskCredentials(cleanedKey);
+    const key = cutWithEllipsis(shownKey === '' ? '_' : shownKey, KEY_MAX);
     const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
     const full = prepare(text, (value) => maskField(cleanedKey, value));
     const first =

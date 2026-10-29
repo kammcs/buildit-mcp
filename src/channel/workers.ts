@@ -28,9 +28,13 @@ export const ITEM_WORKER_NAME = 'buildit-item-worker';
 /** The largest table read. */
 const WORKERS_FILE_MAX_BYTES = 256 * 1024;
 
-/** Whether the hook's agent_type is the plugin's item worker (scoped or not). */
+/**
+ * Whether the hook's agent_type is the plugin's item worker: exactly its
+ * name, or the name under this plugin (never another plugin's agent of the
+ * same name).
+ */
 export function isItemWorker(agentType: string): boolean {
-  return agentType === ITEM_WORKER_NAME || agentType.endsWith(`:${ITEM_WORKER_NAME}`);
+  return agentType === ITEM_WORKER_NAME || agentType === `buildit:${ITEM_WORKER_NAME}`;
 }
 
 /** A worker's entry in the lead's table: its item's thread id and key, as recorded. */
