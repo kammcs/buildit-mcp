@@ -26,6 +26,7 @@ import type { CallToolResult } from '@modelcontextprotocol/client';
 
 import { inputHash } from '../src/channel/tool-ring.js';
 import { CardWaiters } from '../src/channel/waiters.js';
+import { buildInstructions, CHANNEL_CREDENTIAL_INSTRUCTIONS } from '../src/server.js';
 import { uuidV5 } from '../src/tools/ask.js';
 import {
   APPROVE_NAMESPACE,
@@ -480,6 +481,166 @@ describe('who asks', () => {
       api.sessions.decideApproval(TOKEN, a.id, 'approve');
       await p;
     }
+  });
+});
+
+describe('a call with a hidden value', () => {
+  it("can only be denied in the app: the owner's Deny tells Claude to keep credentials out", async () => {
+    const c = await started();
+    const p = approve(c, {
+      input: { command: j('GITHUB_TOK', 'EN=', R('q1', 10), ' make deploy') },
+      tool_use_id: 'toolu_hidden',
+    });
+    const a = await posted();
+    expect((a.posted.fields as { value: string }[])[0]?.value).toContain('[REDACTED]');
+    api.sessions.decideApproval(TOKEN, a.id, 'deny');
+    const r = await p;
+    expect(textOf(r)).toBe(permissionDeny(denyText('hidden', session().ownerName, 59)));
+    expect(r.structuredContent).toMatchObject({ status: 'denied', reason: 'hidden' });
+    expect(denyText('hidden', 'Test User', 1)).toBe(
+      'This holds something that looks like a credential, which buildIt.Social hides, so Test User could not check it there. Ask Test User to approve it in the terminal, or keep credentials out of commands and files (read them from the environment).',
+    );
+  });
+
+  it('counts a literal [REDACTED] the call holds, for any tool', async () => {
+    const c = await started();
+    const p = approve(c, {
+      tool_name: 'Write',
+      input: { file_path: 'a.md', content: 'see [REDACTED] here' },
+      tool_use_id: 'toolu_literal',
+    });
+    const a = await posted();
+    api.sessions.decideApproval(TOKEN, a.id, 'deny');
+    expect(textOf(await p)).toBe(permissionDeny(denyText('hidden', session().ownerName, 59)));
+  });
+
+  it('when it is also too long, says it was too long', async () => {
+    const c = await started();
+    const command = j('GITHUB_TOK', 'EN=', R('q1', 10), ' ', R('echo step && ', 400), 'echo done');
+    const p = approve(c, { input: { command }, tool_use_id: 'toolu_both' });
+    const a = await posted();
+    api.sessions.decideApproval(TOKEN, a.id, 'deny');
+    expect(textOf(await p)).toBe(permissionDeny(denyText('too_long', session().ownerName, 59)));
+  });
+});
+
+describe('a remembered session rule', () => {
+  const Y = { command: 'npm test', description: 'Run the tests' };
+  const BROAD = {
+    type: 'addRules',
+    rules: [{ toolName: 'Bash' }],
+    behavior: 'allow',
+    destination: 'session',
+  };
+
+  it("is granted again only to a call that offers that same rule (a planted id can't carry it)", async () => {
+    const c = await started();
+    // Claude asks itself, with the real input and a broad rule Claude Code wouldn't offer.
+    const mine = approve(c, { input: Y, tool_use_id: 'toolu_fake', suggestions: [BROAD] });
+    const a = await posted();
+    expect(a.posted.suggestion).toEqual(BROAD);
+    api.sessions.decideApproval(TOKEN, a.id, 'approve_session');
+    expect(textOf(await mine)).toBe(permissionAllow(BROAD as never));
+    // It plants that id again, then the real PreToolUse and PermissionRequest come,
+    // with Claude Code's own narrow suggestion.
+    await call(c, 'tool_seen', {
+      tool_name: 'Bash',
+      tool_input: JSON.stringify(Y),
+      tool_use_id: 'toolu_fake',
+      agent_id: '',
+    });
+    await call(c, 'tool_seen', {
+      tool_name: 'Bash',
+      tool_input: JSON.stringify(Y),
+      tool_use_id: 'toolu_real',
+      agent_id: '',
+    });
+    const real = await approve(c, { input: Y, suggestions: [RULE] });
+    // The remembered verdict is for this very input, so it allows this one call, without the rule.
+    expect(approvals()).toHaveLength(1);
+    expect(textOf(real)).toBe(permissionAllow());
+    expect(real.structuredContent).toMatchObject({ status: 'approved', reason: 'rule_mismatch' });
+    expect(c.logs.join('\n')).toContain('rule_mismatch');
+  });
+
+  it('is granted again to a repeated call that offers the same rule', async () => {
+    const c = await started();
+    const one = approve(c, { input: Y, tool_use_id: 'toolu_same_rule', suggestions: [RULE] });
+    const a = await posted();
+    api.sessions.decideApproval(TOKEN, a.id, 'approve_session');
+    expect(textOf(await one)).toBe(permissionAllow(RULE as never));
+    const again = await approve(c, {
+      input: Y,
+      tool_use_id: 'toolu_same_rule',
+      suggestions: [RULE],
+    });
+    expect(textOf(again)).toBe(permissionAllow(RULE as never));
+  });
+});
+
+describe('when the session is switched off or gone', () => {
+  it('a poll that answers agent_sessions_off ends the wait at once, as switched off', async () => {
+    const c = await started();
+    const p = approve(c, { input: REAL, tool_use_id: 'toolu_off_poll' });
+    await posted();
+    api.enqueue('/v1/session/events', {
+      status: 403,
+      body: {
+        error: {
+          code: 'agent_sessions_off',
+          message: 'Agent sessions are turned off for this org.',
+          details: {},
+        },
+      },
+    });
+    const r = await p;
+    expect(textOf(r)).toBe(permissionDeny(denyText('switched_off', '', 59)));
+    expect(r.structuredContent).toMatchObject({ status: 'closed', reason: 'switched_off' });
+  });
+
+  it('a revoked session ends the wait at once, as the session ending', async () => {
+    const c = await started();
+    const t0 = Date.now();
+    const p = approve(c, { input: REAL, tool_use_id: 'toolu_revoked' });
+    await posted();
+    api.sessions.revoke(TOKEN);
+    const r = await p;
+    expect(textOf(r)).toBe(permissionDeny(denyText('session_ended', '', 59)));
+    expect(Date.now() - t0).toBeLessThan(3000);
+  });
+});
+
+describe('the rule to keep credentials out', () => {
+  it('is in the channel instructions, the item worker and the approve tool', async () => {
+    expect(buildInstructions([], true)).toContain(CHANNEL_CREDENTIAL_INSTRUCTIONS);
+    expect(buildInstructions([], false)).not.toContain(CHANNEL_CREDENTIAL_INSTRUCTIONS);
+    for (const phrase of [
+      'secret, token, password or key',
+      'environment variable',
+      'can only be denied',
+    ]) {
+      expect(CHANNEL_CREDENTIAL_INSTRUCTIONS).toContain(phrase);
+    }
+    const worker = readFileSync(
+      new URL('../plugin/agents/buildit-item-worker.md', import.meta.url),
+      'utf8',
+    );
+    expect(worker).toContain('## Credentials');
+    for (const phrase of [
+      'Never put a secret, token, password or key directly in a command',
+      'never echo or print it',
+      'in the terminal',
+      'can only be denied there',
+    ]) {
+      expect(worker).toContain(phrase);
+    }
+    api.sessions.open(TOKEN);
+    const c = await start();
+    expect(c.client.getInstructions()).toContain(CHANNEL_CREDENTIAL_INSTRUCTIONS);
+    const { tools } = await c.client.listTools();
+    expect(tools.find((t) => t.name === 'approve')?.description).toContain(
+      'a call with a hidden value can only be denied there',
+    );
   });
 });
 

@@ -171,8 +171,11 @@ export class ChannelState {
   readonly ring = new ToolRing();
   /** The session's open tool approvals (channel mode, the folder's channel). */
   approvals: ToolApprovals | undefined;
-  /** Told when a poll of the session's events failed (a tool approval then reads its state). */
-  readonly pollFailed = new Set<() => void>();
+  /**
+   * Told when a poll of the session's events failed, with the error (a tool
+   * approval then reads its state, or ends when the session is off or gone).
+   */
+  readonly pollFailed = new Set<(err: unknown) => void>();
 }
 
 /** Why the loop ended for good. */
@@ -484,7 +487,7 @@ export class ChannelLoop {
         cursor = page.cursor;
       } catch (err) {
         if (this.isStopped()) return;
-        for (const listener of [...this.options.state.pollFailed]) listener();
+        for (const listener of [...this.options.state.pollFailed]) listener(err);
         const next = await this.failed(err, interval);
         if (next === undefined) return;
         wait = next;

@@ -30,6 +30,13 @@ After a restart you start fresh: read the item and its thread again before you d
 
 Change code only in your own git worktree (this agent runs in one), on a branch named for the item (for example `demo-12-fix-login-redirect`), so the branch and its commits link to the item. Don't touch other worktrees or another item's branch. Commit in small steps; open a pull request when the work is ready for review, if the repository's tools allow it.
 
+## Credentials
+
+- Never put a secret, token, password or key directly in a command, a file's content or an edit.
+- Read it from an environment variable or an existing config file instead (for example `"$GITHUB_TOKEN"`, `$env:GITHUB_TOKEN`, or a `--password-file` option), and never echo or print it.
+- If a task really needs a credential typed in, ask the person (with `ask`, in this item's thread) to do that step in the terminal.
+- Why: tool approvals in buildIt.Social hide anything that looks like a credential, and a call with a hidden value can only be denied there.
+
 ## Stop
 
 - When the lead says the item was unassigned from you, stop at once: don't post in its thread or change the item again.

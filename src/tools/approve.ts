@@ -33,7 +33,7 @@ import {
   type StaleReason,
 } from '../channel/approvals.js';
 import type { ChannelState } from '../channel/loop.js';
-import { buildDetails, sessionRuleFrom, type SessionRule } from '../channel/mask.js';
+import { buildDetails, REDACTED, sessionRuleFrom, type SessionRule } from '../channel/mask.js';
 import { isUuid, itemThreadId } from '../channel/threads.js';
 import { canonicalJson, inputHash, parseToolInput } from '../channel/tool-ring.js';
 import { CardInbox, eventMessageId, type ApprovalVerdict } from '../channel/waiters.js';
@@ -74,7 +74,14 @@ export function permissionDeny(message: string): string {
 
 /** Why Claude was told no, in words Claude reads. */
 export type DenyReason =
-  'denied' | 'too_long' | 'expired' | 'session_ended' | 'unassigned' | 'switched_off' | 'closed';
+  | 'denied'
+  | 'too_long'
+  | 'hidden'
+  | 'expired'
+  | 'session_ended'
+  | 'unassigned'
+  | 'switched_off'
+  | 'closed';
 
 export function denyText(reason: DenyReason, owner: string, minutes: number): string {
   switch (reason) {
@@ -82,6 +89,8 @@ export function denyText(reason: DenyReason, owner: string, minutes: number): st
       return `${owner} denied this in buildIt.Social. Don't retry it; ask them what to do instead.`;
     case 'too_long':
       return `This command was too long to show in full in buildIt.Social, so ${owner} could not approve it there. Split it into shorter commands, or ask ${owner} to approve it in the terminal.`;
+    case 'hidden':
+      return `This holds something that looks like a credential, which buildIt.Social hides, so ${owner} could not check it there. Ask ${owner} to approve it in the terminal, or keep credentials out of commands and files (read them from the environment).`;
     case 'switched_off':
       return 'Tool approvals in buildIt.Social were switched off before anyone answered, so this was not run.';
     case 'expired':
@@ -238,8 +247,12 @@ function answerOf(
     owner: string;
     minutes: number;
     rule: SessionRule | undefined;
-    /** A Bash or PowerShell call cut to fit: the card can't approve it. */
-    tooLong?: boolean;
+    /**
+     * Why the card can't approve the call, when it can't: a Bash or
+     * PowerShell call cut to fit (`too_long`, which wins), or a field with a
+     * hidden value (`hidden`). Its card offers only Deny.
+     */
+    unchecked?: 'too_long' | 'hidden' | undefined;
     /** Told when "Allow for this session" can't be granted as a rule. */
     mismatch?: () => void;
   },
@@ -270,10 +283,8 @@ function answerOf(
     case 'denied':
       return at(
         'denied',
-        permissionDeny(
-          denyText(init.tooLong === true ? 'too_long' : 'denied', init.owner, init.minutes),
-        ),
-        init.tooLong === true ? 'too_long' : undefined,
+        permissionDeny(denyText(init.unchecked ?? 'denied', init.owner, init.minutes)),
+        init.unchecked,
       );
     case 'expired':
       return at(
@@ -340,7 +351,7 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
     toolset: 'chat',
     title: 'Tool approval (plugin hook)',
     description:
-      "Called by the buildit plugin's PermissionRequest hook when a tool needs the person's approval: it asks them in buildIt.Social too. Not for you to call.",
+      "Called by the buildit plugin's PermissionRequest hook when a tool needs the person's approval: it asks them in buildIt.Social too. Not for you to call. Keep secrets, tokens, passwords and keys out of commands, file contents and edits (read them from environment variables or config files, never echo them): the app hides anything that looks like a credential, and a call with a hidden value can only be denied there.",
     scopes: [],
     runsAfterSessionEnd: true,
     annotations: {
@@ -451,8 +462,20 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
     if (info === undefined || approvals === undefined) return pass('no_session');
     const agentId = hookField(args.agent_id);
     const agentType = hookField(args.agent_type);
+    const rule = sessionRuleFrom(args.suggestions, toolName);
     const known = state.waiters.approvalOf(id, toolName, hash);
     if (known !== undefined) {
+      // A remembered session rule is granted again only to a call that offers that same rule.
+      if (
+        known.status === 'approved_session' &&
+        (rule === undefined || canonicalJson(known.rule) !== canonicalJson(rule))
+      ) {
+        ctx.logger.warn('tool approval rule not granted', { reason: 'rule_mismatch' });
+        return {
+          structured: { status: 'approved', reason: 'rule_mismatch', message_id: id },
+          text: permissionAllow(),
+        };
+      }
       return {
         structured: {
           status: known.status as ApproveOutput['status'],
@@ -471,7 +494,15 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
     const tooLong =
       (toolName === 'Bash' || toolName === 'PowerShell') &&
       (details.fields.some((f) => (f.cut ?? 0) > 0) || (details.more_fields ?? 0) > 0);
-    const rule = sessionRuleFrom(args.suggestions, toolName);
+    // Nor can a call with a hidden part: the owner can approve only what they see in full.
+    const hidden = details.fields.some(
+      (f) => f.value.includes(REDACTED) || f.key.includes(REDACTED),
+    );
+    const unchecked: 'too_long' | 'hidden' | undefined = tooLong
+      ? 'too_long'
+      : hidden
+        ? 'hidden'
+        : undefined;
     const subagent = agentId !== '' || agentType !== '';
     const agent =
       subagent && AGENT_REF_RE.test(agentId)
@@ -488,7 +519,20 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
       wake?.();
     };
     let pollNow = false;
-    const onPollFailed = (): void => {
+    /** The session can't answer any more: switched off, or ended (from a poll or a GET). */
+    let gone: Final | undefined;
+    const goneBy = (err: unknown): Final | undefined => {
+      const code = codeOf(err);
+      if (code === 'agent_sessions_off') return { status: 'closed', reason: 'switched_off' };
+      if (code === 'token_revoked' || code === 'token_expired' || code === 'token_invalid') {
+        return { status: 'closed', reason: 'session_ended' };
+      }
+      return undefined;
+    };
+    /** Read through a function: a poll or GET may set it while this call waits. */
+    const goneNow = (): Final | undefined => gone;
+    const onPollFailed = (err: unknown): void => {
+      gone ??= goneBy(err);
       pollNow = true;
       wake?.();
     };
@@ -558,7 +602,7 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
         owner,
         minutes,
         rule,
-        tooLong,
+        unchecked,
         mismatch: () => {
           ctx.logger.warn('tool approval rule not granted', { reason: 'rule_mismatch' });
         },
@@ -593,10 +637,16 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
           return r.approval.status === 'open' ? undefined : r.approval;
         } catch (err) {
           ctx.logger.info('tool approval state not read', { code: codeOf(err) });
+          gone ??= goneBy(err);
           return undefined;
         }
       };
       for (;;) {
+        const ended = goneNow();
+        if (ended !== undefined) {
+          answer = answerOf(ended, init);
+          return answer;
+        }
         if (staleReason !== undefined) {
           closeLater(staleReason);
           answer = answerOf({ status: staleReason }, init);
@@ -627,6 +677,7 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
           pollNow = false;
           nextPoll = now + POLL_EVERY_S * scale;
           const final = await readState();
+          if (goneNow() !== undefined) continue;
           if (final !== undefined) {
             answer = answerOf(final, init);
             return answer;
