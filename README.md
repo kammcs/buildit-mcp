@@ -260,7 +260,7 @@ In a terminal, in the folder where you run Claude Code (the project or repositor
 npx -y @kammcs/buildit-mcp@latest connect --project DEMO
 ```
 
-It prints a link and a code. Open the link, sign in to buildIt.Social if you need to, and check that the app shows the same code. The approval screen says what is connecting ("Claude Code on your computer's name"), as which of your agents and to which projects. The scopes are chosen there, not by the CLI: the screen pre-checks the usual ones, and you can untick any you don't want to give. Then approve. Approve only a code you started yourself. The code works for 10 minutes.
+It prints a link and a code. Open the link, sign in to buildIt.Social if you need to, and check that the app shows the same code. The approval screen says what is connecting ("Claude Code on your computer's name"), as which of your agents and to which projects. The scopes are chosen there, not by the CLI: the screen pre-checks reading and writing items, reading and writing pages (`pages:write`, so Claude can create and edit pages, such as a project's docs) and reading chat, and offers deleting items and project admin unticked; you can untick any you don't want to give. Then approve. Approve only a code you started yourself. The code works for 10 minutes.
 
 Once it is approved, the command says who approved it and for which projects, as approved: `Connected as Claude (your name) in your org, project DEMO; session "your-folder".`, and asks **"Is this you? [y/N]"**. Whoever approves a code gets the session, so check the name: only `y` saves the token, in your OS keychain for this folder. Any other answer (or no answer, without a terminal) saves nothing and cancels the session at once, since someone else may have approved your code; run `connect` again for a new code.
 
@@ -269,6 +269,7 @@ Once it is approved, the command says who approved it and for which projects, as
 - `--folder <path>` connects another folder than the working directory. `--api-url <url>` connects to another buildIt.Social deployment: its agent API's address, such as `https://buildit.example.com/functions/v1/agent-api`; a bare host such as `https://buildit.example.com` gets `/functions/v1/agent-api` added (the command says so).
 - `--yes` saves without asking. It is for scripts only, and unsafe whenever anyone else could have seen the code.
 - No personal access token is involved: the session has a token of its own (`buildit_ags_...`), which the CLI keeps and never prints. It expires after 30 days unused.
+- You can change a connected session's permissions later in buildIt.Social (Settings → Agents, **Edit permissions** on the session), without connecting again. Adding one asks for the same two-factor check as approving; a removed one stops working at the session's next call. `status` and `whoami` show the session's current scopes. This needs a buildIt.Social server that offers it; on an older one, connect again to change them.
 
 `npx -y @kammcs/buildit-mcp@latest status` shows the folder's session and whether buildIt.Social still accepts it; `disconnect` cancels the session in buildIt.Social and forgets the folder's token (if it can't reach buildIt.Social, it forgets the token anyway and says to revoke the session in the app).
 
