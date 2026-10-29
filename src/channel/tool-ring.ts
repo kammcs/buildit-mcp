@@ -5,7 +5,7 @@
  * Claude Code's PermissionRequest hook gets no `tool_use_id`, but PreToolUse
  * fires for the same call just before it, with the same input and agent id,
  * and with the id. So `tool_seen` records each call (its agent, tool, a hash
- * of its input and its id), and `approve` claims the newest unclaimed entry
+ * of its input and its id), and `approve` claims the oldest unclaimed entry
  * that matches. An answer in the terminal then shows as such in the app: the
  * call's PostToolUse names that id (`tool_done`).
  *
@@ -87,12 +87,15 @@ export class ToolRing {
     for (const listener of [...this.listeners]) listener();
   }
 
-  /** The newest unclaimed call that matches, at most 5 seconds old: its id, now claimed. */
+  /**
+   * The oldest unclaimed call that matches, at most 5 seconds old: its id,
+   * now claimed. Claude Code asks for permission in the order it announced
+   * the calls, so the oldest is the one asking.
+   */
   claim(agentId: string, toolName: string, hash: string): string | undefined {
     const oldest = this.now() - CLAIM_MAX_AGE_MS;
-    for (let i = this.entries.length - 1; i >= 0; i--) {
-      const e = this.entries[i];
-      if (e === undefined || e.at < oldest) break;
+    for (const e of this.entries) {
+      if (e.at < oldest) continue;
       if (e.claimed || e.agentId !== agentId || e.toolName !== toolName || e.hash !== hash) {
         continue;
       }

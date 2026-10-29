@@ -16,11 +16,15 @@
  * shape is not caught.
  */
 
-/* eslint-disable no-control-regex -- removing control characters is the point */
-/** Removed from every value: control characters but the line feed and tab, and bidi and zero-width marks. */
+/* eslint-disable no-control-regex, no-misleading-character-class -- removing control, combining and variation characters is the point */
+/**
+ * Removed from every value: control characters but the line feed and tab,
+ * the soft hyphen, bidi controls, zero-width and invisible joiners and
+ * separators, variation selectors, the byte order mark and tag characters.
+ */
 const STRIP =
-  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g;
-/* eslint-enable no-control-regex */
+  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u034F\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFE00-\uFE0F\uFEFF\u{E0000}-\u{E007F}]/gu;
+/* eslint-enable no-control-regex, no-misleading-character-class */
 
 /** What replaces a secret. */
 export const REDACTED = '[REDACTED]';
@@ -46,59 +50,70 @@ export function cleanApprovalKey(text: string): string {
 
 /**
  * The masking rules, in the order they apply. Each replaces only the secret.
- * In R5 and R6 a value that is already `[REDACTED]` is matched as a whole,
- * so masking twice gives what masking once gave.
+ *
+ * They are written so that no input makes them slow: a match may start only
+ * where a lookbehind allows it (the start of a name, a token or an option,
+ * never inside a run of letters), names are at most 64 characters and
+ * spaces 16, and every alternative of a value starts differently, so the
+ * same rules behave the same in a regular expression engine that takes the
+ * longest match as here (which takes the first alternative). A value that is already
+ * `[REDACTED]` is matched as a whole, so masking twice gives what masking
+ * once gave.
  */
 const RULES: { pattern: RegExp; replacement: string }[] = [
-  // R1: a PEM private key block, to its END line or the end of the text.
+  // R1: a PEM or PGP private key block, to its END line or the end of the text.
   {
     pattern:
-      /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g,
+      /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----|$)/g,
     replacement: REDACTED,
   },
-  // R2: an Authorization header's credentials.
+  // R2: an Authorization header's credentials (its quotes may be JSON-escaped).
   {
-    pattern: /(authorization["']?\s*[:=]\s*["']?(?:bearer|basic|token|bot)\s+)[^\s"']+/gi,
+    pattern:
+      /(authorization(?:\\?["'])?\s{0,16}[:=]\s{0,16}(?:\\?["'])?(?:bearer|basic|token|bot)\s{1,16})[^\s"'\\]+/gi,
     replacement: `$1${REDACTED}`,
   },
   // R3: a bearer token anywhere.
   {
-    pattern: /(^|[^A-Za-z0-9_])(bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi,
-    replacement: `$1$2${REDACTED}`,
+    pattern: /(?<![A-Za-z0-9_])(bearer\s{1,16})[A-Za-z0-9._~+/=-]{16,}/gi,
+    replacement: `$1${REDACTED}`,
   },
-  // R4: the password in a URL's user info.
+  // R4: the password in a URL's user info, up to the last @ of the URL (it may hold / and @).
   {
-    pattern: /([a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:)[^@\s/]+@/gi,
+    pattern: /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/[^/\s:@]{1,64}:)\S+@/gi,
     replacement: `$1${REDACTED}@`,
   },
-  // R5: a password, secret, token or API key option's value (--password x, --token=x).
+  // R5: a password, secret, token or API key option's value (--password x, --token=x),
+  // also on the next line after a backslash.
   {
     pattern:
-      /(^|\s)(--?[A-Za-z0-9-]*(?:password|passwd|secret|token|api-?key)(?:\s+|=))(\[REDACTED\]|"[^"\n]*"|'[^'\n]*'|[^\s"']+)/gi,
-    replacement: `$1$2${REDACTED}`,
+      /(?<!\S)(--?[A-Za-z0-9-]{0,64}(?:password|passwd|secret|token|api-?key)(?:\s{1,16}|=)(?:\\\n[ \t]{0,64})?)(?:\[REDACTED\]|"[^"\n]*"|'[^'\n]*'|(?!\[REDACTED\])[^\s"']+)/gi,
+    replacement: `$1${REDACTED}`,
   },
-  // R6: an assignment or JSON member whose name says it holds a secret.
+  // R6: an assignment or JSON member whose name says it holds a secret: the value
+  // plain, quoted, a JSON string (with escaped quotes), a JSON-escaped string
+  // inside a shell string, or on the next line after a backslash.
   {
     pattern:
-      /(^|[^A-Za-z0-9])([A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key)["']?\s*[:=]\s*)(\[REDACTED\]|"[^"\n]*"|'[^'\n]*'|[^\s"'&;,]+)/gi,
-    replacement: `$1$2${REDACTED}`,
+      /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{0,64}(?:password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key)(?:\\?["'])?\s{0,16}[:=]\s{0,16}(?:\\\n[ \t]{0,64})?)(?:\[REDACTED\]|\\"(?:[^\\"\n]|\\\\\\"|\\\\)*\\"|"(?:[^"\\\n]|\\[^\n])*"|'[^'\n]*'|(?!\[REDACTED\])[^\s"'&;,]+)/gi,
+    replacement: `$1${REDACTED}`,
   },
   // R7: well-known API key and token prefixes.
   {
     pattern:
-      /(^|[^A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{30,}|[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{10,}|buildit_(?:pat|ags|app)_[A-Za-z0-9]{10,}|buildit_whsec_[0-9a-f]{10,})/g,
-    replacement: `$1${REDACTED}`,
+      /(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{30,}|[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{10,}|buildit_(?:pat|ags|app)_[A-Za-z0-9]{10,}|buildit_whsec_[0-9a-f]{10,})/g,
+    replacement: REDACTED,
   },
   // R8: a JSON Web Token.
   {
-    pattern: /(^|[^A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)?/g,
-    replacement: `$1${REDACTED}`,
+    pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)?/g,
+    replacement: REDACTED,
   },
 ];
 
 /** R9: a field whose name says its whole value is a secret. */
 const SECRET_KEY =
-  /^[A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key|authorization|credentials?)$/i;
+  /^[A-Za-z0-9_-]{0,64}(?:password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key|authorization|credentials?)$/i;
 
 /** Replaces every credential-shaped part of a text with `[REDACTED]` (rules R1 to R8). */
 export function maskCredentials(text: string): string {
@@ -135,6 +150,13 @@ export const FIELDS_MAX = 20;
 export const DETAILS_MAX_BYTES = 12_288;
 /** A value is never cut below this many code points to fit the details' size; fields go instead. */
 const VALUE_FLOOR = 200;
+/**
+ * Before masking, a value over this many code points keeps only its first
+ * and last PRECUT_KEEP (so masking a huge input stays fast; it is cut far
+ * below this afterwards anyway).
+ */
+export const PRECUT_MAX = 16_384;
+export const PRECUT_KEEP = 8_192;
 
 /** One field of the details. */
 export interface ApprovalField {
@@ -158,20 +180,56 @@ function cutWithEllipsis(text: string, max: number): string {
   return chars.length <= max ? text : chars.slice(0, max - 1).join('') + '…';
 }
 
+/** A value cleaned, pre-cut and masked: its code points, and what the pre-cut left out. */
+interface Prepared {
+  chars: string[];
+  /** Code points the pre-cut left out (0: none). */
+  base: number;
+  /** Where the pre-cut's marker is in `chars` (-1: none). */
+  markerAt: number;
+}
+
+/** The pre-cut marker's place: the marker nearest the middle. */
+function markerIndex(chars: readonly string[]): number {
+  let best = -1;
+  const middle = chars.length / 2;
+  for (let i = 0; i + 2 < chars.length; i++) {
+    if (chars[i] === '\n' && chars[i + 1] === '⋯' && chars[i + 2] === '\n') {
+      if (best < 0 || Math.abs(i - middle) < Math.abs(best - middle)) best = i;
+    }
+  }
+  return best;
+}
+
+/** Cleans a value, cuts it to its ends when it is huge, and masks it. */
+function prepare(text: string, mask: (value: string) => string): Prepared {
+  const cleaned = Array.from(cleanApprovalText(text));
+  if (cleaned.length <= PRECUT_MAX) {
+    return { chars: Array.from(mask(cleaned.join(''))), base: 0, markerAt: -1 };
+  }
+  const pre =
+    cleaned.slice(0, PRECUT_KEEP).join('') +
+    CUT_MARKER +
+    cleaned.slice(cleaned.length - PRECUT_KEEP).join('');
+  const chars = Array.from(mask(pre));
+  return { chars, base: cleaned.length - 2 * PRECUT_KEEP, markerAt: markerIndex(chars) };
+}
+
 /**
- * A value cut to `length` code points (the marker included): its head and
- * tail, 2/3 and 1/3 of what is kept, around the marker. Returns the value
- * and how many code points were left out.
+ * A value cut to its first `head` and last `tail` code points around the
+ * marker, and how many of the original code points were left out (the
+ * pre-cut's too, but not its marker).
  */
-function keepEnds(
-  chars: readonly string[],
-  head: number,
-  tail: number,
-): { value: string; cut: number } {
-  if (head + tail >= chars.length) return { value: chars.join(''), cut: 0 };
+function keepEnds(p: Prepared, head: number, tail: number): { value: string; cut: number } {
+  const n = p.chars.length;
+  if (head + tail >= n) return { value: p.chars.join(''), cut: p.base };
+  const removedMarker =
+    p.markerAt < 0
+      ? 0
+      : Math.max(0, Math.min(p.markerAt + MARKER_LENGTH, n - tail) - Math.max(p.markerAt, head));
   return {
-    value: chars.slice(0, head).join('') + CUT_MARKER + chars.slice(chars.length - tail).join(''),
-    cut: chars.length - head - tail,
+    value: p.chars.slice(0, head).join('') + CUT_MARKER + p.chars.slice(n - tail).join(''),
+    cut: p.base + (n - head - tail) - removedMarker,
   };
 }
 
@@ -179,14 +237,14 @@ function keepEnds(
 export function cutValue(value: string): { value: string; cut: number } {
   const chars = Array.from(value);
   if (chars.length <= VALUE_MAX) return { value, cut: 0 };
-  return keepEnds(chars, VALUE_HEAD, VALUE_TAIL);
+  return keepEnds({ chars, base: 0, markerAt: -1 }, VALUE_HEAD, VALUE_TAIL);
 }
 
 /** One field before the size check: its whole (masked) value, and the cut shown. */
 interface Pending {
   key: string;
-  /** The masked value, whole, as code points. */
-  full: string[];
+  /** The masked value, whole. */
+  full: Prepared;
   value: string;
   cut: number;
 }
@@ -214,8 +272,9 @@ function assemble(
  * The details of a tool call, cleaned, masked and cut: for Bash and
  * PowerShell a string `description` is the description; every other
  * top-level key of the input, in order, is a field (a string as it is,
- * anything else as indented JSON). Each value is cleaned, masked, then cut
- * past 3,500 code points; at most 20 fields; then, while the JSON is over
+ * anything else as indented JSON). Each value is cleaned, cut to its first
+ * and last 8,192 code points when it is over 16,384 (so masking stays
+ * fast), masked, then cut past 3,500 code points; at most 20 fields; then, while the JSON is over
  * 12 KB, the longest value is cut to half (never below 200 code points),
  * and once none is longer than that, fields are dropped from the end.
  */
@@ -230,7 +289,7 @@ export function buildDetails(toolName: string, input: Record<string, unknown>): 
       rawKey === 'description' &&
       typeof raw === 'string'
     ) {
-      const text = maskCredentials(cleanApprovalText(raw)).trim();
+      const text = prepare(raw, maskCredentials).chars.join('').trim();
       if (text !== '') description = cutWithEllipsis(text, DESCRIPTION_MAX);
       continue;
     }
@@ -241,9 +300,11 @@ export function buildDetails(toolName: string, input: Record<string, unknown>): 
     const cleanedKey = cleanApprovalKey(rawKey);
     const key = cutWithEllipsis(cleanedKey === '' ? '_' : cleanedKey, KEY_MAX);
     const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
-    const masked = maskField(cleanedKey, cleanApprovalText(text));
-    const full = Array.from(masked);
-    const first = cutValue(masked);
+    const full = prepare(text, (value) => maskField(cleanedKey, value));
+    const first =
+      full.chars.length > VALUE_MAX
+        ? keepEnds(full, VALUE_HEAD, VALUE_TAIL)
+        : { value: full.chars.join(''), cut: full.base };
     pending.push({ key, full, value: first.value, cut: first.cut });
   }
   let details = assemble(description, pending, more);
@@ -298,7 +359,7 @@ const hasOnly = (o: Record<string, unknown>, keys: readonly string[]): boolean =
   Object.keys(o).every((k) => keys.includes(k));
 
 /** One suggestion as a session rule, or undefined when it isn't exactly one. */
-function asSessionRule(entry: unknown): SessionRule | undefined {
+function asSessionRule(entry: unknown, toolName: string): SessionRule | undefined {
   if (!isPlain(entry) || entry.destination !== 'session') return undefined;
   if (entry.type === 'setMode') {
     if (!hasOnly(entry, ['type', 'mode', 'destination']) || entry.mode !== 'acceptEdits') {
@@ -314,6 +375,8 @@ function asSessionRule(entry: unknown): SessionRule | undefined {
   for (const r of rules) {
     if (!isPlain(r) || !hasOnly(r, ['toolName', 'ruleContent'])) return undefined;
     if (typeof r.toolName !== 'string' || !TOOL_NAME_RE.test(r.toolName)) return undefined;
+    // A rule only for the tool that asks: never another tool's.
+    if (r.toolName !== toolName) return undefined;
     if (r.ruleContent === undefined) {
       out.push({ toolName: r.toolName });
       continue;
@@ -337,10 +400,11 @@ function asSessionRule(entry: unknown): SessionRule | undefined {
 /**
  * The session rule to offer, from Claude Code's permission_suggestions (an
  * array, or its JSON text): the first entry that is exactly a session-scoped
- * allow rule (1 to 5 rules) or "accept edits for the session". Anything else
- * (another destination, a directory grant, another mode) is never offered.
+ * allow rule (1 to 5 rules, each for the tool that asks) or "accept edits
+ * for the session". Anything else (another destination, a directory grant,
+ * another mode, a rule for another tool) is never offered.
  */
-export function sessionRuleFrom(suggestions: unknown): SessionRule | undefined {
+export function sessionRuleFrom(suggestions: unknown, toolName: string): SessionRule | undefined {
   let list = suggestions;
   if (typeof list === 'string') {
     if (list.trim() === '' || list.startsWith('${')) return undefined;
@@ -352,7 +416,7 @@ export function sessionRuleFrom(suggestions: unknown): SessionRule | undefined {
   }
   if (!Array.isArray(list)) return undefined;
   for (const entry of list) {
-    const rule = asSessionRule(entry);
+    const rule = asSessionRule(entry, toolName);
     if (rule !== undefined) return rule;
   }
   return undefined;

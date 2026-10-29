@@ -117,15 +117,16 @@ describe('the ring of tool calls', () => {
     expect(inputHash({ a: 1 })).not.toBe(inputHash({ a: 2 }));
   });
 
-  it('claims the newest unclaimed match at most 5 s old, forgets after 10 s, keeps 256', () => {
+  it('claims the oldest unclaimed match at most 5 s old, forgets after 10 s, keeps 256', () => {
     let now = 0;
     const ring = new ToolRing(() => now);
     const h = inputHash(BASH);
     ring.record({ agentId: '', toolName: 'Bash', hash: h, toolUseId: 'toolu_1' });
     now = 1000;
     ring.record({ agentId: '', toolName: 'Bash', hash: h, toolUseId: 'toolu_2' });
-    expect(ring.claim('', 'Bash', h)).toBe('toolu_2');
+    // Claude Code asks in the order it announced the calls: the oldest first.
     expect(ring.claim('', 'Bash', h)).toBe('toolu_1');
+    expect(ring.claim('', 'Bash', h)).toBe('toolu_2');
     expect(ring.claim('', 'Bash', h)).toBeUndefined();
     ring.record({ agentId: 'a1', toolName: 'Bash', hash: h, toolUseId: 'toolu_3' });
     expect(ring.claim('', 'Bash', h)).toBeUndefined();
@@ -158,7 +159,7 @@ describe('correlation', () => {
     expect(textOf(await seen(c, 'toolu_seen1'))).toBe('{}');
     const pending = approve(c);
     const a = await posted();
-    expect(a.id).toBe(approvalIdForToolUse('toolu_seen1'));
+    expect(a.id).toBe(approvalIdForToolUse('toolu_seen1', '', 'Bash', inputHash(BASH)));
     expect(a.posted.tool_use_id).toBe('toolu_seen1');
     api.sessions.decideApproval(TOKEN, a.id, 'approve');
     expect(textOf(await pending)).toBe(permissionAllow());
@@ -171,11 +172,12 @@ describe('correlation', () => {
     const one = approve(c);
     const two = approve(c);
     await posted(2);
-    expect(
-      approvals()
-        .map((a) => a.posted.tool_use_id)
-        .sort(),
-    ).toEqual(['toolu_twin1', 'toolu_twin2']);
+    // The first call claims the older announcement, the second the newer.
+    const idOf = (toolUseId: string): string =>
+      approvalIdForToolUse(toolUseId, '', 'Bash', inputHash(BASH));
+    for (const a of approvals()) api.sessions.decideApproval(TOKEN, a.id, 'approve');
+    expect((await one).structuredContent).toMatchObject({ message_id: idOf('toolu_twin1') });
+    expect((await two).structuredContent).toMatchObject({ message_id: idOf('toolu_twin2') });
     // No PreToolUse seen: fallback ids, one per call.
     const three = approve(c);
     const four = approve(c);
@@ -183,8 +185,8 @@ describe('correlation', () => {
     const fallback = approvals().slice(2);
     expect(fallback.map((a) => a.posted.tool_use_id)).toEqual([undefined, undefined]);
     expect(new Set(approvals().map((a) => a.id)).size).toBe(4);
-    for (const a of approvals()) api.sessions.decideApproval(TOKEN, a.id, 'approve');
-    for (const p of [one, two, three, four]) expect(textOf(await p)).toBe(permissionAllow());
+    for (const a of approvals().slice(2)) api.sessions.decideApproval(TOKEN, a.id, 'approve');
+    for (const p of [three, four]) expect(textOf(await p)).toBe(permissionAllow());
   });
 });
 

@@ -29,6 +29,7 @@ import {
   waitFor,
   type ChannelClient,
 } from './support/channel-harness.js';
+import { inputHash } from '../src/channel/tool-ring.js';
 import { parseCli } from '../src/config.js';
 import { hookWaitSeconds } from '../src/transports/stdio.js';
 import { FakeApi } from './support/fake-api.js';
@@ -223,14 +224,13 @@ describe('the hook answers (byte for byte)', () => {
 describe('approve', () => {
   it("posts the main agent's card in its direct-message thread, and allows the call on the owner's Approve", async () => {
     const { c, root } = await started();
-    const pending = hookApprove(c, {
-      tool_input: {
-        command: j('GITHUB_TOK', 'EN=', 'q1'.repeat(10), ' npm test'),
-        description: 'Run the tests',
-      },
-    });
+    const input = {
+      command: j('GITHUB_TOK', 'EN=', 'q1'.repeat(10), ' npm test'),
+      description: 'Run the tests',
+    };
+    const pending = hookApprove(c, { tool_input: input });
     const a = await posted();
-    expect(a.id).toBe(approvalIdForToolUse('toolu_01A'));
+    expect(a.id).toBe(approvalIdForToolUse('toolu_01A', '', 'Bash', inputHash(input)));
     expect(a.posted).toEqual({
       id: a.id,
       thread_id: root,

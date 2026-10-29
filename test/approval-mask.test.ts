@@ -89,6 +89,56 @@ const CORPUS: [string, string, string][] = [
   ['M25', j(GH, ' ', GOOGLE), `${X} ${X}`],
 ];
 
+/** The corpus's second part: the shapes the security review found, and line continuations. */
+const CORPUS_V2: [string, string, string][] = [
+  [
+    'M28',
+    j(
+      '-----BEGIN PGP PRIV',
+      'ATE KEY BLOCK-----\n',
+      R('mQIN', 10),
+      '\n-----END PGP PRIV',
+      'ATE KEY BLOCK-----\nafter',
+    ),
+    `${X}\nafter`,
+  ],
+  [
+    'M29',
+    j('curl -d "{\\"pass', 'word\\":\\"hun\\\\\\"ter2\\"}" https://x.test'),
+    j('curl -d "{\\"password\\":', X, '}" https://x.test'),
+  ],
+  ['M30', j('{"pass', 'word": "a\\"b c"}'), j('{"password": ', X, '}')],
+  [
+    'M31',
+    j('-H "{\\"Authori', 'zation\\": \\"Bearer ', R('abc.DEF-', 4), '\\"}"'),
+    j('-H "{\\"Authorization\\": \\"Bearer ', X, '\\"}"'),
+  ],
+  [
+    'M32',
+    j('export DB_PASS', 'WORD=\\\n    hunter2\nnext'),
+    j('export DB_PASSWORD=\\\n    ', X, '\nnext'),
+  ],
+  [
+    'M33',
+    j('mysqldump --pass', 'word \\\n  secretpw db'),
+    j('mysqldump --password \\\n  ', X, ' db'),
+  ],
+  [
+    'M34',
+    j('git clone https://bob:p/a', '@ss', '@', 'host.test/x.git'),
+    j('git clone https://bob:', X, '@', 'host.test/x.git'),
+  ],
+];
+
+/** M35: long runs that slow down rules that can start anywhere; each stays unchanged. */
+const SLOW_INPUTS: [string, string][] = [
+  ['letters', R('a', 40_000)],
+  ['dashes and underscores', R('-_', 20_000)],
+  ['hex', R('0123456789abcdef', 2500)],
+  ['a keyword over and over', R(j('pass', 'word'), 5000)],
+  ['a name run', R('A_', 20_000)],
+];
+
 /** The corpus as one value goes through it: cleaned first, then masked. */
 const mask = (text: string): string => maskCredentials(cleanApprovalText(text));
 
@@ -127,10 +177,45 @@ describe('the masking corpus', () => {
   });
 
   it('M27: masking again changes nothing', () => {
-    for (const [, , expected] of CORPUS) expect(mask(expected)).toBe(expected);
+    for (const [, , expected] of [...CORPUS, ...CORPUS_V2]) expect(mask(expected)).toBe(expected);
     expect(mask(mask(j(R('a ', 1195), GH, ' ', R('b', 2609))))).toBe(
       mask(j(R('a ', 1195), GH, ' ', R('b', 2609))),
     );
+  });
+
+  it.each(CORPUS_V2)('%s', (_id, input, expected) => {
+    expect(mask(input)).toBe(expected);
+  });
+
+  it.each(SLOW_INPUTS)('M35 %s: unchanged, and fast', (_id, input) => {
+    let best = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < 3; i++) {
+      const t0 = performance.now();
+      expect(mask(input)).toBe(input);
+      expect(maskField('description', input)).toBe(input);
+      best = Math.min(best, performance.now() - t0);
+    }
+    expect(best).toBeLessThan(50);
+  });
+});
+
+describe('masking stays fast on long input', () => {
+  it('cuts a value over 16,384 code points to its ends before masking, counting what it left out', () => {
+    const d = buildDetails('Write', { content: j(R('x', 30_000), ' ', GH) });
+    const f = d.fields[0];
+    expect(f?.value.endsWith(` ${X}`)).toBe(true);
+    expect(f?.value.startsWith(R('x', 2400) + CUT_MARKER)).toBe(true);
+    expect(Array.from(f?.value ?? '')).toHaveLength(3403);
+    // 30,041 code points: 13,657 left out before masking, and of the 16,357 masked
+    // (the marker counted), 12,957 more without the marker's 3.
+    expect(f?.cut).toBe(13_657 + 12_957 - 3);
+  });
+
+  it('masks a huge description fast, and keeps it under 1,000', () => {
+    const t0 = performance.now();
+    const d = buildDetails('Bash', { command: 'x', description: R('a-_', 700_000) });
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(Array.from(d.description ?? '')).toHaveLength(1000);
   });
 });
 
@@ -152,9 +237,19 @@ describe('cleaning', () => {
       ch(0x2060),
       ch(0x2066),
       ch(0xfeff),
+      ch(0xad),
+      ch(0x34f),
+      ch(0x180e),
+      ch(0xfe00),
+      ch(0xfe0f),
+      String.fromCodePoint(0xe0000),
+      String.fromCodePoint(0xe0041),
+      String.fromCodePoint(0xe007f),
       'g',
     );
     expect(cleanApprovalText(text)).toBe('a\nb\nc\nd\ne\tfg');
+    // A letter outside the tag block stays (U+E0080 is not a tag).
+    expect(cleanApprovalText(String.fromCodePoint(0xe0080))).toBe(String.fromCodePoint(0xe0080));
   });
 
   it('folds a key to one trimmed line', () => {
@@ -323,16 +418,33 @@ describe('the session rule offered', () => {
   };
 
   it('takes the first session-scoped allow rule or accept-edits mode, from JSON text or an array', () => {
-    expect(sessionRuleFrom(JSON.stringify([allow]))).toEqual(allow);
+    expect(sessionRuleFrom(JSON.stringify([allow]), 'Bash')).toEqual(allow);
     expect(
-      sessionRuleFrom([{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]),
+      sessionRuleFrom([{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }], 'Write'),
     ).toEqual({ type: 'setMode', mode: 'acceptEdits', destination: 'session' });
     expect(
-      sessionRuleFrom([
-        { type: 'addDirectories', directories: ['C:\\b'], destination: 'session' },
-        { ...allow, rules: [{ toolName: 'Read' }] },
-      ]),
+      sessionRuleFrom(
+        [
+          { type: 'addDirectories', directories: ['C:\\b'], destination: 'session' },
+          { ...allow, rules: [{ toolName: 'Read' }] },
+        ],
+        'Read',
+      ),
     ).toEqual({ ...allow, rules: [{ toolName: 'Read' }] });
+  });
+
+  it('never offers a rule for another tool than the one asking (every rule must name it)', () => {
+    expect(sessionRuleFrom([allow], 'PowerShell')).toBeUndefined();
+    expect(
+      sessionRuleFrom(
+        [{ ...allow, rules: [{ toolName: 'Bash', ruleContent: 'ls:*' }, { toolName: 'Write' }] }],
+        'Bash',
+      ),
+    ).toBeUndefined();
+    // The next entry that does name it is offered.
+    expect(sessionRuleFrom([{ ...allow, rules: [{ toolName: 'Write' }] }, allow], 'Bash')).toEqual(
+      allow,
+    );
   });
 
   it('never offers another destination, a deny or ask rule, directories, another mode or extra keys', () => {
@@ -355,19 +467,20 @@ describe('the session rule offered', () => {
       { ...allow, rules: [{ toolName: 'Bash', ruleContent: '' }] },
       { ...allow, rules: [{ toolName: 'Bash', ruleContent: R('x', 501) }] },
     ]) {
-      expect(sessionRuleFrom([bad]), JSON.stringify(bad).slice(0, 80)).toBeUndefined();
+      expect(sessionRuleFrom([bad], 'Bash'), JSON.stringify(bad).slice(0, 80)).toBeUndefined();
     }
-    expect(sessionRuleFrom('not json')).toBeUndefined();
-    expect(sessionRuleFrom('${permission_suggestions}')).toBeUndefined();
-    expect(sessionRuleFrom('')).toBeUndefined();
-    expect(sessionRuleFrom(undefined)).toBeUndefined();
+    expect(sessionRuleFrom('not json', 'Bash')).toBeUndefined();
+    expect(sessionRuleFrom('${permission_suggestions}', 'Bash')).toBeUndefined();
+    expect(sessionRuleFrom('', 'Bash')).toBeUndefined();
+    expect(sessionRuleFrom(undefined, 'Bash')).toBeUndefined();
   });
 
   it("cleans a rule's content by the strip rules only (a bidi control goes)", () => {
     expect(
-      sessionRuleFrom([
-        { ...allow, rules: [{ toolName: 'Bash', ruleContent: j('npm', ch(0x202e), ' test:*') }] },
-      ]),
+      sessionRuleFrom(
+        [{ ...allow, rules: [{ toolName: 'Bash', ruleContent: j('npm', ch(0x202e), ' test:*') }] }],
+        'Bash',
+      ),
     ).toEqual(allow);
   });
 });

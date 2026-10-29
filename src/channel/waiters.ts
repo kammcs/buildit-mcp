@@ -51,12 +51,19 @@ export function eventMessageId(event: SessionEvent): string | undefined {
   return typeof id === 'string' ? id : undefined;
 }
 
-/** How a tool approval ended: its status (and reason), and the hook's answer. */
+/**
+ * How a tool approval ended: its status (and reason), the hook's answer, and
+ * what it was for (the tool, its input's hash, the session rule offered), so
+ * the answer is never given for anything else.
+ */
 export interface ApprovalVerdict {
   status: string;
   reason?: string;
   /** The PermissionRequest hook's output for it. */
   text: string;
+  toolName: string;
+  hash: string;
+  rule?: unknown;
 }
 
 /** How many cards' outcomes are remembered for a repeated ask. */
@@ -149,9 +156,16 @@ export class CardWaiters {
     this.verdicts.set(messageId, verdict);
   }
 
-  /** How a tool approval ended, if this process saw it: a repeated hook call gets the same answer. */
-  approvalOf(messageId: string): ApprovalVerdict | undefined {
-    return this.verdicts.get(messageId);
+  /**
+   * How a tool approval ended, if this process saw it and it was for this
+   * tool and input: a repeated hook call for the same call gets the same
+   * answer; anything else is unknown.
+   */
+  approvalOf(messageId: string, toolName: string, hash: string): ApprovalVerdict | undefined {
+    const verdict = this.verdicts.get(messageId);
+    return verdict !== undefined && verdict.toolName === toolName && verdict.hash === hash
+      ? verdict
+      : undefined;
   }
 
   /** How a card closed (its closed_by), if this process saw it. */

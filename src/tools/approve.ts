@@ -21,6 +21,8 @@
  * when approvals in the app are off, the folder has no channel session, the
  * input can't be read, the post failed, or the approval stopped being needed.
  */
+import { randomUUID } from 'node:crypto';
+
 import { z } from 'zod';
 
 import { ApiError } from '../api/client.js';
@@ -33,7 +35,7 @@ import {
 import type { ChannelState } from '../channel/loop.js';
 import { buildDetails, sessionRuleFrom, type SessionRule } from '../channel/mask.js';
 import { isUuid, itemThreadId } from '../channel/threads.js';
-import { inputHash, parseToolInput } from '../channel/tool-ring.js';
+import { canonicalJson, inputHash, parseToolInput } from '../channel/tool-ring.js';
 import { CardInbox, eventMessageId, type ApprovalVerdict } from '../channel/waiters.js';
 import { isItemWorker, workerEntry } from '../channel/workers.js';
 import { defineTool, type ToolContext, type ToolDefinition } from '../toolsets/registry.js';
@@ -107,9 +109,19 @@ export function hookField(value: unknown): string {
   return s.startsWith('${') ? '' : s;
 }
 
-/** A card's id from its tool call's id: one card per call, however often the hook runs. */
-export function approvalIdForToolUse(toolUseId: string): string {
-  return uuidV5(`tool_use\n${toolUseId}`, APPROVE_NAMESPACE);
+/**
+ * A card's id from its tool call: its id, who asks, the tool and the input's
+ * hash. One card per call, however often the hook runs; and a verdict for
+ * one input is never the verdict for another under the same tool call id
+ * (Claude can call these tools itself, and name any id).
+ */
+export function approvalIdForToolUse(
+  toolUseId: string,
+  agentId: string,
+  toolName: string,
+  hash: string,
+): string {
+  return uuidV5(['tool_use', toolUseId, agentId, toolName, hash].join('\n'), APPROVE_NAMESPACE);
 }
 
 /** How long `approve` waits for the call's PreToolUse to name its id. */
@@ -203,6 +215,8 @@ const ITEM_FALLBACK_CODES: ReadonlySet<string> = new Set([
 interface Final {
   status: string;
   reason?: string | undefined;
+  /** The session rule the server stored (an event's data.approval.rule only). */
+  rule?: unknown;
 }
 
 /** What the call answers for one way the wait ended. */
@@ -213,7 +227,14 @@ interface Answer {
 
 function answerOf(
   final: Final,
-  init: { id: string; owner: string; minutes: number; rule: SessionRule | undefined },
+  init: {
+    id: string;
+    owner: string;
+    minutes: number;
+    rule: SessionRule | undefined;
+    /** Told when "Allow for this session" can't be granted as a rule. */
+    mismatch?: () => void;
+  },
 ): Answer {
   const at = (status: ApproveOutput['status'], text: string, reason?: string): Answer => ({
     structured: {
@@ -227,8 +248,17 @@ function answerOf(
     case 'approved':
       return at('approved', permissionAllow());
     case 'approved_session':
-      // The rule this call offered, never what an event says.
-      return at('approved_session', permissionAllow(init.rule));
+      // The rule this call offered, and only when the server stored that same rule (what the
+      // owner was shown); otherwise this one call only.
+      if (
+        init.rule !== undefined &&
+        final.rule !== undefined &&
+        canonicalJson(final.rule) === canonicalJson(init.rule)
+      ) {
+        return at('approved_session', permissionAllow(init.rule));
+      }
+      init.mismatch?.();
+      return at('approved', permissionAllow(), 'rule_mismatch');
     case 'denied':
       return at('denied', permissionDeny(denyText('denied', init.owner, init.minutes)));
     case 'expired':
@@ -254,13 +284,23 @@ function answerOf(
 
 const codeOf = (err: unknown): string => (err instanceof ApiError ? err.code : 'error');
 
-/** The approval object of a card.closed event for this card, if it carries one. */
-function eventApproval(event: { data: unknown }): Final | undefined {
+/** The approval object of a card.closed event for this card, if it carries one (and names it). */
+function eventApproval(event: { data: unknown }, id: string): Final | undefined {
   const approval = (event.data as Record<string, unknown>).approval;
   if (approval === null || typeof approval !== 'object') return undefined;
   const a = approval as Record<string, unknown>;
-  if (typeof a.outcome !== 'string') return undefined;
-  return { status: a.outcome, reason: typeof a.reason === 'string' ? a.reason : undefined };
+  if (typeof a.outcome !== 'string' || a.id !== id) return undefined;
+  return {
+    status: a.outcome,
+    reason: typeof a.reason === 'string' ? a.reason : undefined,
+    ...(a.rule === undefined ? {} : { rule: a.rule }),
+  };
+}
+
+/** A post that failed in a way that may have stored it: a timeout, the network, a 5xx. */
+function mayBeStored(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return true;
+  return err.status >= 500 || err.status === 408 || err.code === 'timeout';
 }
 
 // ---------------------------------------------------------------------------
@@ -271,8 +311,14 @@ function eventApproval(event: { data: unknown }): Final | undefined {
 export function createApproveTool(state: ChannelState, options: ApproveOptions): ToolDefinition {
   const scale = options.msPerSecond ?? 1000;
   const clock = options.now ?? Date.now;
-  /** How many fallback ids this process made per prefix, so a retried identical call gets a new card. */
-  const fallbackSeq = new Map<string, number>();
+  /**
+   * How many fallback ids this process made per prefix (so a retried
+   * identical call gets a new card), and how many of them are in use; a
+   * prefix in use is never forgotten.
+   */
+  const fallbackSeq = new Map<string, { seq: number; inUse: number }>();
+  /** This server's own nonce (made once, at start-up): fallback ids can't be guessed or reused. */
+  const nonce = randomUUID();
 
   return defineTool({
     name: 'approve',
@@ -315,6 +361,8 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
     ctx: ToolContext,
     pass: (why: string, id?: string | null) => Answer,
   ): Promise<Answer> {
+    // The whole call, the post included, stays within the card's wait (and so the hook's timeout).
+    const started = clock();
     if (!options.approvalsInApp) return pass('approvals_in_app_off');
     const toolName = hookField(args.tool_name);
     // AskUserQuestion is the question hook's.
@@ -331,27 +379,65 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
     if (approvals === undefined) return pass('no_session');
 
     const agentId = hookField(args.agent_id);
-    const agentType = hookField(args.agent_type);
     const hash = inputHash(input);
     const given = hookField(args.tool_use_id);
     const toolUseId = TOOL_USE_ID_RE.test(given)
       ? given
       : await state.ring.claimSoon(agentId, toolName, hash, CORRELATE_WAIT_MS);
     let id: string;
+    let releasePrefix = (): void => undefined;
     if (toolUseId !== undefined) {
-      id = approvalIdForToolUse(toolUseId);
+      id = approvalIdForToolUse(toolUseId, agentId, toolName, hash);
     } else {
       const sessionId = hookField(args.session_id) || info.session.id;
-      const prefix = [sessionId, agentId, hash, hookField(args.prompt_id)].join('\n');
-      const seq = (fallbackSeq.get(prefix) ?? 0) + 1;
-      fallbackSeq.set(prefix, seq);
+      const prefix = [sessionId, agentId, toolName, hash, hookField(args.prompt_id), nonce].join(
+        '\n',
+      );
+      const entry = fallbackSeq.get(prefix) ?? { seq: 0, inUse: 0 };
+      entry.seq++;
+      entry.inUse++;
+      fallbackSeq.delete(prefix);
+      fallbackSeq.set(prefix, entry);
       if (fallbackSeq.size > 1000) {
-        const oldest = fallbackSeq.keys().next().value;
-        if (oldest !== undefined) fallbackSeq.delete(oldest);
+        for (const [key, value] of fallbackSeq) {
+          if (value.inUse === 0) {
+            fallbackSeq.delete(key);
+            break;
+          }
+        }
       }
-      id = uuidV5(`${prefix}\n${seq}`, APPROVE_NAMESPACE);
+      releasePrefix = () => {
+        entry.inUse = Math.max(0, entry.inUse - 1);
+      };
+      id = uuidV5(`${prefix}\n${entry.seq}`, APPROVE_NAMESPACE);
     }
-    const known = state.waiters.approvalOf(id);
+    try {
+      return await approveCard(args, ctx, pass, { started, id, toolName, hash, toolUseId, input });
+    } finally {
+      releasePrefix();
+    }
+  }
+
+  async function approveCard(
+    args: z.infer<typeof ApproveInputSchema>,
+    ctx: ToolContext,
+    pass: (why: string, id?: string | null) => Answer,
+    call: {
+      started: number;
+      id: string;
+      toolName: string;
+      hash: string;
+      toolUseId: string | undefined;
+      input: Record<string, unknown>;
+    },
+  ): Promise<Answer> {
+    const { started, id, toolName, hash, toolUseId, input } = call;
+    const info = state.session;
+    const approvals = state.approvals;
+    if (info === undefined || approvals === undefined) return pass('no_session');
+    const agentId = hookField(args.agent_id);
+    const agentType = hookField(args.agent_type);
+    const known = state.waiters.approvalOf(id, toolName, hash);
     if (known !== undefined) {
       return {
         structured: {
@@ -367,7 +453,7 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
     const waitS = options.hookWaitS;
     const minutes = Math.max(1, Math.round(waitS / 60));
     const details = buildDetails(toolName, input);
-    const rule = sessionRuleFrom(args.suggestions);
+    const rule = sessionRuleFrom(args.suggestions, toolName);
     const subagent = agentId !== '' || agentType !== '';
     const agent =
       subagent && AGENT_REF_RE.test(agentId)
@@ -389,13 +475,8 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
       wake?.();
     };
     let unregister = state.waiters.register(id, inbox, place.thread);
-    const leave = approvals.add({
-      id,
-      agentRef: agentId,
-      toolUseId,
-      postedAt: new Date(clock()).toISOString(),
-      settle,
-    });
+    const postedAt = new Date(clock()).toISOString();
+    const leave = approvals.add({ id, agentRef: agentId, toolUseId, postedAt, settle });
     state.pollFailed.add(onPollFailed);
     const closer = apiApprovalCloser(ctx.api, ctx.logger);
     const closeLater = (reason: ApprovalCloseReason): void => {
@@ -422,14 +503,27 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
           },
           ctx.apiOptions,
         );
+      /**
+       * A post that failed: when it may have been stored anyway (or the id is
+       * another call's), the card is closed as interrupted and stays in the
+       * journal until that close succeeds; then the terminal decides.
+       */
+      const failed = (err: unknown): Answer => {
+        const code = codeOf(err);
+        ctx.logger.info('tool approval not posted', { code });
+        if (mayBeStored(err) || code === 'idempotency_conflict') {
+          approvals.orphan(id, postedAt);
+          void closer(id, 'interrupted').then((ok) => {
+            if (ok) approvals.forget(id);
+          });
+        }
+        return pass('post_failed');
+      };
       let posted: Awaited<ReturnType<typeof post>>;
       try {
         posted = await post(place.thread);
       } catch (err) {
-        if (!(place.item && ITEM_FALLBACK_CODES.has(codeOf(err)))) {
-          ctx.logger.info('tool approval not posted', { code: codeOf(err) });
-          return pass('post_failed');
-        }
+        if (!(place.item && ITEM_FALLBACK_CODES.has(codeOf(err)))) return failed(err);
         // The item's thread refused it: ask in the direct message instead.
         ctx.logger.info('tool approval moved to the direct message', { code: codeOf(err) });
         place = { thread: state.lastDmThread, item: false };
@@ -438,11 +532,18 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
         try {
           posted = await post(place.thread);
         } catch (again) {
-          ctx.logger.info('tool approval not posted', { code: codeOf(again) });
-          return pass('post_failed');
+          return failed(again);
         }
       }
-      const init = { id, owner, minutes, rule };
+      const init = {
+        id,
+        owner,
+        minutes,
+        rule,
+        mismatch: () => {
+          ctx.logger.warn('tool approval rule not granted', { reason: 'rule_mismatch' });
+        },
+      };
       ctx.logger.info('tool approval posted', {
         message_id: id,
         created: posted.created,
@@ -465,9 +566,8 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
         }, PROGRESS_EVERY_S * scale);
       }
 
-      const started = clock();
       const deadline = started + waitS * scale;
-      let nextPoll = started + POLL_EVERY_S * scale;
+      let nextPoll = clock() + POLL_EVERY_S * scale;
       const readState = async (): Promise<Final | undefined> => {
         try {
           const r = await getSessionApproval(ctx.api, id, ctx.apiOptions);
@@ -535,7 +635,7 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
         const { event, done } = next;
         try {
           if (event.type !== 'card.closed' || eventMessageId(event) !== id) continue;
-          const final = eventApproval(event);
+          const final = eventApproval(event, id);
           if (final === undefined) {
             // A close without the verdict: read it.
             pollNow = true;
@@ -558,6 +658,9 @@ export function createApproveTool(state: ChannelState, options: ApproveOptions):
           status: answer.structured.status,
           ...(answer.structured.reason === undefined ? {} : { reason: answer.structured.reason }),
           text: answer.text,
+          toolName,
+          hash,
+          ...(rule === undefined ? {} : { rule }),
         };
         state.waiters.rememberApproval(id, verdict);
         if (
@@ -586,12 +689,18 @@ const str = (v: unknown): string => hookField(v);
 const EMPTY = { structured: { ok: true }, text: '{}' };
 const OkSchema = z.object({ ok: z.boolean() });
 
-const hookAnnotations = (title: string) => ({
+/**
+ * The hooks' annotations: tool_seen only records the call here (read-only);
+ * the others may close a card in buildIt.Social. All of them stay listed
+ * under --read-only (where approve isn't, so there is nothing for them to
+ * close), so the plugin's hooks never fail.
+ */
+const hookAnnotations = (title: string, readOnly: boolean) => ({
   title,
-  readOnlyHint: true,
+  readOnlyHint: readOnly,
   destructiveHint: false,
   idempotentHint: true,
-  openWorldHint: false,
+  openWorldHint: !readOnly,
 });
 
 /**
@@ -630,7 +739,7 @@ export function createApprovalHookTools(state: ChannelState): ToolDefinition[] {
       "Called by the buildit plugin's PreToolUse hook before each tool call, so a tool approval can name its call. Not for you to call.",
     scopes: [],
     runsAfterSessionEnd: true,
-    annotations: hookAnnotations('Tool call seen (plugin hook)'),
+    annotations: hookAnnotations('Tool call seen (plugin hook)', true),
     inputSchema: z.object({
       tool_name: HookString,
       tool_input: HookString,
@@ -679,7 +788,7 @@ export function createApprovalHookTools(state: ChannelState): ToolDefinition[] {
       "Called by the buildit plugin's PostToolUse and PostToolUseFailure hooks after each tool call: a tool approval still waiting for that call was answered in the terminal. Not for you to call.",
     scopes: [],
     runsAfterSessionEnd: true,
-    annotations: hookAnnotations('Tool call done (plugin hook)'),
+    annotations: hookAnnotations('Tool call done (plugin hook)', false),
     inputSchema: z.object({ tool_use_id: HookString, agent_id: HookString }),
     outputSchema: OkSchema,
     run: guarded('tool_done', (args, ctx) => {
@@ -698,7 +807,7 @@ export function createApprovalHookTools(state: ChannelState): ToolDefinition[] {
       "Called by the buildit plugin's SubagentStop hook when a subagent stops: its tool approvals are no longer needed. Not for you to call.",
     scopes: [],
     runsAfterSessionEnd: true,
-    annotations: hookAnnotations('Subagent done (plugin hook)'),
+    annotations: hookAnnotations('Subagent done (plugin hook)', false),
     inputSchema: z.object({ agent_id: HookString, agent_type: HookString }),
     outputSchema: OkSchema,
     run: guarded('agent_done', (args, ctx) => {
@@ -717,7 +826,7 @@ export function createApprovalHookTools(state: ChannelState): ToolDefinition[] {
       "Called by the buildit plugin's UserPromptSubmit hook: a new prompt from the person means the main agent's tool approvals are no longer needed. Not for you to call.",
     scopes: [],
     runsAfterSessionEnd: true,
-    annotations: hookAnnotations('Prompt typed (plugin hook)'),
+    annotations: hookAnnotations('Prompt typed (plugin hook)', false),
     inputSchema: z.object({ prompt: HookString }),
     outputSchema: OkSchema,
     run: guarded('prompt_typed', (args, ctx) => {
@@ -729,6 +838,14 @@ export function createApprovalHookTools(state: ChannelState): ToolDefinition[] {
 
   return [toolSeen, toolDone, agentDone, promptTyped];
 }
+
+/** The hook tools listed under --read-only too (no-ops there: approve, which posts, isn't). */
+export const READ_ONLY_SAFE_HOOKS: ReadonlySet<string> = new Set([
+  'tool_seen',
+  'tool_done',
+  'agent_done',
+  'prompt_typed',
+]);
 
 /** The hook tools that are no activity of their own for "is writing" (tool_seen counts it itself). */
 export const APPROVAL_HOOK_TOOLS: ReadonlySet<string> = new Set([

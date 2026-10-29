@@ -63,6 +63,7 @@ import { ToolApprovals } from '../channel/approvals.js';
 import {
   APPROVAL_HOOK_TOOLS,
   createApprovalHookTools,
+  READ_ONLY_SAFE_HOOKS,
   createApproveTool,
   type ApproveOptions,
 } from '../tools/approve.js';
@@ -385,7 +386,7 @@ function channelTools(
     ...createApprovalHookTools(state),
   ].filter(
     (tool) =>
-      (!policy.readOnly || tool.annotations.readOnlyHint) &&
+      (!policy.readOnly || tool.annotations.readOnlyHint || READ_ONLY_SAFE_HOOKS.has(tool.name)) &&
       !policy.excludeTools.includes(tool.name),
   );
 }

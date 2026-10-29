@@ -121,6 +121,10 @@ export interface FakeApproval {
   decidedBy?: string;
   /** Every close the session asked for, in order. */
   closes: string[];
+  /** The rule the server says it stored, when not the posted suggestion (tests). */
+  storedRule?: unknown;
+  /** The id the card.closed event's data.approval names, when not the card's (tests). */
+  eventId?: string;
 }
 
 export interface FakeCard {
@@ -513,6 +517,10 @@ export class FakeSessions {
   readonly approvalRefusals: { code: string; details: Record<string, unknown> }[] = [];
   /** How many open approvals a session may have (the server's 10). */
   approvalsOpenMax = 10;
+  /** Posts stored and then answered with a 503 (the session doesn't learn it was stored; tests). */
+  approvalStoreThenFail = 0;
+  /** Closes answered with a 503 (tests). */
+  approvalCloseFailures = 0;
 
   /** POST /v1/session/approvals */
   postApproval(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
@@ -520,6 +528,13 @@ export class FakeSessions {
     const id = String(body.id);
     const existing = s.cards.get(id);
     if (existing?.approval !== undefined) {
+      // The same id for another call (another tool, tool call id or details) is refused.
+      const before = existing.approval.posted;
+      const digest = (b: Record<string, unknown>): string =>
+        JSON.stringify([b.tool_name, b.tool_use_id, b.description, b.fields, b.more_fields]);
+      if (digest(before) !== digest(body)) {
+        throw new SessionRefusal('idempotency_conflict', { idempotency_key: id });
+      }
       const m = s.messages.find((x) => x.id === id);
       if (!m) throw new Error('approval without its message');
       return {
@@ -580,6 +595,10 @@ export class FakeSessions {
       },
     };
     s.cards.set(id, card);
+    if (this.approvalStoreThenFail > 0) {
+      this.approvalStoreThenFail--;
+      throw new SessionRefusal('unavailable', {});
+    }
     return {
       status: 201,
       body: {
@@ -612,6 +631,10 @@ export class FakeSessions {
     body: Record<string, unknown>,
   ): { status: number; body: unknown } {
     const s = this.live(token);
+    if (this.approvalCloseFailures > 0) {
+      this.approvalCloseFailures--;
+      throw new SessionRefusal('unavailable', {});
+    }
     const card = this.ownApproval(s, id);
     const reason = String(body.reason);
     card.approval.closes.push(reason);
@@ -639,7 +662,7 @@ export class FakeSessions {
     token: string,
     id: string,
     action: 'approve' | 'approve_session' | 'deny',
-    options: { withEvent?: boolean } = {},
+    options: { withEvent?: boolean; storedRule?: unknown; eventApprovalId?: string } = {},
   ): void {
     const s = this.session(token);
     const card = this.ownApproval(s, id);
@@ -652,6 +675,10 @@ export class FakeSessions {
           : 'denied';
     card.approval.decidedAt = this.host.now();
     card.approval.decidedBy = s.ownerId;
+    // The server's stored rule differs from what the session sent (tests of a mismatch).
+    if (options.storedRule !== undefined) card.approval.storedRule = options.storedRule;
+    // The event names another approval than its card (tests).
+    if (options.eventApprovalId !== undefined) card.approval.eventId = options.eventApprovalId;
     if (options.withEvent === false) {
       card.closedAt = this.host.now();
       card.closedBy = 'owner';
@@ -703,9 +730,9 @@ export class FakeSessions {
 
   private approvalOutcome(id: string, card: FakeCard): Record<string, unknown> {
     const a = card.approval as FakeApproval;
-    const rule = a.posted.suggestion;
+    const rule = a.storedRule ?? a.posted.suggestion;
     return {
-      id,
+      id: a.eventId ?? id,
       outcome: a.status === 'open' ? 'closed' : a.status,
       ...(a.reason === undefined ? {} : { reason: a.reason }),
       ...(a.decidedBy === undefined ? {} : { decided_by: a.decidedBy }),

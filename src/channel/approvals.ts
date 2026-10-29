@@ -19,7 +19,7 @@
  * them when the next one starts in the folder: the owner never approves a
  * call nobody waits for.
  */
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { ApiError, type ApiClient } from '../api/client.js';
@@ -53,8 +53,11 @@ interface JournalFile {
   open: { id: string; posted_at: string }[];
 }
 
-/** Closes one card in buildIt.Social (best effort; the API call). */
-export type ApprovalCloser = (id: string, reason: ApprovalCloseReason) => Promise<void>;
+/**
+ * Closes one card in buildIt.Social (best effort; the API call): true once
+ * the card is closed or doesn't exist, false when that isn't known.
+ */
+export type ApprovalCloser = (id: string, reason: ApprovalCloseReason) => Promise<boolean>;
 
 /** The closer that calls the API (at most 5 seconds each; a failure is only logged). */
 export function apiApprovalCloser(api: ApiClient, logger: Logger): ApprovalCloser {
@@ -64,11 +67,12 @@ export function apiApprovalCloser(api: ApiClient, logger: Logger): ApprovalClose
         tool: 'approve',
         signal: AbortSignal.timeout(5000),
       });
+      return true;
     } catch (err) {
-      logger.info('tool approval not closed', {
-        message_id: id,
-        code: err instanceof ApiError ? err.code : 'error',
-      });
+      const code = err instanceof ApiError ? err.code : 'error';
+      logger.info('tool approval not closed', { message_id: id, code });
+      // Nothing to close: the post never made it.
+      return code === 'not_found';
     }
   };
 }
@@ -81,6 +85,8 @@ export interface ToolApprovalsOptions {
 
 /** How many ids of the session's tool approvals are remembered (to know their events). */
 const KNOWN_MAX = 500;
+/** How many ended ids are remembered (so a merged journal doesn't bring them back). */
+const ENDED_MAX = 1000;
 
 /** The longest shutdown waits for the cards to close. */
 export const SHUTDOWN_CLOSE_MS = 5000;
@@ -91,8 +97,14 @@ export class ToolApprovals {
   private readonly settles = new Map<string, Set<(reason: StaleReason) => void>>();
   /** Ids of every approval this process posted (bounded), and the journal's from before. */
   private readonly known = new Set<string>();
-  /** The cards a process before this one left open (the journal at startup), until closed. */
+  /**
+   * Cards no waiting call holds but that may be open in buildIt.Social: the
+   * ones a process before this one left (the journal at startup), and posts
+   * that failed in a way that may have stored them, until they are closed.
+   */
   private leftOpen: { id: string; posted_at: string }[] = [];
+  /** Ids this process knows have ended (the journal drops them). */
+  private readonly ended = new Set<string>();
 
   constructor(private readonly options: ToolApprovalsOptions) {
     this.leftOpen = this.readJournal();
@@ -124,8 +136,27 @@ export class ToolApprovals {
       settles.delete(entry.settle);
       if (settles.size > 0) return;
       this.settles.delete(entry.id);
-      if (this.open.delete(entry.id)) this.writeJournal();
+      if (this.open.delete(entry.id)) {
+        if (!this.leftOpen.some((e) => e.id === entry.id)) this.markEnded(entry.id);
+        this.writeJournal();
+      }
     };
+  }
+
+  /**
+   * A post that failed in a way that may have stored it (a timeout, the
+   * network, a 5xx): the card stays in the journal until a close succeeds.
+   */
+  orphan(id: string, postedAt: string): void {
+    if (!this.leftOpen.some((e) => e.id === id)) this.leftOpen.push({ id, posted_at: postedAt });
+    this.writeJournal();
+  }
+
+  /** A card closed for sure (or never stored): it leaves the journal. */
+  forget(id: string): void {
+    this.leftOpen = this.leftOpen.filter((e) => e.id !== id);
+    if (!this.open.has(id)) this.markEnded(id);
+    this.writeJournal();
   }
 
   /** The tool call ran (its PostToolUse): an approval waiting for it was answered elsewhere. */
@@ -177,20 +208,31 @@ export class ToolApprovals {
    */
   async recover(closer: ApprovalCloser): Promise<void> {
     const left = this.leftOpen.filter((e) => !this.open.has(e.id));
-    if (left.length === 0) {
-      this.leftOpen = [];
-      return;
-    }
-    await Promise.all(left.map((e) => closer(e.id, 'interrupted').catch(() => undefined)));
-    this.leftOpen = [];
-    this.writeJournal();
+    if (left.length === 0) return;
+    const closed = await Promise.all(
+      left.map((e) => closer(e.id, 'interrupted').catch(() => false)),
+    );
+    // A close that failed keeps its card in the journal, for the next try.
+    left.forEach((e, i) => {
+      if (closed[i] === true) this.forget(e.id);
+    });
     this.options.logger.info('tool approvals left open by an earlier server closed', {
-      count: left.length,
+      count: closed.filter(Boolean).length,
+      kept: closed.filter((c) => !c).length,
     });
   }
 
   private settle(id: string, reason: StaleReason): void {
     for (const settle of [...(this.settles.get(id) ?? [])]) settle(reason);
+  }
+
+  private markEnded(id: string): void {
+    this.ended.delete(id);
+    this.ended.add(id);
+    if (this.ended.size > ENDED_MAX) {
+      const oldest = this.ended.values().next().value;
+      if (oldest !== undefined) this.ended.delete(oldest);
+    }
   }
 
   private remember(id: string): void {
@@ -220,24 +262,41 @@ export class ToolApprovals {
     }
   }
 
+  /**
+   * Writes the journal: what it already lists (another server's entries
+   * stay), this process's open and left-open cards, less what this process
+   * knows has ended; to a temporary file, then renamed over it.
+   */
   private writeJournal(): void {
     const path = this.options.journal;
     if (path === undefined) return;
+    const entries = new Map<string, string>();
+    for (const e of [
+      ...this.readJournal(),
+      ...this.leftOpen,
+      ...[...this.open.values()].map((o) => ({ id: o.id, posted_at: o.postedAt })),
+    ]) {
+      if (!this.ended.has(e.id)) entries.set(e.id, e.posted_at);
+    }
     const file: JournalFile = {
       v: 1,
-      open: [
-        ...this.leftOpen,
-        ...[...this.open.values()].map((e) => ({ id: e.id, posted_at: e.postedAt })),
-      ],
+      open: [...entries].slice(-100).map(([id, posted_at]) => ({ id, posted_at })),
     };
+    const temp = `${path}.${process.pid}.tmp`;
     try {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-      writeFileSync(path, JSON.stringify(file), { mode: 0o600 });
-      chmodSync(path, 0o600);
+      writeFileSync(temp, JSON.stringify(file), { mode: 0o600 });
+      chmodSync(temp, 0o600);
+      renameSync(temp, path);
     } catch (err) {
       this.options.logger.info('tool approval journal not written', {
         code: (err as NodeJS.ErrnoException).code ?? 'error',
       });
+      try {
+        rmSync(temp, { force: true });
+      } catch {
+        // Nothing to clean up.
+      }
     }
   }
 }
