@@ -1802,6 +1802,14 @@ export class FakeApi {
         return this.sessionCheck(() => this.postPlanCard(call));
       case 'list_session_threads':
         return this.sessionCheck(() => this.sessions.threads(call.token));
+      case 'post_session_approval':
+        return this.sessionCheck(() => this.sessions.postApproval(call.token, call.body));
+      case 'get_session_approval':
+        return this.sessionCheck(() => this.sessions.getApproval(call.token, call.params.id ?? ''));
+      case 'close_session_approval':
+        return this.sessionCheck(() =>
+          this.sessions.closeApproval(call.token, call.params.id ?? '', call.body),
+        );
       default:
         throw new FakeError(
           'not_found',

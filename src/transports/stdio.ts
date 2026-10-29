@@ -59,6 +59,14 @@ import {
 } from '../server.js';
 import { PREEMPT_WAIT_MS, type ChannelLock } from '../channel/lock.js';
 import { TypingIndicator } from '../channel/typing.js';
+import { ToolApprovals } from '../channel/approvals.js';
+import {
+  APPROVAL_HOOK_TOOLS,
+  createApprovalHookTools,
+  READ_ONLY_SAFE_HOOKS,
+  createApproveTool,
+  type ApproveOptions,
+} from '../tools/approve.js';
 import { createAskTool, type AskOptions } from '../tools/ask.js';
 import { createReplyTool, createTurnEndedTool } from '../tools/reply.js';
 import { createListThreadsTool } from '../tools/threads.js';
@@ -93,17 +101,26 @@ export interface StdioOptions {
   preemptWaitMs?: number;
   /** For tests: ask's timing. */
   ask?: Pick<AskOptions, 'msPerSecond' | 'now'>;
+  /** For tests: approve's timing. */
+  approve?: Pick<ApproveOptions, 'msPerSecond' | 'now'>;
+  /**
+   * Channel mode: the file that keeps the open tool approvals' ids, so the
+   * next server in the folder closes what this one left open (index.ts
+   * passes it next to the lock files; none: no journal).
+   */
+  approvalJournal?: string;
   /** For tests: the typing indicator's timing. */
   typing?: { everyMs?: number; idleMs?: number };
 }
 
 /**
- * The plugin's AskUserQuestion hook timeout, in seconds (plugin/hooks/hooks.json).
- * The card's wait ends a minute before it, so the answer arrives in time.
+ * The plugin's AskUserQuestion and PermissionRequest hooks' timeout, in
+ * seconds (plugin/hooks/hooks.json). A card's wait ends a minute before it,
+ * so the answer arrives in time.
  */
 export const HOOK_TIMEOUT_S = 3600;
 
-/** How long the hook's question card waits: the configured minutes, a minute under the hook's timeout at most. */
+/** How long a hook's card waits: the configured minutes, a minute under the hook's timeout at most. */
 export function hookWaitSeconds(minutes: number): number {
   return Math.min(minutes * 60, HOOK_TIMEOUT_S - 60);
 }
@@ -315,10 +332,6 @@ export class LegacyOnlyTransport implements Transport {
   }
 }
 
-/**
- * The tools only channel mode has (reply, ask, and turn_ended for the
- * plugin's Stop hook), under the operator's read-only and exclude rules.
- */
 /** The tools that post in a thread and stop its "is writing" themselves. */
 const POSTING_TOOLS: ReadonlySet<string> = new Set(['reply', 'ask', 'turn_ended', 'list_threads']);
 
@@ -332,6 +345,8 @@ const POSTING_TOOLS: ReadonlySet<string> = new Set(['reply', 'ask', 'turn_ended'
 function noteActivity(state: ChannelState, tool: string, args: unknown): void {
   const typing = state.typing;
   if (typing === undefined) return;
+  // The plugin's approval hooks: tool_seen counts the activity itself.
+  if (APPROVAL_HOOK_TOOLS.has(tool)) return;
   const a = (args !== null && typeof args === 'object' ? args : {}) as Record<string, unknown>;
   const str = (v: unknown): string | undefined =>
     typeof v === 'string' && v !== '' ? v : undefined;
@@ -351,15 +366,27 @@ function noteActivity(state: ChannelState, tool: string, args: unknown): void {
   else typing.work(thread);
 }
 
-function channelTools(policy: ToolPolicy, state: ChannelState, ask: AskOptions): ToolDefinition[] {
+/**
+ * The tools only channel mode has (reply, ask, list_threads, and the
+ * plugin's hooks: turn_ended, approve and the hooks that end approvals),
+ * under the operator's read-only and exclude rules.
+ */
+function channelTools(
+  policy: ToolPolicy,
+  state: ChannelState,
+  ask: AskOptions,
+  approve: ApproveOptions,
+): ToolDefinition[] {
   return [
     createReplyTool(state),
     createAskTool(state, ask),
     createListThreadsTool(state),
     createTurnEndedTool(state),
+    createApproveTool(state, approve),
+    ...createApprovalHookTools(state),
   ].filter(
     (tool) =>
-      (!policy.readOnly || tool.annotations.readOnlyHint) &&
+      (!policy.readOnly || tool.annotations.readOnlyHint || READ_ONLY_SAFE_HOOKS.has(tool.name)) &&
       !policy.excludeTools.includes(tool.name),
   );
 }
@@ -397,13 +424,26 @@ export function startStdio(
       logger: logger.child({ component: 'typing' }),
       ...options.typing,
     });
+    state.approvals = new ToolApprovals({
+      logger: logger.child({ component: 'approvals' }),
+      journal: options.approvalJournal,
+    });
   }
   const extraTools = channel
-    ? channelTools(policy, state, {
-        questionsInApp: config.ask.questionsInApp,
-        hookWaitS: hookWaitSeconds(config.ask.timeoutMinutes),
-        ...options.ask,
-      })
+    ? channelTools(
+        policy,
+        state,
+        {
+          questionsInApp: config.ask.questionsInApp,
+          hookWaitS: hookWaitSeconds(config.ask.timeoutMinutes),
+          ...options.ask,
+        },
+        {
+          approvalsInApp: config.approvals.inApp,
+          hookWaitS: hookWaitSeconds(config.approvals.timeoutMinutes),
+          ...options.approve,
+        },
+      )
     : [];
   // Once a channel's session has ended, the listing stays as it last was
   // (without reply), so Claude keeps its tools, which then say why.

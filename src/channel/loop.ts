@@ -13,6 +13,9 @@
  * `mention` (the owner mentioned it in the item's thread), `message` (the
  * owner's other replies in a thread it works in) and `item_unassigned`
  * (stop: it also stops "is writing" and the waiters of that thread).
+ * A tool approval card's verdict is its `card.closed` (`data.approval`),
+ * handed to the `approve` call that waits for it; an answer to such a card
+ * (`card.response`) is never a verdict, and is dropped.
  * Everything else is acknowledged and dropped: events from anyone but the
  * owner (the server sends only the owner's, and this checks again, since
  * whoever can write into a channel can steer the session), other event
@@ -51,6 +54,8 @@ import {
   type SessionEvent,
   type SessionInfo,
 } from './api.js';
+import { apiApprovalCloser, type ToolApprovals } from './approvals.js';
+import { ToolRing } from './tool-ring.js';
 import type { TypingIndicator } from './typing.js';
 import { CardWaiters, eventMessageId } from './waiters.js';
 
@@ -162,6 +167,15 @@ export class ChannelState {
   readonly waiters = new CardWaiters();
   /** "<agent> is writing…" while Claude works on a message. */
   typing: TypingIndicator | undefined;
+  /** The tool calls Claude Code announced (the PreToolUse hook), for tool approvals. */
+  readonly ring = new ToolRing();
+  /** The session's open tool approvals (channel mode, the folder's channel). */
+  approvals: ToolApprovals | undefined;
+  /**
+   * Told when a poll of the session's events failed, with the error (a tool
+   * approval then reads its state, or ends when the session is off or gone).
+   */
+  readonly pollFailed = new Set<(err: unknown) => void>();
 }
 
 /** Why the loop ended for good. */
@@ -382,8 +396,15 @@ export class ChannelLoop {
     if (this.stopper.signal.aborted && this.running === undefined) return;
     this.stopper.abort();
     await this.running;
-    this.options.state.waiters.endAll();
-    if (this.ended || this.yielded || this.options.state.session === undefined) return;
+    const { state } = this.options;
+    if (!this.ended && !this.yielded && state.session !== undefined) {
+      // Open tool approvals no longer have anyone waiting for them.
+      await state.approvals
+        ?.closeAll(apiApprovalCloser(this.options.api, this.options.logger), 'session_ended')
+        .catch(() => undefined);
+    }
+    state.waiters.endAll();
+    if (this.ended || this.yielded || state.session === undefined) return;
     await this.options.state.typing?.stopAll().catch(() => undefined);
     await sessionHeartbeat(this.options.api, 'offline', {
       signal: AbortSignal.timeout(3000),
@@ -433,6 +454,10 @@ export class ChannelLoop {
         }
       },
     );
+    // Tool approval cards an earlier server left open are closed, so nobody answers them for nothing.
+    await this.options.state.approvals
+      ?.recover(apiApprovalCloser(this.options.api, this.options.logger))
+      .catch(() => undefined);
     const interval = this.options.intervalMs ?? Math.max(1000, info.poll_interval_s * 1000);
     let cursor: number | undefined;
     if (this.options.firstPollDelayMs !== undefined && this.options.firstPollDelayMs > 0) {
@@ -462,6 +487,7 @@ export class ChannelLoop {
         cursor = page.cursor;
       } catch (err) {
         if (this.isStopped()) return;
+        for (const listener of [...this.options.state.pollFailed]) listener(err);
         const next = await this.failed(err, interval);
         if (next === undefined) return;
         wait = next;
@@ -704,6 +730,11 @@ export class ChannelLoop {
     const messageId = eventMessageId(event);
     if (messageId === undefined) {
       logger.warn('channel event dropped', { event_id: event.id, reason: 'shape' });
+      return;
+    }
+    if (event.type === 'card.response' && state.approvals?.isApproval(messageId) === true) {
+      // A tool approval's verdict comes only as its card.closed (data.approval).
+      logger.info('channel event dropped', { event_id: event.id, reason: 'approval_answer' });
       return;
     }
     if (event.type === 'card.response') {

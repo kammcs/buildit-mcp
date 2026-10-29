@@ -100,8 +100,37 @@ export interface FakeSession {
 }
 
 /** One of the session's cards in the fake: open or closed, and its answers. */
+/** A tool approval in the fake: what was posted, and how it ended. */
+export interface FakeApproval {
+  /** The post's body, as received (tests check what was sent). */
+  posted: Record<string, unknown>;
+  toolName: string;
+  status:
+    | 'open'
+    | 'approved'
+    | 'approved_session'
+    | 'denied'
+    | 'expired'
+    | 'answered_elsewhere'
+    | 'stale'
+    | 'closed';
+  reason?: string;
+  createdAt: string;
+  closesAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  /** Every close the session asked for, in order. */
+  closes: string[];
+  /** The rule the server says it stored, when not the posted suggestion (tests). */
+  storedRule?: unknown;
+  /** The id the card.closed event's data.approval names, when not the card's (tests). */
+  eventId?: string;
+}
+
 export interface FakeCard {
-  kind: 'question' | 'plan';
+  kind: 'question' | 'plan' | 'approval';
+  /** A tool approval card's state. */
+  approval?: FakeApproval;
   threadId: string | null;
   closedAt: string | null;
   closedBy: string | null;
@@ -266,7 +295,11 @@ export class SessionRefusal extends Error {
       | 'not_own_message'
       | 'response_changed'
       | 'not_found'
-      | 'rate_limited',
+      | 'rate_limited'
+      | 'too_many_open'
+      | 'approvals_off'
+      | 'outside_reach'
+      | 'unavailable',
     readonly details: Record<string, unknown> = {},
   ) {
     super(code);
@@ -478,6 +511,236 @@ export class FakeSessions {
     return { status: 201, body: { created: true, message: this.messageOut(s, message) } };
   }
 
+  // -- tool approvals ----------------------------------------------------------
+
+  /** Refusals the next approval posts get, in order (tests): an error code and its details. */
+  readonly approvalRefusals: { code: string; details: Record<string, unknown> }[] = [];
+  /** How many open approvals a session may have (the server's 10). */
+  approvalsOpenMax = 10;
+  /** Posts stored and then answered with a 503 (the session doesn't learn it was stored; tests). */
+  approvalStoreThenFail = 0;
+  /** Closes answered with a 503 (tests). */
+  approvalCloseFailures = 0;
+
+  /** POST /v1/session/approvals */
+  postApproval(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
+    const s = this.live(token);
+    const id = String(body.id);
+    const existing = s.cards.get(id);
+    if (existing?.approval !== undefined) {
+      // The same id for another call (another tool, tool call id or details) is refused.
+      const before = existing.approval.posted;
+      const digest = (b: Record<string, unknown>): string =>
+        JSON.stringify([b.tool_name, b.tool_use_id, b.description, b.fields, b.more_fields]);
+      if (digest(before) !== digest(body)) {
+        throw new SessionRefusal('idempotency_conflict', { idempotency_key: id });
+      }
+      const m = s.messages.find((x) => x.id === id);
+      if (!m) throw new Error('approval without its message');
+      return {
+        status: 200,
+        body: {
+          created: false,
+          message: this.messageOut(s, m),
+          approval: this.approvalJson(id, existing),
+        },
+      };
+    }
+    for (const other of this.sessions.values()) {
+      if (other !== s && other.cards.has(id)) {
+        throw new SessionRefusal('not_own_message', { message_id: id });
+      }
+    }
+    if (s.messages.some((m) => m.id === id)) throw new SessionRefusal('idempotency_conflict');
+    const refusal = this.approvalRefusals.shift();
+    if (refusal !== undefined) {
+      throw new SessionRefusal(refusal.code as SessionRefusal['code'], refusal.details);
+    }
+    const open = [...s.cards.values()].filter((c) => c.approval?.status === 'open').length;
+    if (open >= this.approvalsOpenMax) throw new SessionRefusal('too_many_open', { open });
+    const threadId = typeof body.thread_id === 'string' ? body.thread_id : null;
+    if (threadId !== null && this.otherSessionThreads.has(threadId)) {
+      throw new SessionRefusal('thread_other_session', { thread_id: threadId });
+    }
+    const inItem = threadId !== null && this.itemIds.has(threadId);
+    if (inItem && !s.items.has(threadId)) {
+      throw new SessionRefusal('thread_not_bound', { thread_id: threadId });
+    }
+    const toolName = String(body.tool_name);
+    const now = this.host.now();
+    const message = {
+      id,
+      conversation_id: inItem ? SESSION_IDS.demoChannel : SESSION_IDS.dm,
+      text: `Claude wants to use \`${toolName}\``,
+      thread_id: threadId,
+      reply_to_id: null,
+      created_at: now,
+      card: { v: 2, source: 'agent_approval' },
+    };
+    s.messages.push(message);
+    const card: FakeCard = {
+      kind: 'approval',
+      threadId,
+      closedAt: null,
+      closedBy: null,
+      responses: [],
+      updates: [],
+      approval: {
+        posted: body,
+        toolName,
+        status: 'open',
+        createdAt: now,
+        closesAt: new Date(Date.parse(now) + (Number(body.wait_s) + 60) * 1000).toISOString(),
+        closes: [],
+      },
+    };
+    s.cards.set(id, card);
+    if (this.approvalStoreThenFail > 0) {
+      this.approvalStoreThenFail--;
+      throw new SessionRefusal('unavailable', {});
+    }
+    return {
+      status: 201,
+      body: {
+        created: true,
+        message: this.messageOut(s, message),
+        approval: this.approvalJson(id, card),
+      },
+    };
+  }
+
+  /** The session's own approval card, or not_found. */
+  private ownApproval(s: FakeSession, id: string): FakeCard & { approval: FakeApproval } {
+    const card = s.cards.get(id);
+    if (card?.approval === undefined) {
+      throw new SessionRefusal('not_found', { kind: 'approval', ref: id });
+    }
+    return card as FakeCard & { approval: FakeApproval };
+  }
+
+  /** GET /v1/session/approvals/{id} */
+  getApproval(token: string, id: string): { status: number; body: unknown } {
+    const s = this.live(token);
+    return { status: 200, body: { approval: this.approvalJson(id, this.ownApproval(s, id)) } };
+  }
+
+  /** POST /v1/session/approvals/{id}/close */
+  closeApproval(
+    token: string,
+    id: string,
+    body: Record<string, unknown>,
+  ): { status: number; body: unknown } {
+    const s = this.live(token);
+    if (this.approvalCloseFailures > 0) {
+      this.approvalCloseFailures--;
+      throw new SessionRefusal('unavailable', {});
+    }
+    const card = this.ownApproval(s, id);
+    const reason = String(body.reason);
+    card.approval.closes.push(reason);
+    if (card.approval.status === 'open') {
+      const ends: Record<string, [FakeApproval['status'], string | undefined]> = {
+        answered_elsewhere: ['answered_elsewhere', undefined],
+        stale: ['stale', undefined],
+        expired: ['expired', 'client'],
+        interrupted: ['closed', 'interrupted'],
+        session_ended: ['closed', 'session_ended'],
+      };
+      const [status, why] = ends[reason] ?? ['closed', 'interrupted'];
+      card.approval.status = status;
+      if (why !== undefined) card.approval.reason = why;
+      this.close(s, id, 'app');
+    }
+    return { status: 200, body: { approval: this.approvalJson(id, card) } };
+  }
+
+  /**
+   * The owner taps Approve, Allow for this session, or Deny (tests).
+   * `withEvent: false`: the verdict is stored but its event never reaches the session.
+   */
+  decideApproval(
+    token: string,
+    id: string,
+    action: 'approve' | 'approve_session' | 'deny',
+    options: { withEvent?: boolean; storedRule?: unknown; eventApprovalId?: string } = {},
+  ): void {
+    const s = this.session(token);
+    const card = this.ownApproval(s, id);
+    if (card.approval.status !== 'open') throw new Error('the approval is not open');
+    card.approval.status =
+      action === 'approve'
+        ? 'approved'
+        : action === 'approve_session'
+          ? 'approved_session'
+          : 'denied';
+    card.approval.decidedAt = this.host.now();
+    card.approval.decidedBy = s.ownerId;
+    // The server's stored rule differs from what the session sent (tests of a mismatch).
+    if (options.storedRule !== undefined) card.approval.storedRule = options.storedRule;
+    // The event names another approval than its card (tests).
+    if (options.eventApprovalId !== undefined) card.approval.eventId = options.eventApprovalId;
+    if (options.withEvent === false) {
+      card.closedAt = this.host.now();
+      card.closedBy = 'owner';
+      return;
+    }
+    this.close(s, id, 'owner');
+  }
+
+  /** The server ends an open approval: expiry (time), the session's end, a deleted message (tests). */
+  endApproval(
+    token: string,
+    id: string,
+    closedBy: 'time' | 'session_ended' | 'deleted' | 'removed' | 'unassigned' | 'switched_off',
+  ): void {
+    const s = this.session(token);
+    const card = this.ownApproval(s, id);
+    if (card.approval.status !== 'open') return;
+    if (closedBy === 'time') {
+      card.approval.status = 'expired';
+      card.approval.reason = 'time';
+    } else {
+      card.approval.status = 'closed';
+      card.approval.reason = closedBy;
+    }
+    this.close(s, id, closedBy);
+  }
+
+  /** The approvals a session posted (tests), oldest first. */
+  approvals(token: string): (FakeApproval & { id: string })[] {
+    const s = this.session(token);
+    return [...s.cards.entries()]
+      .filter(([, c]) => c.approval !== undefined)
+      .map(([id, c]) => ({ id, ...(c.approval as FakeApproval) }));
+  }
+
+  private approvalJson(id: string, card: FakeCard): Record<string, unknown> {
+    const a = card.approval as FakeApproval;
+    return {
+      id,
+      status: a.status,
+      ...(a.reason === undefined ? {} : { reason: a.reason }),
+      tool_name: a.toolName,
+      thread_id: card.threadId,
+      created_at: a.createdAt,
+      closes_at: a.closesAt,
+      ...(a.decidedAt === undefined ? {} : { decided_at: a.decidedAt }),
+    };
+  }
+
+  private approvalOutcome(id: string, card: FakeCard): Record<string, unknown> {
+    const a = card.approval as FakeApproval;
+    const rule = a.storedRule ?? a.posted.suggestion;
+    return {
+      id: a.eventId ?? id,
+      outcome: a.status === 'open' ? 'closed' : a.status,
+      ...(a.reason === undefined ? {} : { reason: a.reason }),
+      ...(a.decidedBy === undefined ? {} : { decided_by: a.decidedBy }),
+      ...(a.decidedAt === undefined ? {} : { decided_at: a.decidedAt }),
+      ...(a.status === 'approved_session' && rule !== undefined ? { rule } : {}),
+    };
+  }
+
   /** Posts refused before they are made (tests). */
   refusePosts = 0;
 
@@ -495,7 +758,8 @@ export class FakeSessions {
   private own(s: FakeSession, id: string): FakeSession['messages'][number] {
     const m = s.messages.find((x) => x.id === id);
     if (!m) throw new SessionRefusal('not_found', { kind: 'message', ref: id });
-    if (s.cards.get(id)?.kind === 'plan')
+    const kind = s.cards.get(id)?.kind;
+    if (kind === 'plan' || kind === 'approval')
       throw new SessionRefusal('not_own_message', { message_id: id });
     return m;
   }
@@ -547,7 +811,7 @@ export class FakeSessions {
     for (const [messageId, card] of s.cards) {
       const r = card.responses.find((x) => x.id === responseId);
       if (!r) continue;
-      if (card.kind === 'plan')
+      if (card.kind === 'plan' || card.kind === 'approval')
         throw new SessionRefusal('not_own_message', { message_id: messageId });
       if (card.closedAt) throw new SessionRefusal('card_closed', { message_id: messageId });
       if (body.revision !== r.revision) {
@@ -832,6 +1096,10 @@ export class FakeSessions {
       if (card.threadId === item.id && !card.closedAt) {
         card.closedAt = this.host.now();
         card.closedBy = 'unassigned';
+        if (card.approval?.status === 'open') {
+          card.approval.status = 'closed';
+          card.approval.reason = 'unassigned';
+        }
       }
     }
     this.event(s, 'work_item.unassigned', {
@@ -978,7 +1246,7 @@ export class FakeSessions {
       channel: { id: SESSION_IDS.dm, name: null },
       message: { id: messageId, thread_id: card?.threadId ?? null },
       card:
-        card?.kind === 'plan'
+        card?.kind === 'plan' || card?.kind === 'approval'
           ? { visibility: 'private', results: 'hidden', mode: 'once', confirm: false }
           : { visibility: 'private', results: 'hidden', mode: 'once', confirm: true },
     };
@@ -998,6 +1266,7 @@ export class FakeSessions {
       counts: null,
       private: null,
       ...(plan === undefined ? {} : { plan }),
+      ...(card.approval === undefined ? {} : { approval: this.approvalOutcome(messageId, card) }),
     });
   }
 

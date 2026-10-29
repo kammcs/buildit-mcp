@@ -3,7 +3,9 @@
  * device-code connect flow (`connect_start`, `connect_poll`, which take no
  * token) and a Claude Code session's own conversation with its owner
  * (`get_session`, `list_session_events`, `ack_session_events`,
- * `post_session_message`, `session_heartbeat`, which take a session token).
+ * `post_session_message`, `session_heartbeat`, which take a session token),
+ * and its tool approvals (`post_session_approval`, `get_session_approval`,
+ * `close_session_approval`).
  *
  * Each goes through callOperation, like the tools' calls: request ids,
  * timeouts, the error envelope, the one 429 retry, and tolerant parsing with
@@ -182,4 +184,31 @@ export async function sessionTyping(
 /** GET /v1/session/threads: the session's threads, newest activity first (at most 50). */
 export function listSessionThreads(api: ApiClient, options: Options = {}) {
   return callOperation(api, 'list_session_threads', {}, options);
+}
+
+/**
+ * POST /v1/session/approvals: posts a tool approval card (idempotent by its
+ * id: the same id again answers 200 with the card's current state).
+ */
+export function postSessionApproval(
+  api: ApiClient,
+  body: OperationIO['post_session_approval']['body'],
+  options: Options = {},
+) {
+  return callOperation(api, 'post_session_approval', { body }, options);
+}
+
+/** GET /v1/session/approvals/{id}: a tool approval's state (the fallback when an event was missed). */
+export function getSessionApproval(api: ApiClient, id: string, options: Options = {}) {
+  return callOperation(api, 'get_session_approval', { path: { id } }, options);
+}
+
+/** POST /v1/session/approvals/{id}/close: closes a tool approval that no longer needs an answer. */
+export function closeSessionApproval(
+  api: ApiClient,
+  id: string,
+  reason: OperationIO['close_session_approval']['body']['reason'],
+  options: Options = {},
+) {
+  return callOperation(api, 'close_session_approval', { path: { id }, body: { reason } }, options);
 }

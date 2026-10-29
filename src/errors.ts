@@ -124,6 +124,7 @@ const RATE_BUCKETS: Record<RateLimitBucket, string> = {
   user_requests_per_minute: 'requests per minute for your account, across all your tokens',
   session_polls_per_minute: 'polls per minute for this session',
   session_typing_per_minute: 'typing notices per minute for this session',
+  session_approvals_per_minute: 'tool approval calls per minute for this session',
   connect_starts_per_hour: 'connections started per hour from this address',
   connect_pending_grants: 'connections waiting for approval on this server',
   connect_pending_per_address: 'connections waiting for approval from this network',

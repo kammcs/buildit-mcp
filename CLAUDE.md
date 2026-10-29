@@ -77,6 +77,9 @@ src/
   tools/threads.ts      list_threads (channel mode only)
   tools/ask.ts          ask: questions as a card, the answer back (channel mode only; also the
                         plugin's AskUserQuestion hook, format "hook")
+  tools/approve.ts      approve: tool approvals as cards (the plugin's PermissionRequest hook),
+                        and tool_seen, tool_done, agent_done, prompt_typed (the hooks that end
+                        them; channel mode only)
   channel/api.ts        the session operations (connect flow, session, events, messages, heartbeat)
   channel/loop.ts       channel mode: polls the session's events, gates the sender, sends
                         notifications/claude/channel, hands card events to their waiters, turns
@@ -88,6 +91,9 @@ src/
   channel/threads.ts    which thread reply, ask and the approval cards post in (named once
                         several are active)
   channel/waiters.ts    who waits for answers to the session's cards, by message id
+  channel/approvals.ts  the session's open tool approvals (what ends them), and their journal
+  channel/mask.ts       a tool approval's details: cleaned, credentials masked, cut
+  channel/tool-ring.ts  the recent tool calls (PreToolUse), so an approval names its call
   channel/lock.ts       one channel server per folder, the plugin's first (lock files next to
                         the token file)
   channel/typing.ts     "<agent> is writing..." while Claude works on a message
@@ -120,7 +126,8 @@ evals/                  realistic tasks a maintainer runs by hand against a test
 Dockerfile              the container image (HTTP mode, non-root, no token); .dockerignore is an allowlist
 deploy/                 team self-hosting: Compose with Caddy, and a guide
 bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes from package.json)
-plugin/                 the Claude Code plugin (channel server, AskUserQuestion and Stop hooks,
+plugin/                 the Claude Code plugin (channel server; AskUserQuestion, Stop and the
+                        tool approval hooks;
                         the item worker subagent in agents/);
                         .claude-plugin/marketplace.json lists it (versions match package.json)
 server.json             the MCP Registry entry (its versions must match package.json; a test checks)

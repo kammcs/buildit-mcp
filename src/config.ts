@@ -73,7 +73,16 @@ export interface AskConfig {
   maxParallelItems: number;
 }
 
+/** How tool approvals reach the person in channel mode (the plugin's settings). */
+export interface ApprovalsConfig {
+  /** Ask the PermissionRequest hook's approvals as cards in buildIt.Social (BUILDIT_APPROVALS_IN_APP, default true). */
+  inApp: boolean;
+  /** How long a tool approval card waits, 1 to 60 minutes (BUILDIT_APPROVAL_TIMEOUT_MINUTES, default 60). */
+  timeoutMinutes: number;
+}
+
 export const DEFAULT_ASK_TIMEOUT_MINUTES = 60;
+export const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 60;
 export const DEFAULT_MAX_PARALLEL_ITEMS = 3;
 
 export interface Config {
@@ -89,6 +98,8 @@ export interface Config {
   channel?: ChannelConfig;
   /** Channel mode: questions as cards. */
   ask: AskConfig;
+  /** Channel mode: tool approvals as cards. */
+  approvals: ApprovalsConfig;
   toolsets: ToolsetName[];
   readOnly: boolean;
   excludeTools: string[];
@@ -182,6 +193,12 @@ Options (each also has an environment variable):
                             BUILDIT_MAX_PARALLEL_ITEMS
                                                       --channel with the plugin: how many work items
                                                       are worked on at once, 1 to 10 (default 3)
+                            BUILDIT_APPROVALS_IN_APP  --channel: the plugin's permission hook asks to
+                                                      approve tool calls in buildIt.Social too
+                                                      (default true)
+                            BUILDIT_APPROVAL_TIMEOUT_MINUTES
+                                                      --channel: how long a tool approval card waits,
+                                                      1 to 60 (default 60)
   --allow-any-host          BUILDIT_ALLOW_ANY_HOST=true
                                                       Off loopback, serve without checking the
                                                       Host header (otherwise BUILDIT_ALLOWED_HOSTS
@@ -297,6 +314,34 @@ function parseAsk(env: Env, warnings: string[]): AskConfig {
     }
   }
   return { questionsInApp, timeoutMinutes, maxParallelItems };
+}
+
+/** The tool approval settings, read as the question settings are (a bad value keeps the default). */
+function parseApprovals(env: Env, warnings: string[]): ApprovalsConfig {
+  let inApp = true;
+  const rawIn = env.BUILDIT_APPROVALS_IN_APP?.trim() ?? '';
+  if (rawIn !== '') {
+    const value = rawIn.toLowerCase();
+    if (TRUE_VALUES.has(value)) inApp = true;
+    else if (FALSE_VALUES.has(value)) inApp = false;
+    else
+      warnings.push(
+        'BUILDIT_APPROVALS_IN_APP is not true or false; tool approvals go to buildIt.Social.',
+      );
+  }
+  let timeoutMinutes = DEFAULT_APPROVAL_TIMEOUT_MINUTES;
+  const rawMinutes = env.BUILDIT_APPROVAL_TIMEOUT_MINUTES?.trim() ?? '';
+  if (rawMinutes !== '') {
+    const n = Number(rawMinutes);
+    if (Number.isFinite(n) && n >= 1 && n <= 60) {
+      timeoutMinutes = Math.floor(n);
+    } else {
+      warnings.push(
+        `BUILDIT_APPROVAL_TIMEOUT_MINUTES must be 1 to 60; using ${DEFAULT_APPROVAL_TIMEOUT_MINUTES}.`,
+      );
+    }
+  }
+  return { inApp, timeoutMinutes };
 }
 
 function splitList(raw: string): string[] {
@@ -731,6 +776,7 @@ export function parseCli(
       ...(token === undefined ? {} : { token }),
       ...(channel === undefined ? {} : { channel }),
       ask: parseAsk(env, warnings),
+      approvals: parseApprovals(env, warnings),
       toolsets,
       readOnly,
       excludeTools,

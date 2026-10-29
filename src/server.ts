@@ -54,6 +54,13 @@ const CHANNEL_INSTRUCTIONS = `This server is also a channel: this session is con
 
 const CHANNEL_THREAD_INSTRUCTIONS = `While you work in more than one thread (an item's thread and the direct message, or several items), every reply, ask and approval card (a propose_* tool's card_thread) must name its thread: thread_id, or item with the item's key; list_threads lists the threads this session works in.`;
 
+/**
+ * Channel mode: keep credentials out of tool calls. Tool approvals hide
+ * anything that looks like a credential, and a call with a hidden value can
+ * only be denied in the app (plugin/agents/buildit-item-worker.md says the same).
+ */
+export const CHANNEL_CREDENTIAL_INSTRUCTIONS = `Keep credentials out of your tool calls: never put a secret, token, password or key directly in a command, a file's content or an edit. Read it from an environment variable or an existing config file instead (for example "$GITHUB_TOKEN", $env:GITHUB_TOKEN, or a --password-file option), and never echo or print it. If a task really needs a credential typed in, ask the person to do that step in the terminal. Why: tool approvals in buildIt.Social hide anything that looks like a credential, and a call with a hidden value can only be denied there.`;
+
 /** The plugin's agent that works on one item (plugin/agents/buildit-item-worker.md). */
 export const ITEM_WORKER_AGENT = 'buildit:buildit-item-worker';
 
@@ -74,7 +81,9 @@ export function buildInstructions(
   return [
     BASE_INSTRUCTIONS,
     ...(hasPlans ? [channel ? CHANNEL_CONFIRM_INSTRUCTIONS : CONFIRM_INSTRUCTIONS] : []),
-    ...(channel ? [CHANNEL_INSTRUCTIONS, CHANNEL_THREAD_INSTRUCTIONS] : []),
+    ...(channel
+      ? [CHANNEL_INSTRUCTIONS, CHANNEL_THREAD_INSTRUCTIONS, CHANNEL_CREDENTIAL_INSTRUCTIONS]
+      : []),
     ...(channel && lead !== undefined ? [leadInstructions(lead.maxParallelItems)] : []),
   ].join('\n\n');
 }
