@@ -4,7 +4,7 @@ All notable changes to buildit-mcp are listed here. The project follows [semanti
 
 ## [0.9.0] - 2026-10-30
 
-Built on version 1.11.0 of the agent API's contract. Files need a buildIt.Social server with agent API 1.11.0, and a session with the `files:read` and `files:write` scopes. An older server works as before: nothing downloads, `get_attachment` isn't listed, and `reply` doesn't take `files`.
+Built on version 1.11.0 of the agent API's contract. Files need a buildIt.Social server with agent API 1.11.0, and a session with the `files:read` and `files:write` scopes. An older server works as before: nothing downloads, `get_attachment` isn't listed, and `reply` doesn't take `files`. A `reply` that still passes `files` there (from a tool list read before the server's version was known) is refused with a tool error ("older than agent API 1.11.0; files can't be sent"), and nothing is posted: the text isn't sent without its files.
 
 ### Files: attachments in and out (channel mode)
 
@@ -25,6 +25,7 @@ Files work as in a standard Claude Code session, with no extra steps either way.
 - **`get_attachment`** (new, channel mode) fetches a file of a message in the session's threads into that folder and returns its path, never the URL.
   - It's for a file listed as not downloaded, for one the cleanup removed, and for other people's files that an item thread's context or a subtask's result lists with their ids. Those are never downloaded by themselves.
   - It says whose data the file is. With `inline_text`, a UTF-8 text file of at most 64 KiB comes back inside an `untrusted_content` block.
+  - A forwarded message's file has `from.from_owner` false, as the attachments block says: it's the original author's data, not the owner's.
 - **`reply` takes `files`:** 1 to 10 local paths, posted at once in the same thread. `text` is optional when files are sent. No card, and nobody taps anything. Claude Code's own permission prompt is the only approval, as for any tool.
   - **Every check runs before any request.** Each path must resolve (symlinks followed) to a regular file inside the project folder or the temp folder, and not inside a credentials folder (`.ssh`, `.aws`, `.gnupg`, gcloud, kube, the Docker login, buildit-mcp's token folder, browser profiles).
   - It must not have a secret store's name (the contract's `x-buildit-secret-file-names`: `.env*`, `*.pem`, `*.key`, `id_rsa*` and the rest), and it must not be a program (by extension, type or first bytes).
@@ -32,6 +33,7 @@ Files work as in a standard Claude Code session, with no extra steps either way.
   - A text file must pass a whole-file credential scan with the tool approvals' masking rules, which names the lines and kinds, never the value.
   - **All or nothing:** one refused file sends none, and the tool error says why for each file.
   - **Location** is removed from photos and videos (JPEG, PNG, WebP, HEIC, AVIF, TIFF; MOV, MP4, M4V, 3GP) into a temporary copy, never the original, losslessly, as the app does. A file whose metadata can't be read is refused rather than sent with its location.
+  - **A video's poster and length**, when `ffprobe` and `ffmpeg` are on the PATH: the length (`duration_ms`) and a poster frame (a JPEG of at most 320 px and 64 KiB, the contract's limits, with no metadata), made from the copy without location and sent with `create_session_upload` (`thumbnail`), the poster PUT to `thumbnail_put`. The programs are found in the PATH's absolute folders only (never a `.cmd` or `.bat`) and run with no shell, argument arrays, `file:` paths, a timeout and a temporary output. Without them, or when they fail, neither is sent and the video is shared as before.
   - **Then each file:** `create_session_upload`, then a streamed PUT with exactly the signed `Content-Type` and `Content-Length` and no `Authorization` header (its own request, not the API client), then `complete_session_upload`. On `upload_missing` it PUTs once more and completes again. Then one `post_session_message` with the text and the uploads.
   - Upload ids are UUIDv5s of the session, the idempotency key, the file's place and its path, so a retry with the same `idempotency_key` neither uploads nor posts twice.
   - The answer lists every message posted (`messages`) and the files. The API's refusals at complete (`credential_found` with its lines, `location_found`, `upload_mismatch`, `blocked_type`), a missing scope and the budget come back in plain words.

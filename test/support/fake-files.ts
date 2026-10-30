@@ -57,6 +57,11 @@ export interface FakeUpload {
   status: 'uploading' | 'ready' | 'posted';
   bytes: Buffer | undefined;
   kind: 'image' | 'video' | 'text' | 'other';
+  /** As create_session_upload declared them (a video's). */
+  durationMs?: number | undefined;
+  thumbnail?: { content_type: string; size_bytes: number; width: number; height: number };
+  /** The poster's bytes, once PUT. */
+  thumbnailBytes?: Buffer | undefined;
 }
 
 /** One request to the fake storage: never a token, the tests check. */
@@ -108,7 +113,8 @@ export class FakeFiles {
   readonly completes: string[] = [];
   private readonly tickets = new Map<
     string,
-    { kind: 'get'; fileId: string; messageId: string } | { kind: 'put'; uploadId: string }
+    | { kind: 'get'; fileId: string; messageId: string }
+    | { kind: 'put'; uploadId: string; thumbnail?: boolean }
   >();
 
   constructor(private readonly storageBase: () => string) {}
@@ -214,13 +220,15 @@ export class FakeFiles {
     };
   }
 
-  private putFor(upload: FakeUpload, nowMs: number) {
+  private putFor(upload: FakeUpload, nowMs: number, thumbnail = false) {
     const ticket = randomBytes(12).toString('hex');
-    this.tickets.set(ticket, { kind: 'put', uploadId: upload.id });
+    this.tickets.set(ticket, { kind: 'put', uploadId: upload.id, thumbnail });
+    const type = thumbnail ? (upload.thumbnail?.content_type ?? '') : upload.contentType;
+    const size = thumbnail ? (upload.thumbnail?.size_bytes ?? 0) : upload.size;
     return {
       url: `${this.storageBase()}/_storage/${ticket}?X-Amz-Signature=fakeputsignature${ticket}`,
       method: 'PUT' as const,
-      headers: { 'Content-Type': upload.contentType, 'Content-Length': String(upload.size) },
+      headers: { 'Content-Type': type, 'Content-Length': String(size) },
       expires_at: new Date(nowMs + 600_000).toISOString(),
     };
   }
@@ -235,6 +243,9 @@ export class FakeFiles {
       status: u.status,
       thread_id: u.threadId,
       ...(u.status === 'uploading' ? { put: this.putFor(u, nowMs) } : {}),
+      ...(u.status === 'uploading' && u.thumbnail !== undefined
+        ? { thumbnail_put: this.putFor(u, nowMs, true) }
+        : {}),
     };
   }
 
@@ -263,6 +274,13 @@ export class FakeFiles {
     if (SECRET.some((re) => re.test(bare))) throw new FilesRefusal('name_not_allowed');
     const max = type.startsWith('video/') ? 250 * 1024 * 1024 : 100 * 1024 * 1024;
     if (size > max) throw new FilesRefusal('too_large', { max_bytes: max });
+    const thumbnail = body.thumbnail as FakeUpload['thumbnail'];
+    // The contract: a poster only for a video/* file (the schema checks its limits).
+    if (thumbnail !== undefined && !type.startsWith('video/')) {
+      throw new FilesRefusal('validation', {
+        fields: [{ path: 'thumbnail', message: 'Only for a video/* file.' }],
+      });
+    }
     const upload: FakeUpload = {
       id,
       token,
@@ -273,6 +291,8 @@ export class FakeFiles {
       status: 'uploading',
       bytes: undefined,
       kind: kindOf(type),
+      ...(typeof body.duration_ms === 'number' ? { durationMs: body.duration_ms } : {}),
+      ...(thumbnail === undefined ? {} : { thumbnail }),
     };
     this.uploads.set(id, upload);
     return { status: 201, body: { created: true, upload: this.uploadOut(upload, nowMs) } };
@@ -305,7 +325,8 @@ export class FakeFiles {
         content_type: u.contentType,
         kind: u.kind,
         size_bytes: u.size,
-        thumbnail: u.kind === 'image',
+        thumbnail: u.kind === 'image' || u.thumbnailBytes !== undefined,
+        ...(u.durationMs === undefined ? {} : { duration_ms: u.durationMs }),
       },
     };
   }
@@ -353,6 +374,16 @@ export class FakeFiles {
     if (t.kind === 'put' && method === 'PUT') {
       const u = this.uploads.get(t.uploadId);
       if (u === undefined) return { status: 403, body: Buffer.alloc(0) };
+      if (t.thumbnail === true) {
+        if (
+          headers['content-type'] !== u.thumbnail?.content_type ||
+          headers['content-length'] !== String(u.thumbnail?.size_bytes)
+        ) {
+          return { status: 403, body: Buffer.from('<Error>SignatureDoesNotMatch</Error>') };
+        }
+        u.thumbnailBytes = body;
+        return { status: 200, body: Buffer.alloc(0) };
+      }
       // A presigned PUT is signed with its type and length: anything else is refused.
       if (
         headers['content-type'] !== u.contentType ||

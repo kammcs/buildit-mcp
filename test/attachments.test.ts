@@ -14,6 +14,7 @@ import {
   rmSync,
   statSync,
   utimesSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -300,7 +301,7 @@ describe('the automatic download', () => {
 
   it('keeps hostile names and the forwarded author inside blocks, naming the original author', async () => {
     const c = await start();
-    api.sessions.postFrom(TOKEN, 'Look at this', {
+    const forwardedId = api.sessions.postFrom(TOKEN, 'Look at this', {
       forwardedFrom: { user: { id: '00000000-0000-4000-8000-000000000123', name: 'Sam Example' } },
       files: [{ name: `${HOSTILE}.txt`, type: 'text/plain', bytes: Buffer.from('data') }],
     });
@@ -317,6 +318,15 @@ describe('the automatic download', () => {
     );
     const saved = pathsIn(content)[0]!;
     expect(saved.startsWith(join(folder, ATTACHMENTS_DIR))).toBe(true);
+    // get_attachment says the same: the forwarded file is the other person's data.
+    const r = await c.client.callTool({
+      name: 'get_attachment',
+      arguments: { message_id: forwardedId },
+    });
+    expect(r.isError, textOf(r)).not.toBe(true);
+    const out = r.structuredContent as { from: { from_owner: boolean; forwarded: boolean } };
+    expect(out.from).toMatchObject({ from_owner: false, forwarded: true });
+    expect(textOf(r)).toContain("Sam Example's message, forwarded by");
   });
 });
 
@@ -412,6 +422,23 @@ describe('the version gate', () => {
     const reply = tools.find((t) => t.name === 'reply')!;
     expect(Object.keys(reply.inputSchema.properties ?? {})).not.toContain('files');
     expect(reply.description).not.toContain('files');
+    // A call that still passes files (a tool list read before the version was known) is refused, and nothing is sent.
+    writeFileSync(join(folder, 'render.png'), 'png');
+    const posts = () =>
+      api.requests.filter(
+        (q) => q.path === '/v1/session/messages' || q.path.startsWith('/v1/session/uploads'),
+      ).length;
+    const before = posts();
+    const refused = await c.client.callTool({
+      name: 'reply',
+      arguments: { text: 'Here it is', files: ['render.png'] },
+    });
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toContain(
+      "this buildIt.Social server is older than agent API 1.11.0; files can't be sent",
+    );
+    expect(textOf(refused)).toContain('Nothing was posted');
+    expect(posts()).toBe(before);
     // An older server sends no files; even if an event did, nothing is fetched.
     api.sessions.postFrom(TOKEN, 'Old server', {
       files: [{ name: 'a.txt', type: 'text/plain' }],

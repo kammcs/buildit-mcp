@@ -9,11 +9,15 @@
  *    text file passes the whole-file credential scan. One refusal refuses
  *    the reply: nothing is uploaded or posted, and the error says why.
  * 2. **Location** is removed from photos and videos into a temporary copy
- *    (the original is never touched), as the app does for a person's.
- * 3. **Each file** is uploaded: create_session_upload, a streamed PUT with
- *    exactly the signed headers (no Authorization), complete_session_upload
- *    (nothing uploaded yet, upload_missing: the PUT once more, then complete
- *    again). A refusal there stops the reply too, so nothing is posted.
+ *    (the original is never touched), as the app does for a person's. A
+ *    video gets its length and a poster frame when ffprobe and ffmpeg are
+ *    on the PATH (`src/files/poster.ts`); without them, neither, as before.
+ * 3. **Each file** is uploaded: create_session_upload (with a video's
+ *    duration_ms and thumbnail when known), a streamed PUT with exactly the
+ *    signed headers (no Authorization), the poster's PUT to thumbnail_put,
+ *    complete_session_upload (nothing uploaded yet, upload_missing: the PUTs
+ *    once more, then complete again). A refusal there stops the reply too,
+ *    so nothing is posted.
  * 4. **One post**, post_session_message with the text and the uploads.
  *
  * Upload ids are UUIDv5s of the session, the reply's idempotency key, the
@@ -38,6 +42,7 @@ import {
   videoLocationPatches,
 } from '../files/location.js';
 import { locationProblem } from '../files/paths.js';
+import { videoFacts, type PosterDeps, type VideoPoster } from '../files/poster.js';
 import { describeFinding, scanFileForCredentials } from '../files/scan.js';
 import { TransferError, uploadFile } from '../files/transfer.js';
 import {
@@ -209,15 +214,22 @@ export interface PreparedFile extends CheckedFile {
   source: string;
   sourceSize: number;
   stripped: boolean;
+  /** A video's length, when ffprobe gave it. */
+  durationMs?: number | undefined;
+  /** A video's poster frame, when ffmpeg made one (in the temporary folder). */
+  poster?: VideoPoster | undefined;
 }
 
 /**
  * Step 2: location removed from photos and videos into copies in a new
  * temporary folder (returned, to be removed after). A photo or video whose
- * metadata can't be read is refused, never sent with its location.
+ * metadata can't be read is refused, never sent with its location. Then a
+ * video's length and poster (from the copy without location), when ffprobe
+ * and ffmpeg are on the PATH; never a refusal.
  */
 export async function prepareFiles(
   files: readonly CheckedFile[],
+  options: PosterDeps & { signal?: AbortSignal | undefined } = {},
 ): Promise<{ files: PreparedFile[]; temp: string | undefined }> {
   let temp: string | undefined;
   const tempDir = async (): Promise<string> => {
@@ -265,6 +277,17 @@ export async function prepareFiles(
   if (problems.length > 0) {
     if (temp !== undefined) await rm(temp, { recursive: true, force: true });
     throw refused(problems);
+  }
+  try {
+    for (const [i, f] of out.entries()) {
+      if (!f.contentType.startsWith('video/')) continue;
+      const facts = await videoFacts(f.source, tempDir, i, options);
+      f.durationMs = facts.durationMs;
+      f.poster = facts.poster;
+    }
+  } catch (err) {
+    if (temp !== undefined) await rm(temp, { recursive: true, force: true });
+    throw err;
   }
   return { files: out, temp };
 }
@@ -350,6 +373,17 @@ async function uploadOne(
     file_name: f.name,
     content_type: f.contentType,
     size_bytes: f.sourceSize,
+    ...(f.durationMs === undefined ? {} : { duration_ms: f.durationMs }),
+    ...(f.poster === undefined
+      ? {}
+      : {
+          thumbnail: {
+            content_type: f.poster.contentType,
+            size_bytes: f.poster.size,
+            width: f.poster.width,
+            height: f.poster.height,
+          },
+        }),
   };
   const init = () => callOperation(o.api, 'create_session_upload', { body }, o.apiOptions);
   const put = async (upload: Awaited<ReturnType<typeof init>>['upload']): Promise<void> => {
@@ -370,6 +404,21 @@ async function uploadOne(
         );
       },
     });
+    // The poster, to the URL signed for it (none when the server didn't take one).
+    if (f.poster !== undefined && upload.thumbnail_put !== undefined) {
+      await uploadFile(
+        upload.thumbnail_put.url,
+        upload.thumbnail_put.headers,
+        f.poster.path,
+        f.poster.size,
+        {
+          signal: AbortSignal.any([
+            ...(o.signal ? [o.signal] : []),
+            AbortSignal.timeout(PUT_TIMEOUT_MS),
+          ]),
+        },
+      );
+    }
   };
   const complete = () =>
     callOperation(o.api, 'complete_session_upload', { path: { id }, body: {} }, o.apiOptions);

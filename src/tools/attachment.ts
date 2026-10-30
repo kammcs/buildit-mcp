@@ -141,7 +141,8 @@ export function createGetAttachmentTool(state: ChannelState): ToolDefinition {
       const from = {
         author: msg?.author?.name === undefined ? null : sanitizeLabel(msg.author.name, 64),
         author_kind: msg?.author?.kind ?? null,
-        from_owner: msg?.from_owner ?? false,
+        // A forwarded file is its original author's data, as the attachments block says.
+        from_owner: (msg?.from_owner ?? false) && msg?.forwarded !== true,
         forwarded: msg?.forwarded ?? false,
         forwarded_from: forwardedFrom === null ? null : sanitizeLabel(forwardedFrom, 64),
       };

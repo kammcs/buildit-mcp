@@ -6,6 +6,7 @@
  * again), all or nothing, idempotent retries, and the refusals the API
  * gives, against the fake API and its fake storage.
  */
+import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +17,7 @@ import type { CallToolResult } from '@modelcontextprotocol/client';
 
 import { findCredentials } from '../src/channel/mask.js';
 import { stripLocation } from '../src/files/location.js';
+import { findProgram, POSTER_MAX_BYTES } from '../src/files/poster.js';
 import { scanFileForCredentials } from '../src/files/scan.js';
 import { locationProblem } from '../src/files/paths.js';
 import {
@@ -305,4 +307,75 @@ describe('reply with files', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+const ffmpeg = await findProgram('ffmpeg');
+const ffprobe = await findProgram('ffprobe');
+
+describe('a video’s poster and length', () => {
+  it('sends neither without ffmpeg on the PATH, and still posts the video', async () => {
+    const saved = process.env.PATH;
+    const savedWin = process.env.Path;
+    const c = await start();
+    try {
+      process.env.PATH = '';
+      if (savedWin !== undefined) process.env.Path = '';
+      copyFileSync(new URL('gps.mp4', FIXTURES), join(folder, 'clip.mp4'));
+      const r = await reply(c, { text: 'Clip', files: ['clip.mp4'] });
+      expect(r.isError, textOf(r)).not.toBe(true);
+    } finally {
+      process.env.PATH = saved;
+      if (savedWin !== undefined) process.env.Path = savedWin;
+    }
+    const init = api.requests.find((q) => q.path === '/v1/session/uploads');
+    const body = init?.body as Record<string, unknown>;
+    expect(body.content_type).toBe('video/mp4');
+    expect(body).not.toHaveProperty('thumbnail');
+    expect(body).not.toHaveProperty('duration_ms');
+    expect(api.sessions.files.storage.filter((s) => s.method === 'PUT')).toHaveLength(1);
+    expect(api.sessions.filePosts).toHaveLength(1);
+  });
+
+  it.skipIf(ffmpeg === undefined || ffprobe === undefined)(
+    'with ffmpeg: declares the length and poster, PUTs the poster to thumbnail_put, then completes',
+    async () => {
+      const clip = join(folder, 'demo.mp4');
+      const made = spawnSync(
+        ffmpeg!,
+        [
+          '-nostdin',
+          '-loglevel',
+          'error',
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=size=640x360:rate=10',
+          '-t',
+          '3',
+          '-pix_fmt',
+          'yuv420p',
+          clip,
+        ],
+        { timeout: 30_000 },
+      );
+      expect(made.status).toBe(0);
+      const c = await start();
+      const r = await reply(c, { text: 'Demo', files: [clip] });
+      expect(r.isError, textOf(r)).not.toBe(true);
+      const id = (r.structuredContent as { files: { upload_id: string }[] }).files[0]!.upload_id;
+      const u = api.sessions.files.uploads.get(id)!;
+      expect(u.durationMs).toBeGreaterThanOrEqual(2900);
+      expect(u.durationMs).toBeLessThanOrEqual(3100);
+      expect(u.thumbnail).toMatchObject({ content_type: 'image/jpeg', width: 320, height: 180 });
+      expect(u.thumbnail!.size_bytes).toBeLessThanOrEqual(POSTER_MAX_BYTES);
+      expect(u.thumbnailBytes?.length).toBe(u.thumbnail!.size_bytes);
+      expect(u.thumbnailBytes?.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+      const puts = api.sessions.files.storage.filter((s) => s.method === 'PUT');
+      expect(puts).toHaveLength(2);
+      for (const put of puts) expect(put.headers.authorization).toBeUndefined();
+      expect(api.sessions.filePosts).toHaveLength(1);
+      expect(textOf(r)).not.toMatch(/_storage|X-Amz/);
+    },
+    30_000,
+  );
 });

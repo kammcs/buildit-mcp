@@ -49,7 +49,12 @@ const ReplyToInput = z
   .optional()
   .describe('A message_id to quote as the one you answer, inside the thread.');
 
-export const ReplyInputSchema = z.object({
+/**
+ * reply on a server older than 1.11.0: loose, so a call that still passes
+ * `files` (from a tool list read before the server's version was known)
+ * reaches run and is refused, instead of the files being dropped silently.
+ */
+export const ReplyInputSchema = z.looseObject({
   text: TextInput.describe(
     `The answer, in Markdown, at most ${REPLY_MAX_CHARS} characters. No images. Item keys such as DEMO-12 show as live cards.`,
   ),
@@ -116,6 +121,9 @@ const BASE_DESCRIPTION = `Answers the person who directs this session, in buildI
 
 const FILES_DESCRIPTION = ` To share files (a render, a screenshot, a log, a document), pass their local paths in files: they are posted at once in the same thread, with the text, and everyone who reads the thread can open them. Before anything is uploaded, every file is checked: it must be inside the project folder or the temp folder, not a secret store (.env files, keys, certificates, .ssh and the like), not a program, within the size limit (250 MiB for a video, 100 MiB for anything else), and a text file must not hold anything that looks like a credential. Location is removed from photos and videos. One refused file sends nothing, and the error says why: fix it and send the reply again. Share only files the person asked for or that your work needs.`;
 
+/** The refusal of files on a server that doesn't take them: nothing is sent. */
+const TOO_OLD_FOR_FILES = `Not sent: this buildIt.Social server is older than agent API ${FILES_API}; files can't be sent. Nothing was posted. Send the text alone, and describe the file (or where it is) instead.`;
+
 function messageOut(m: {
   id: string;
   conversation_id: string;
@@ -171,6 +179,9 @@ export function createReplyTool(
       outputSchema: ReplyOutputSchema,
       async run(args, ctx) {
         if (!state.isChannel) throw new ToolInputError(NOT_THE_CHANNEL);
+        if ('files' in args && args.files !== undefined && args.files !== null) {
+          throw new ToolInputError(TOO_OLD_FOR_FILES);
+        }
         const key = args.idempotency_key ?? randomUUID();
         const threadId = await resolveThread(state, ctx, args, 'reply');
         const r = await postSessionMessage(
@@ -213,9 +224,7 @@ export function createReplyTool(
         throw new ToolInputError('Give text, files, or both.');
       }
       if (files.length > 0 && filesServed(ctx.api) === false) {
-        throw new ToolInputError(
-          `This buildIt.Social server is older than agent API ${FILES_API}, so it can't take files. Send the text alone, and describe the file (or where it is) instead.`,
-        );
+        throw new ToolInputError(TOO_OLD_FOR_FILES);
       }
       const key = args.idempotency_key ?? randomUUID();
       const threadId = await resolveThread(state, ctx, args, 'reply');
@@ -254,7 +263,7 @@ export function createReplyTool(
       const folder = state.folder ?? process.cwd();
       // 1 and 2: every check before any network call, then the location removed.
       const checked = await checkFiles(files, folder, ctx.signal);
-      const prepared = await prepareFiles(checked);
+      const prepared = await prepareFiles(checked, { signal: ctx.signal });
       try {
         const { response: r, ids } = await shareFiles(prepared.files, base, {
           api: ctx.api,
