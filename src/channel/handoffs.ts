@@ -20,8 +20,10 @@
  * fields (keys, names and labels, sanitized; outcome codes from a fixed
  * list); nothing a session or a person wrote is ever in it.
  */
+import type { SessionFile } from '../api/generated/schemas.js';
 import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
 import { plainLinks } from './item-events.js';
+import { listedFilesBlock } from './attachment-blocks.js';
 
 /** An item as a handoff names it. */
 export interface HandoffItemRef {
@@ -191,6 +193,9 @@ export interface ChildResult {
   from_owner: boolean;
   via_agent: string | null;
   text: string;
+  /** The result message's id and files (listed for get_attachment, never downloaded). */
+  message_id?: string | undefined;
+  files?: readonly SessionFile[] | undefined;
 }
 
 /** What child_done says, from its structured fields (sanitized here). */
@@ -246,6 +251,18 @@ export function childDoneContent(owner: string, c: ChildDone): string {
             ...(via === undefined ? {} : { via_agent: sanitizeLabel(via, 64) }),
           },
           maxChars: RESULT_MAX_CHARS,
+        }),
+      );
+    }
+    const r = c.result;
+    if (r?.message_id !== undefined) {
+      const via = r.via_agent !== null && r.via_agent.trim() !== '' ? r.via_agent : undefined;
+      lines.push(
+        ...listedFilesBlock(r.message_id, r.files, {
+          author: r.author.name,
+          author_kind: r.author.kind,
+          from_owner: r.from_owner && via === undefined,
+          via_agent: via,
         }),
       );
     }

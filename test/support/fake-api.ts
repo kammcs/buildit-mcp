@@ -62,6 +62,7 @@ import {
   type WorkflowStatus,
 } from '../../src/api/generated/strict.js';
 import { expandScopes } from '../../src/toolsets/toolsets.js';
+import { FilesRefusal } from './fake-files.js';
 import { FakeSessions, SESSION_IDS, SESSION_TOKENS, SessionRefusal } from './fake-sessions.js';
 
 // ---------------------------------------------------------------------------
@@ -152,12 +153,12 @@ export const DEFAULT_IDENTITIES: Record<string, FakeIdentity> = {
   ...Object.fromEntries(
     Object.values(SESSION_TOKENS).map((token) => [
       token,
-      sampleIdentity(['projects:write', 'pages:read', 'chat:read'], {
+      sampleIdentity(['projects:write', 'pages:read', 'chat:read', 'files:read', 'files:write'], {
         token: {
           id: uid(6),
           name: 'demo-folder',
           kind: 'session',
-          scopes: ['projects:write', 'pages:read', 'chat:read'],
+          scopes: ['projects:write', 'pages:read', 'chat:read', 'files:read', 'files:write'],
           expires_at: '2026-11-27T10:00:00Z',
           created_at: '2026-10-01T00:00:00Z',
           limits: { projects: null, channels: null },
@@ -841,6 +842,13 @@ export const V19_OPS = new Set<OperationId>([
   'decline_session_handoff',
 ]);
 
+/** The operations API 1.11.0 added (compat.v111 false leaves them out). */
+export const V111_OPS = new Set<OperationId>([
+  'create_session_attachment_link',
+  'create_session_upload',
+  'complete_session_upload',
+]);
+
 /** An item's Needs as the API stores them: trimmed, lower case, unique, sorted; at most 10. */
 function normalNeeds(raw: unknown): string[] {
   const tags = [
@@ -857,7 +865,7 @@ function normalNeeds(raw: unknown): string[] {
 
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.9.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.11.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -1004,6 +1012,7 @@ export class FakeApi {
     v12: true,
     v14: true,
     v19: true,
+    v111: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -1036,6 +1045,7 @@ export class FakeApi {
       v12: true,
       v14: true,
       v19: true,
+      v111: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1141,6 +1151,20 @@ export class FakeApi {
     const prefix = '/functions/v1/agent-api';
     const path = url.pathname.startsWith(prefix) ? url.pathname.slice(prefix.length) : url.pathname;
     const method = req.method ?? 'GET';
+    if (url.pathname.startsWith('/_storage/')) {
+      // The fake storage: presigned-style URLs, no token.
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const served = await this.sessions.files.serve(
+        method,
+        url.pathname.slice('/_storage/'.length),
+        req.headers,
+        Buffer.concat(chunks),
+      );
+      res.writeHead(served.status, { 'Content-Length': String(served.body.length) });
+      res.end(served.body);
+      return;
+    }
     const raw = await this.readBody(req);
     let body: unknown = undefined;
     let badJson = false;
@@ -1228,7 +1252,8 @@ export class FakeApi {
         (OLDER_RELEASE_OPS.has(route.id) && !this.compat.releaseOps) ||
         (V12_OPS.has(route.id) && !this.compat.v12) ||
         (V14_OPS.has(route.id) && !this.compat.v14) ||
-        (V19_OPS.has(route.id) && !this.compat.v19);
+        (V19_OPS.has(route.id) && !this.compat.v19) ||
+        (V111_OPS.has(route.id) && !this.compat.v111);
       if (olderRoute) {
         this.send(res, {
           status: 404,
@@ -1641,6 +1666,7 @@ export class FakeApi {
       .filter((id) => this.compat.v12 || !V12_OPS.has(id))
       .filter((id) => this.compat.v14 || !V14_OPS.has(id))
       .filter((id) => this.compat.v19 || !V19_OPS.has(id))
+      .filter((id) => this.compat.v111 || !V111_OPS.has(id))
       .sort();
   }
 
@@ -1854,6 +1880,27 @@ export class FakeApi {
         return this.sessionCheck(() =>
           this.sessions.declineHandoff(call.token, call.params.id ?? '', call.body),
         );
+      case 'create_session_attachment_link':
+        return this.sessionCheck(() => {
+          this.sessions.live(call.token);
+          return {
+            status: 200,
+            body: this.sessions.files.link(call.token, call.body, this.clock),
+          };
+        });
+      case 'create_session_upload':
+        return this.sessionCheck(() => {
+          this.sessions.live(call.token);
+          return this.sessions.files.createUpload(call.token, call.body, this.clock);
+        });
+      case 'complete_session_upload':
+        return this.sessionCheck(() => {
+          this.sessions.live(call.token);
+          return {
+            status: 200,
+            body: this.sessions.files.complete(call.token, call.params.id ?? ''),
+          };
+        });
       default:
         throw new FakeError(
           'not_found',
@@ -1872,6 +1919,7 @@ export class FakeApi {
       },
       now: () => this.now(),
       clockMs: () => this.clock,
+      storageBase: () => new URL(this.baseUrl).origin,
       findItem: (ref) => {
         const clean = ref.replace(/^#/, '');
         const m = /^([A-Za-z][A-Za-z0-9]{1,5})-(\d+)$/.exec(clean);
@@ -1900,6 +1948,7 @@ export class FakeApi {
       return run();
     } catch (err) {
       if (err instanceof SessionRefusal) throw new FakeError(err.code, err.details);
+      if (err instanceof FilesRefusal) throw new FakeError(err.code, err.details);
       throw err;
     }
   }

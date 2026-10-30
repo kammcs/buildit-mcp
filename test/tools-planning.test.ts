@@ -495,7 +495,7 @@ describe('list_releases and plan_release', () => {
     const r = await c.call('plan_release', { project: 'DEMO', action: 'reopen', release: '1.0.1' });
     expect(r.isError).toBe(true);
     expect(r.text).toContain(
-      "This buildIt.Social server (API 1.9.0) doesn't serve reopen_release yet, which this needs.",
+      "This buildIt.Social server (API 1.11.0) doesn't serve reopen_release yet, which this needs.",
     );
     expect(api.requests.length).toBe(before);
     // The actions it serves still work.

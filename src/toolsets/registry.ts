@@ -117,6 +117,11 @@ export interface ToolDefinition<
    * not listed once /v1/meta shows the server doesn't serve them all.
    */
   requiresOperations?: readonly OperationId[];
+  /**
+   * Listed only when /v1/meta shows the server doesn't serve all of these
+   * (an older variant of a tool that has a newer one under the same name).
+   */
+  listedUnlessOperations?: readonly OperationId[];
   annotations: ToolHints;
   inputSchema: I;
   outputSchema: O;

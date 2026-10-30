@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { SessionEvent } from '../../src/api/generated/strict.js';
 import type { FakeIdentity } from './fake-api.js';
+import { FakeFiles, type FakeFileInput } from './fake-files.js';
 
 /** The session token format's public test vectors: well-formed, and never valid anywhere real. */
 export const SESSION_TOKENS = {
@@ -61,6 +62,8 @@ export interface FakeContextMessage {
   fromOwner?: boolean;
   /** Written through this agent's token (the API then never says from_owner). */
   viaAgent?: string;
+  /** Its files (put in the fake's files, so get_attachment can fetch them). */
+  files?: FakeFileInput[];
 }
 
 export interface FakeSession {
@@ -302,6 +305,8 @@ export interface SessionHost {
   identities: Record<string, FakeIdentity>;
   now(): string;
   clockMs(): number;
+  /** The fake storage's origin (presigned-style URLs). */
+  storageBase(): string;
   /** An item by key or id, for handoffs (undefined: none). */
   findItem?(ref: string): FakeHandoffItem | undefined;
 }
@@ -347,13 +352,17 @@ const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 export class FakeSessions {
   readonly grants: FakeGrant[] = [];
   readonly sessions = new Map<string, FakeSession>();
+  /** The sessions' files: messages' attachments, links, uploads and the fake storage. */
+  readonly files: FakeFiles;
   /** The interval connect_start and authorization_pending ask for. */
   interval = 5;
   /** Answer the next connect_poll with slow_down. */
   slowDownOnce = false;
   private next = 0;
 
-  constructor(private readonly host: SessionHost) {}
+  constructor(private readonly host: SessionHost) {
+    this.files = new FakeFiles(() => host.storageBase());
+  }
 
   private code(alphabet: string, length: number): string {
     this.next++;
@@ -456,6 +465,11 @@ export class FakeSessions {
         org: { id: identity.org.id, name: identity.org.name },
         dm: { conversation_id: SESSION_IDS.dm },
         poll_interval_s: this.interval,
+        files_budget: {
+          down_bytes_left: this.files.downBudget.get(token) ?? 2 * 1024 ** 3,
+          up_bytes_left: 1024 ** 3,
+          resets_at: '2026-10-08T00:00:00.000Z',
+        },
       },
     };
   }
@@ -497,6 +511,8 @@ export class FakeSessions {
   post(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
     const s = this.live(token);
     const id = String(body.id);
+    const fileIds = Array.isArray(body.files) ? (body.files as string[]) : undefined;
+    if (fileIds !== undefined) return this.postWithFiles(s, id, body, fileIds);
     const text = String(body.text);
     if (text.trim() === '' || text.length > 4000) {
       throw new SessionRefusal('validation', {
@@ -547,6 +563,57 @@ export class FakeSessions {
       });
     }
     return { status: 201, body: { created: true, message: this.messageOut(s, message) } };
+  }
+
+  /** Every post with files, in order: the groups of upload ids each message carried. */
+  readonly filePosts: { id: string; text: string | undefined; groups: string[][] }[] = [];
+
+  /** post_session_message with files: one message per group (the text with the first). */
+  private postWithFiles(
+    s: FakeSession,
+    id: string,
+    body: Record<string, unknown>,
+    fileIds: string[],
+  ): { status: number; body: unknown } {
+    const threadId = typeof body.thread_id === 'string' ? body.thread_id : null;
+    const text = typeof body.text === 'string' ? body.text : undefined;
+    const existing = s.messages.find((m) => m.id === id);
+    if (existing) {
+      const messages = s.messages.filter((m) => m.id === id || m.id.startsWith(id.slice(0, 24)));
+      return {
+        status: 200,
+        body: {
+          created: false,
+          message: this.messageOut(s, existing),
+          messages: (messages.length > 0 ? messages : [existing]).map((m) => this.messageOut(s, m)),
+        },
+      };
+    }
+    if (body.card !== undefined) {
+      throw new SessionRefusal('validation', {
+        fields: [{ path: 'files', message: 'files and card cannot go together.' }],
+      });
+    }
+    const inItem = threadId !== null && this.itemIds.has(threadId);
+    if (inItem && !s.items.has(threadId)) {
+      throw new SessionRefusal('thread_not_bound', { thread_id: threadId });
+    }
+    const groups = this.files.postFiles(s.token, threadId, fileIds);
+    this.filePosts.push({ id, text, groups: groups.map((g) => g.map((u) => u.id)) });
+    const out = groups.map((group, i) => {
+      const message = {
+        id: i === 0 ? id : `${id.slice(0, 24)}${String(i).padStart(12, '0')}`,
+        conversation_id: inItem ? SESSION_IDS.demoChannel : SESSION_IDS.dm,
+        text: i === 0 ? (text ?? '') : '',
+        thread_id: threadId,
+        reply_to_id: null,
+        created_at: this.host.now(),
+        card: null,
+      };
+      s.messages.push(message);
+      return this.messageOut(s, message);
+    });
+    return { status: 201, body: { created: true, message: out[0], messages: out } };
   }
 
   // -- tool approvals ----------------------------------------------------------
@@ -1350,18 +1417,38 @@ export class FakeSessions {
   private context(s: FakeSession, messages: FakeContextMessage[]): Record<string, unknown> {
     return {
       untrusted: true,
-      messages: messages.map((m) => ({
-        id: m.id ?? randomUUID(),
-        author: m.author ?? {
-          kind: 'user',
+      messages: messages.map((m) => {
+        const id = m.id ?? randomUUID();
+        const author = m.author ?? {
+          kind: 'user' as const,
           id: m.fromOwner ? s.ownerId : SESSION_IDS.stranger,
           name: m.fromOwner ? s.ownerName : 'Sam Example',
-        },
-        from_owner: (m.fromOwner ?? false) && m.viaAgent === undefined,
-        ...(m.viaAgent === undefined ? {} : { via_agent: m.viaAgent }),
-        text: m.text,
-        created_at: this.host.now(),
-      })),
+        };
+        const fromOwner = (m.fromOwner ?? false) && m.viaAgent === undefined;
+        const files =
+          m.files === undefined
+            ? undefined
+            : this.files.add(id, m.files, {
+                threadId: null,
+                sessionToken: s.token,
+                author: {
+                  kind: author.kind === 'agent' ? 'app' : author.kind,
+                  id: author.id,
+                  name: author.name,
+                },
+                fromOwner,
+                forwardedFrom: null,
+              });
+        return {
+          id,
+          author,
+          from_owner: fromOwner,
+          ...(m.viaAgent === undefined ? {} : { via_agent: m.viaAgent }),
+          text: m.text,
+          created_at: this.host.now(),
+          ...(files === undefined ? {} : { files }),
+        };
+      }),
     };
   }
 
@@ -1403,12 +1490,26 @@ export class FakeSessions {
       forwardedFrom?: { user?: { id: string; name: string } | null };
       /** Written through an agent's token, in the sender's name. */
       viaAgent?: string;
+      files?: FakeFileInput[];
     } = {},
   ): string {
     const s = this.session(token);
     s.items.add(item.id);
     const user = options.from ?? { id: s.ownerId, name: s.ownerName };
     const messageId = randomUUID();
+    const files =
+      options.files === undefined
+        ? undefined
+        : this.files.add(messageId, options.files, {
+            threadId: item.id,
+            sessionToken: s.token,
+            author: { kind: 'user', id: user.id, name: user.name },
+            fromOwner: user.id === s.ownerId,
+            forwardedFrom:
+              options.forwardedFrom === undefined
+                ? null
+                : { user: options.forwardedFrom.user ?? null, app: null },
+          });
     this.event(s, options.mention ? 'app.mentioned' : 'message.posted', {
       ...this.itemData(item, true),
       assignment: this.assignment(s),
@@ -1432,6 +1533,7 @@ export class FakeSessions {
                 app: null,
               },
         ...(options.viaAgent === undefined ? {} : { via_agent: options.viaAgent }),
+        ...(files === undefined ? {} : { files }),
       },
       user: { id: user.id, name: user.name, is_guest: false, locale: 'en' },
     });
@@ -1534,6 +1636,8 @@ export class FakeSessions {
         user?: { id: string; name: string } | null;
         app?: { id: string; name: string } | null;
       };
+      /** The message's attachments. */
+      files?: FakeFileInput[];
     } = {},
   ): string {
     const s = this.sessions.get(token);
@@ -1541,6 +1645,19 @@ export class FakeSessions {
     const messageId = randomUUID();
     const identity = this.identity(token);
     const user = options.from ?? { id: s.ownerId, name: s.ownerName };
+    const files =
+      options.files === undefined
+        ? undefined
+        : this.files.add(messageId, options.files, {
+            threadId: options.threadId ?? null,
+            sessionToken: s.token,
+            author: { kind: 'user', id: user.id, name: user.name },
+            fromOwner: user.id === s.ownerId,
+            forwardedFrom:
+              options.forwardedFrom === undefined
+                ? null
+                : { user: options.forwardedFrom.user ?? null, app: null },
+          });
     const root = options.threadId ?? messageId;
     if (user.id === s.ownerId && !s.dmThreads.includes(root)) s.dmThreads.push(root);
     s.events.push({
@@ -1573,6 +1690,7 @@ export class FakeSessions {
                   app: options.forwardedFrom.app ?? null,
                 },
           ...(options.viaAgent === undefined ? {} : { via_agent: options.viaAgent }),
+          ...(files === undefined ? {} : { files }),
         },
         user: { id: user.id, name: user.name, is_guest: false, locale: options.locale ?? 'en' },
       },
@@ -1726,7 +1844,7 @@ export class FakeSessions {
     return identity;
   }
 
-  private live(token: string): FakeSession {
+  live(token: string): FakeSession {
     const s = this.sessions.get(token);
     if (!s) throw new SessionRefusal('session_token_required');
     this.checkToken(token);

@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://bu
 
 It runs on your own machine (stdio) or as a stateless HTTP server for a team. It holds no secrets of its own: each person's token stays in their own client.
 
-**Status:** 0.8.0, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`; with the [buildit plugin](#questions-and-approvals-in-builditsocial-plugin), its questions, approvals and [tool approvals](#tool-approvals-in-builditsocial) come to you there as cards, and you can [assign it work items](#work-items-for-your-agent), which it can [hand to another of your sessions](#handing-work-to-another-session) with your tap.
+**Status:** 0.9.0, not yet on npm, where [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp) is at 0.8.0. Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (43 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`; with the [buildit plugin](#questions-and-approvals-in-builditsocial-plugin), its questions, approvals and [tool approvals](#tool-approvals-in-builditsocial) come to you there as cards, and you can [assign it work items](#work-items-for-your-agent), which it can [hand to another of your sessions](#handing-work-to-another-session) with your tap. [Files](#files-attachments-in-and-out) go both ways with no extra steps: your attachments reach Claude as local paths, and `reply` posts files.
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
@@ -248,7 +248,7 @@ It works only with the **Claude Code CLI** (not Claude Desktop), because it uses
 
 ### 1. Install or upgrade
 
-Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer, the [plugin](#questions-and-approvals-in-builditsocial-plugin) 0.5.0, [work items for your agent](#work-items-for-your-agent) 0.6.0, [tool approvals](#tool-approvals-in-builditsocial) 0.7.0, and [handoffs](#handing-work-to-another-session) 0.8.0.
+Nothing to install by hand: `npx -y @kammcs/buildit-mcp@latest` downloads the newest release when it runs, and again whenever a new one ships. Check the version with `npx -y @kammcs/buildit-mcp@latest --version`; channel mode needs 0.4.0 or newer, the [plugin](#questions-and-approvals-in-builditsocial-plugin) 0.5.0, [work items for your agent](#work-items-for-your-agent) 0.6.0, [tool approvals](#tool-approvals-in-builditsocial) 0.7.0, [handoffs](#handing-work-to-another-session) 0.8.0, and [files](#files-attachments-in-and-out) 0.9.0.
 
 > **Until 0.4.0 is on npm**, `@latest` is an older release without channel mode, so use a local build: `git clone https://github.com/kammcs/buildit-mcp.git`, then `npm ci && npm run build` in it, and use `node /path/to/buildit-mcp/dist/index.js` wherever the steps below say `npx -y @kammcs/buildit-mcp@latest`. `connect` run that way prints the matching `claude mcp add` line.
 
@@ -350,6 +350,36 @@ With 0.8.0 and a buildIt.Social server with agent API 1.9.0, a session that can'
 - A session working on a subtask can't hand part of it on (subtasks have no children): it asks you instead.
 - On a server older than agent API 1.9.0 the three tools aren't listed (or say plainly that the server is too old), `needs` is refused with an explanation, and the rest works as before.
 
+### Files: attachments in and out
+
+With 0.9.0 and a buildIt.Social server with agent API 1.11.0, files work as in a standard Claude Code session, with no extra steps either way. Drop a file into your conversation with the agent, and Claude gets it. Claude shares a render or a log, and it's posted in the thread.
+
+- **Scopes.** A session needs `files:read` to receive files and `files:write` to share them. Both are ticked on the approval page, and you change them in Settings → Agents. They're for sessions only, never personal access tokens. Without one, Claude is told what to ask you for.
+- **Attachments come with the message.** When your message has files (in your direct message, a mention or reply in an item's thread, or a message you forwarded), buildit-mcp downloads them before Claude sees the message.
+  - **What Claude sees:** the message lists each file's name, type, size and local path, inside an `untrusted_content` block that says whose files they are.
+  - **Reading them:** Claude reads them from there (Read for an image or a PDF, `ffmpeg` for a sound, any tool that takes a path).
+  - **Forwarded files** are named as their original author's.
+  - The download link lasts two minutes and is used once. It's never shown to Claude, logged or saved.
+- **The automatic limits.** Up to 100 MiB per file and 250 MiB per message, within the session's daily budget (2 GB of downloads, 1 GB of uploads). Each message waits at most a minute for its files. Anything over is listed with why, and Claude fetches it with `get_attachment` when it needs it.
+- **Where they're saved.** In `.claude/buildit-attachments/<session>/<message>/` in the project, so Claude Code reads them without asking.
+  - The folder holds a `.gitignore` of `*`, so nothing in it is committed. If the project can't be written, the files go to the temp folder instead.
+  - Names are cleaned (no path separators, `..`, control or bidi characters, or reserved Windows names), files are never executable, and each is marked as downloaded from the internet.
+  - **Cleanup:** message folders go after 7 days (the oldest first above 2 GiB), the session's folder when it ends, and the project's attachments at `disconnect`.
+- **`get_attachment`** (`message_id`, `file_id`) saves one file of a message in the session's threads and returns its path. It's for a file that wasn't downloaded by itself, one the cleanup removed, and colleagues' files in an item thread. Those are listed with their ids, never downloaded by themselves.
+- **Sharing: `reply` with `files`.** Claude passes up to 10 local paths, and they're posted at once in the same thread, with the text (the images and videos with the text, each other file in a message of its own). Nobody taps anything.
+  - **Checks first.** Before anything is uploaded, every file is checked:
+    - it must be inside the project folder or the temp folder;
+    - it must not be inside a credentials folder (`~/.ssh`, `~/.aws`, `~/.gnupg`, gcloud, kube, the Docker login, browser profiles);
+    - it must not have a secret store's name (`.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `.npmrc`, `.netrc`, `.pgpass`);
+    - it must not be a program or an installer;
+    - it must be within 250 MiB for a video, 100 MiB for anything else;
+    - a text file must not hold anything that looks like a credential. The whole file is scanned with the tool approvals' rules, and the error names the lines.
+  - **All or nothing:** one refused file sends nothing, and the error says why, so Claude fixes it and sends again.
+  - **Location** is removed from photos and videos before upload, losslessly, into a copy: the original is never touched. buildIt.Social checks again: it refuses a photo that still carries a location, and a text file whose first MiB looks like it holds a credential.
+- **The only approval is Claude Code's own.** There's no card for files. If you haven't allowed buildit's tools in Claude Code, it asks about the `reply` call as about any tool, and with the plugin that's a [tool approval card](#tool-approvals-in-builditsocial). If you have allowed them (or run in auto or bypass mode), nothing asks. Shared files go only to the thread the session works in, read by exactly who reads it: you alone in the direct message, the project channel's members in an item's thread.
+- **What isn't caught.** Binary files (archives, Office documents, images) aren't scanned, so a secret inside a zip passes. Claude is told to share only what you asked for or what its work needs, and never credentials, keys, `.env` files or private files.
+- On a server older than agent API 1.11.0, nothing downloads, `get_attachment` isn't listed, and `reply` takes text only.
+
 ### Questions and approvals in buildIt.Social (plugin)
 
 The **buildit plugin** for Claude Code (since 0.5.0; tool approvals since 0.7.0) adds what the bare channel can't do, so you can work with the session from your phone as well as from the terminal:
@@ -416,7 +446,7 @@ Tested with Claude Code 2.1.312.
 
 #### Try it from a checkout
 
-Until 0.7.0 is on npm, the plugin's server (`npx -y @kammcs/buildit-mcp@0.8.0 --channel`) can't be downloaded. A checkout can make a local plugin marketplace whose buildit plugin runs the checkout's own build:
+Until 0.7.0 is on npm, the plugin's server (`npx -y @kammcs/buildit-mcp@0.9.0 --channel`) can't be downloaded. A checkout can make a local plugin marketplace whose buildit plugin runs the checkout's own build:
 
 ```sh
 git clone https://github.com/kammcs/buildit-mcp.git
@@ -444,7 +474,7 @@ claude --dangerously-load-development-channels plugin:buildit@buildit-dev
 - `--plugin-dir` alone doesn't do: it loads the plugin's hooks and server, but Claude Code registers a plugin's channel only for an installed plugin, so messages from buildIt.Social wouldn't arrive.
 - Run `npm run dev-marketplace` again after rebuilding or pulling, then `claude plugin marketplace update buildit-dev` and `claude plugin update buildit@buildit-dev`, so Claude Code takes the new copy; restart Claude Code. `claude plugin validate .dev-marketplace` checks it.
 
-On Windows, Claude Code starts the plugin's `npx` itself; if `/mcp` shows the plugin's server as failed, check that `npx -y @kammcs/buildit-mcp@0.8.0 --version` works in a terminal (Node.js 20 or newer on `PATH`).
+On Windows, Claude Code starts the plugin's `npx` itself; if `/mcp` shows the plugin's server as failed, check that `npx -y @kammcs/buildit-mcp@0.9.0 --version` works in a terminal (Node.js 20 or newer on `PATH`).
 
 ### Where the token is kept
 
@@ -523,7 +553,8 @@ docker run -i --rm -e BUILDIT_HTTP=false -e BUILDIT_TOKEN ghcr.io/kammcs/buildit
 - **Destructive and admin changes are previewed and need your confirmation** ([above](#preview-then-confirm)), and their toolsets are off unless you turn them on. Read the preview before you say yes: it is what will happen.
 - **Chat is read only**, and never reaches direct messages. The one exception is channel mode (`reply`, `ask`'s question cards and the approval cards), which writes only in your agent's own conversation with you. Only you can answer its cards; an answer is passed to Claude as your words inside an `untrusted_content` block, and an approval card is applied by buildIt.Social on your tap, never by the session.
 - **Channel mode passes on only your own messages**, because whoever can write into a Claude Code session can steer it. A session token reaches only the projects you approved, never more than you can, and only your agent's conversation with you; revoke it in the app when you no longer need it.
-- **Logs** are JSON on stderr and never contain tokens or content.
+- **Files in channel mode** ([above](#files-attachments-in-and-out)) are data: an attachment's content never directs Claude, and the server says so. Download links are never shown, logged or saved. Shared files are checked first (roots, credentials folders, secret-store names, programs, sizes, a credential scan of text files), stripped of location, and posted only in the session's own threads.
+- **Logs** are JSON on stderr and never contain tokens, presigned URLs' signatures or content.
 
 ### Hardening
 

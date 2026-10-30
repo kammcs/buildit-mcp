@@ -11,7 +11,9 @@
  * blocks, which share one block id. Other people's replies never arrive as
  * events: they are only context here.
  */
+import type { SessionFile } from '../api/generated/schemas.js';
 import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
+import { listedFilesBlock } from './attachment-blocks.js';
 
 /** The item an event is about, as the loop reads it. */
 export interface EventItem {
@@ -30,6 +32,8 @@ export interface ContextMessage {
   text: string;
   /** The agent it was written through (an agent token), or null: then it is never the owner's. */
   via_agent?: string | null | undefined;
+  /** Its files (listed with their ids for get_attachment, never downloaded by themselves). */
+  files?: readonly SessionFile[] | undefined;
 }
 
 /** The longest excerpt or context message shown (the API cuts them at 1,000). */
@@ -113,11 +117,17 @@ function contextBlocks(messages: readonly ContextMessage[]): string[] {
   if (messages.length === 0) return [];
   return [
     'The latest messages in its thread, oldest first:',
-    ...messages.map((m) => {
+    ...messages.flatMap((m) => {
       // Written through an agent's token: the agent's words, never the owner's instructions.
       const via =
         typeof m.via_agent === 'string' && m.via_agent.trim() !== '' ? m.via_agent : undefined;
-      return wrapUntrusted(plainLinks(m.text), {
+      const files = listedFilesBlock(m.id, m.files, {
+        author: m.author.name,
+        author_kind: m.author.kind,
+        from_owner: m.from_owner && via === undefined,
+        via_agent: via,
+      });
+      const text = wrapUntrusted(plainLinks(m.text), {
         source: 'item thread',
         author: sanitizeLabel(m.author.name, 64),
         attributes: {
@@ -127,6 +137,7 @@ function contextBlocks(messages: readonly ContextMessage[]): string[] {
         },
         maxChars: CONTEXT_MAX_CHARS,
       });
+      return [text, ...files];
     }),
   ];
 }

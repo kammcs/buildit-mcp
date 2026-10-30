@@ -74,9 +74,12 @@ src/
   tools/chat.ts         list_channels, read_channel, read_thread, list_pins, list_emoji
   tools/plans.ts        get_workflow, list_work_types, the propose_* tools, apply_plan
   tools/setup.ts        create_channel, create_project
-  tools/reply.ts        reply, and turn_ended for the plugin's Stop hook (channel mode only;
+  tools/reply.ts        reply (with files on an API that serves them, text only on an older
+                        one), and turn_ended for the plugin's Stop hook (channel mode only;
                         not in the catalog)
   tools/threads.ts      list_threads (channel mode only)
+  tools/attachment.ts   get_attachment: a file of the session's threads saved locally, its path
+                        back (channel mode only; listed when the API serves files)
   tools/handoff.ts      propose_handoff, withdraw_handoff, decline_handoff (channel mode only;
                         listed when the API serves them)
   tools/ask.ts          ask: questions as a card, the answer back (channel mode only; also the
@@ -97,7 +100,19 @@ src/
                         several are active)
   channel/waiters.ts    who waits for answers to the session's cards, by message id
   channel/approvals.ts  the session's open tool approvals (what ends them), and their journal
-  channel/mask.ts       a tool approval's details: cleaned, credentials masked, cut
+  channel/mask.ts       a tool approval's details: cleaned, credentials masked, cut; and
+                        findCredentials, the same rules finding (the files' scan)
+  channel/attachments.ts  the session's attachments folder: the automatic download (caps,
+                        budget, timeout, reuse), get_attachment's fetch, names, marks, cleanup
+  channel/attachment-blocks.ts  how a message's files are shown (untrusted attachments blocks)
+  channel/upload.ts     reply's files: the checks before any request, location removed, the
+                        upload sequence, the post
+  files/types.ts        types by name, blocked programs, secret-store names, text detection,
+                        caps, cleaned names
+  files/paths.ts        where a shared file may come from (the roots, the secret folders)
+  files/scan.ts         the whole-file credential scan of a text file
+  files/transfer.ts     the presigned GET and PUT, straight to storage (never the token)
+  files/location.ts     location stripping for photos and videos (a port of the app's, lossless)
   channel/tool-ring.ts  the recent tool calls (PreToolUse), so an approval names its call
   channel/lock.ts       one channel server per folder, the plugin's first (lock files next to
                         the token file)
@@ -112,6 +127,7 @@ src/
 test/
   support/fake-api.ts   in-process fake of the agent API on the generated contract (made-up data)
   support/fake-sessions.ts  the fake's agent sessions and connect flow
+  support/fake-files.ts the fake's files for sessions: attachments, links, uploads, a fake storage
   support/harness.ts    an in-memory MCP client on the real catalog, and hostile-content checks
   support/test-tools.ts stand-in tools across toolsets, for registry and transport tests
   *.test.ts             vitest

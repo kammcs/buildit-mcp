@@ -42,7 +42,7 @@ import { callOperation } from '../api/operations.js';
 import { ToolInputError } from '../errors.js';
 import { isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
-import { SessionHandoffOutcomeSchema } from '../api/generated/schemas.js';
+import { SessionHandoffOutcomeSchema, type SessionFile } from '../api/generated/schemas.js';
 import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
 import { planResolvedContent } from '../tools/plans.js';
 import { statusName } from '../tools/threads.js';
@@ -68,6 +68,8 @@ import {
   type SessionInfo,
 } from './api.js';
 import { apiApprovalCloser, type ToolApprovals } from './approvals.js';
+import { attachmentsBlock, forwardedFilesLead } from './attachment-blocks.js';
+import { AttachmentStore, filesServed, type AttachmentOutcome } from './attachments.js';
 import { ToolRing } from './tool-ring.js';
 import type { TypingIndicator } from './typing.js';
 import { CardWaiters, eventMessageId } from './waiters.js';
@@ -184,6 +186,8 @@ export class ChannelState {
   readonly ring = new ToolRing();
   /** The session's open tool approvals (channel mode, the folder's channel). */
   approvals: ToolApprovals | undefined;
+  /** The session's attachments folder (channel mode, once the session is read). */
+  attachments: AttachmentStore | undefined;
   /** The handoffs this session proposed or was handed, as seen in this process. */
   readonly handoffs = new Handoffs();
   /**
@@ -299,6 +303,33 @@ function forwardedBlock(text: string, origin: ForwardOrigin): string {
       ...(origin.app ? { attributes: { author_kind: 'app' } } : {}),
     }),
   ].join('\n');
+}
+
+/**
+ * The attachments block of the event's own message: the owner's files, or
+ * a forwarded message's (the original author's, said in a line before it).
+ * Call inside the content's withBlockId.
+ */
+function filesBlock(
+  messageId: string,
+  outcomes: readonly AttachmentOutcome[],
+  forwarded: ForwardOrigin | undefined,
+  owner: string,
+): string {
+  const block = attachmentsBlock(
+    messageId,
+    outcomes,
+    forwarded === undefined
+      ? { author: owner, author_kind: 'user', from_owner: true }
+      : {
+          author: forwarded.author,
+          author_kind: forwarded.app ? 'app' : 'user',
+          from_owner: false,
+          forwarded: true,
+        },
+    owner,
+  );
+  return forwarded === undefined ? block : [forwardedFilesLead(forwarded.author), block].join('\n');
 }
 
 /** The longest pause after repeated failures. */
@@ -424,6 +455,7 @@ export class ChannelLoop {
         .catch(() => undefined);
     }
     state.waiters.endAll();
+    state.attachments?.stopCleanup();
     if (this.ended || this.yielded || state.session === undefined) return;
     await this.options.state.typing?.stopAll().catch(() => undefined);
     await sessionHeartbeat(this.options.api, 'offline', {
@@ -467,6 +499,7 @@ export class ChannelLoop {
     const info = await this.loadSession();
     if (info === undefined) return;
     if (!this.stillChannel()) return;
+    this.openAttachments(info);
     await sessionHeartbeat(this.options.api, 'online', { signal: this.signal }).catch(
       (err: unknown) => {
         if (err instanceof ApiError) {
@@ -515,6 +548,40 @@ export class ChannelLoop {
       }
       if (wait > 0) await this.sleep(wait, this.signal);
     }
+  }
+
+  /**
+   * The session's attachments folder, in the folder it is connected for,
+   * cleaned up now and every hour. Not on a server that doesn't serve files.
+   */
+  private openAttachments(info: SessionInfo): void {
+    const { api, logger, state } = this.options;
+    if (state.attachments !== undefined || filesServed(api) === false) return;
+    try {
+      state.attachments = new AttachmentStore({
+        api,
+        logger: logger.child({ component: 'attachments' }),
+        folder: state.folder ?? process.cwd(),
+        sessionId: info.session.id,
+        budgetLeft: info.files_budget?.down_bytes_left,
+      });
+      state.attachments.startCleanup();
+    } catch (err) {
+      logger.warn('attachments unavailable', { error: err });
+    }
+  }
+
+  /**
+   * The automatic download of an event's own message's files, before the
+   * event is handed on. Never throws, and takes at most a minute.
+   */
+  private async download(
+    messageId: string,
+    files: readonly SessionFile[],
+  ): Promise<AttachmentOutcome[]> {
+    const store = this.options.state.attachments;
+    if (store === undefined) return files.map((file) => ({ file, reason: 'not_served' as const }));
+    return store.autoDownload(messageId, files, { signal: this.signal });
   }
 
   /** GET /v1/session, retried while it fails for a reason that may pass. */
@@ -626,13 +693,29 @@ export class ChannelLoop {
     this.noteLocale(user);
     const threadId = message.thread_id ?? message.id;
     const forwarded = forwardOrigin(message);
+    const files = message.files ?? [];
+    const outcomes = files.length > 0 ? await this.download(message.id, files) : [];
+    if (this.isStopped()) return;
+    const owner = sanitizeLabel(info.owner.name, 64);
+    const content =
+      outcomes.length === 0
+        ? forwarded
+          ? forwardedContent(message.text, forwarded)
+          : message.text
+        : withBlockId(() =>
+            [
+              forwarded ? forwardedBlock(message.text, forwarded) : message.text,
+              filesBlock(message.id, outcomes, forwarded, owner),
+            ].join('\n\n'),
+          );
     await this.send({
-      content: forwarded ? forwardedContent(message.text, forwarded) : message.text,
+      content,
       meta: {
         thread_id: threadId,
         message_id: message.id,
         session: sanitizeLabel(event.session.label, 40),
         ...(forwarded ? { forwarded: 'true' } : {}),
+        ...(files.length > 0 ? { attachments: String(files.length) } : {}),
       },
     });
     const conversationId = event.data.channel?.id;
@@ -764,8 +847,17 @@ export class ChannelLoop {
       this.seen.add(`m:${message.id}`);
       this.noteLocale(user);
       const forwarded = forwardOrigin(message);
-      const text = (): string =>
-        forwarded ? forwardedBlock(plainLinks(message.text), forwarded) : plainLinks(message.text);
+      const files = message.files ?? [];
+      const outcomes = files.length > 0 ? await this.download(message.id, files) : [];
+      if (this.isStopped()) return;
+      const text = (): string => {
+        const said = forwarded
+          ? forwardedBlock(plainLinks(message.text), forwarded)
+          : plainLinks(message.text);
+        return outcomes.length === 0
+          ? said
+          : [said, filesBlock(message.id, outcomes, forwarded, owner)].join('\n');
+      };
       const base = { thread_id: threadId, message_id: message.id, item: key, project, session };
       if (event.type === 'app.mentioned') {
         content = mentionContent(owner, key, text, item, context);
@@ -777,6 +869,7 @@ export class ChannelLoop {
         meta = { event: 'message', ...base };
       }
       if (forwarded) meta.forwarded = 'true';
+      if (files.length > 0) meta.attachments = String(files.length);
       shown.push(message.id);
     }
     await this.send({ content, meta });
@@ -909,6 +1002,8 @@ export class ChannelLoop {
               from_owner: message.from_owner,
               via_agent: message.via_agent,
               text: message.text,
+              message_id: message.id,
+              files: message.files,
             },
     });
     const threadId = d.item.id;
@@ -1110,6 +1205,8 @@ export class ChannelLoop {
     this.stopper.abort();
     if (reason === 'token_revoked' || reason === 'token_expired' || reason === 'token_invalid') {
       this.options.state.ended = reason;
+      // The session is over: its downloaded files go with it.
+      await this.options.state.attachments?.removeSession().catch(() => undefined);
     }
     // Every question waiting for an answer is told the session ended.
     this.options.state.waiters.endAll();

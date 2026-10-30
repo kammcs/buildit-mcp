@@ -10,6 +10,7 @@
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { removeFolderAttachments } from '../channel/attachments.js';
 import { ApiError, ApiClient } from '../api/client.js';
 import { detectCapabilities, type DetectionHost } from '../capabilities.js';
 import {
@@ -459,6 +460,8 @@ export async function runDisconnect(given: SessionCommandOptions, io: CommandIO)
   // Best effort: the session ends in buildIt.Social too, before its token is forgotten here.
   const failed = await cancel(apiFor(options, io, token));
   await forgetSession(io.store, options.folder, options.apiUrl);
+  // The session's downloaded attachments go with it.
+  await removeFolderAttachments(options.folder);
   io.out(
     failed === undefined
       ? 'Disconnected: the session is cancelled in buildIt.Social, and this folder no longer has a saved token.\n'

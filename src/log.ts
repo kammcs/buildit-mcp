@@ -55,8 +55,17 @@ export function scrubString(value: string, secrets: readonly string[] = []): str
     if (secret.length >= 4) out = out.split(secret).join(REDACTED);
   }
   for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, REDACTED);
+  // A presigned storage URL's signature and credential (its bearer parts).
+  out = out.replace(PRESIGNED_PARAMS, `$1${REDACTED}`);
   return out;
 }
+
+/**
+ * The query parameters that make a presigned storage URL work (S3 and R2's
+ * signature version 4, and the older version 2's), wherever they appear.
+ */
+const PRESIGNED_PARAMS =
+  /((?:X-Amz-(?:Signature|Credential|Security-Token)|Signature|AWSAccessKeyId)=)[^&\s"'<>]+/gi;
 
 function scrub(value: unknown, secrets: readonly string[], depth: number): unknown {
   if (typeof value === 'string') return scrubString(value, secrets);

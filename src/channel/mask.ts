@@ -22,7 +22,7 @@
  * the soft hyphen, bidi controls, zero-width and invisible joiners and
  * separators, variation selectors, the byte order mark and tag characters.
  */
-const STRIP =
+export const STRIP =
   /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u034F\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFE00-\uFE0F\uFEFF\u{E0000}-\u{E007F}]/gu;
 /* eslint-enable no-control-regex, no-misleading-character-class */
 
@@ -49,6 +49,22 @@ export function cleanApprovalKey(text: string): string {
 }
 
 /**
+ * What each rule finds, in the rules' order (R1 to R8): the names the agent
+ * API's credential_found error uses in details.kinds.
+ */
+export const CREDENTIAL_KINDS = [
+  'private_key',
+  'authorization_header',
+  'bearer_token',
+  'url_password',
+  'credential_option',
+  'credential_assignment',
+  'api_key',
+  'jwt',
+] as const;
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
+
+/**
  * The masking rules, in the order they apply. Each replaces only the secret.
  *
  * **Masking never hides what is being approved.** A span becomes
@@ -67,27 +83,31 @@ export function cleanApprovalKey(text: string): string {
  * regular expression engine that takes the longest match gives the same
  * result as this one (which takes the first alternative).
  */
-const RULES: { pattern: RegExp; replacement: string }[] = [
+const RULES: { kind: CredentialKind; pattern: RegExp; replacement: string }[] = [
   // R1: a PEM or PGP private key block whose body is all armor, to its END line or the end.
   {
+    kind: 'private_key',
     pattern:
       /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----\n(?:(?:[A-Za-z0-9+/=]*|[A-Za-z0-9-]{1,64}: [A-Za-z0-9._~+= -]*)\n)*?(?:-----END [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----|(?:[A-Za-z0-9+/=]*|[A-Za-z0-9-]{1,64}: [A-Za-z0-9._~+= -]*)$)/g,
     replacement: REDACTED,
   },
   // R2: an Authorization header's credentials (its quotes may be JSON-escaped).
   {
+    kind: 'authorization_header',
     pattern:
       /(authorization(?:\\?["'])?[ \t\n\v\f\r]{0,16}[:=][ \t\n\v\f\r]{0,16}(?:\\?["'])?(?:bearer|basic|token|bot)[ \t\n\v\f\r]{1,16})[A-Za-z0-9._~+=-]+(?![^ \t\n\v\f\r"'\\&;,])/gi,
     replacement: `$1${REDACTED}`,
   },
   // R3: a bearer token anywhere.
   {
+    kind: 'bearer_token',
     pattern:
       /(?<![A-Za-z0-9_])(bearer[ \t\n\v\f\r]{1,16})[A-Za-z0-9._~+=-]{16,}(?![^ \t\n\v\f\r"'\\&;,])/gi,
     replacement: `$1${REDACTED}`,
   },
   // R4: the password in a URL's user info (the host after it stays).
   {
+    kind: 'url_password',
     pattern:
       /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/[^/ \t\n\v\f\r:@]{1,64}:)[A-Za-z0-9._~+=-]+@/gi,
     replacement: `$1${REDACTED}@`,
@@ -95,6 +115,7 @@ const RULES: { pattern: RegExp; replacement: string }[] = [
   // R5: a password, secret, token or API key option's value (--password x, --token=x),
   // plain or in quotes (which stay).
   {
+    kind: 'credential_option',
     pattern:
       /(?<![^ \t\n\v\f\r])(--?[A-Za-z0-9-]{0,64}(?:password|passwd|secret|token|api-?key)(?:[ \t\n\v\f\r]{1,16}|=)(?:"(?=[A-Za-z0-9._~+=-]+")|'(?=[A-Za-z0-9._~+=-]+')|(?=[A-Za-z0-9._~+=-]+(?![^ \t\n\v\f\r]))))[A-Za-z0-9._~+=-]+/gi,
     replacement: `$1${REDACTED}`,
@@ -102,18 +123,21 @@ const RULES: { pattern: RegExp; replacement: string }[] = [
   // R6: an assignment or JSON member whose name says it holds a secret: the value
   // plain, in quotes, or in JSON-escaped quotes inside a shell string (the quotes stay).
   {
+    kind: 'credential_assignment',
     pattern:
       /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{0,64}(?:password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key)(?:\\?["'])?[ \t\n\v\f\r]{0,16}[:=][ \t\n\v\f\r]{0,16}(?:\\"(?=[A-Za-z0-9._~+=-]+\\")|"(?=[A-Za-z0-9._~+=-]+")|'(?=[A-Za-z0-9._~+=-]+')|(?=[A-Za-z0-9._~+=-]+(?![^ \t\n\v\f\r"'\\&;,]))))[A-Za-z0-9._~+=-]+/gi,
     replacement: `$1${REDACTED}`,
   },
   // R7: well-known API key and token prefixes.
   {
+    kind: 'api_key',
     pattern:
       /(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{30,}|[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{10,}|buildit_(?:pat|ags|app)_[A-Za-z0-9]{10,}|buildit_whsec_[0-9a-f]{10,})/g,
     replacement: REDACTED,
   },
   // R8: a JSON Web Token.
   {
+    kind: 'jwt',
     pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)?/g,
     replacement: REDACTED,
   },
@@ -125,6 +149,46 @@ const SECRET_KEY =
 
 /** The only characters a masked span may hold. */
 const TOKEN_CHARSET = /^[A-Za-z0-9._~+=-]+$/;
+
+/** What looks like a credential in a text: where each finding starts (1-based lines), and the rules' kinds. */
+export interface CredentialFinding {
+  lines: number[];
+  kinds: CredentialKind[];
+}
+
+/**
+ * Finds, never masks: the lines (1-based, after CR LF and CR become line
+ * feeds, counted from `firstLine`) where a rule matches, and which rules.
+ * The text is cleaned first (cleanApprovalText), so an invisible character
+ * can't split a key. The same rules the agent API's backstop applies.
+ */
+export function findCredentials(text: string, firstLine = 1): CredentialFinding | undefined {
+  const clean = cleanApprovalText(text);
+  const starts: number[] = [0];
+  for (let i = clean.indexOf('\n'); i >= 0; i = clean.indexOf('\n', i + 1)) starts.push(i + 1);
+  const lineOf = (offset: number): number => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if ((starts[mid] ?? 0) <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + firstLine;
+  };
+  const lines = new Set<number>();
+  const kinds: CredentialKind[] = [];
+  for (const rule of RULES) {
+    let hit = false;
+    for (const m of clean.matchAll(rule.pattern)) {
+      hit = true;
+      lines.add(lineOf(m.index));
+    }
+    if (hit) kinds.push(rule.kind);
+  }
+  if (kinds.length === 0) return undefined;
+  return { lines: [...lines].sort((a, b) => a - b), kinds };
+}
 
 /** Replaces every credential-shaped part of a text with `[REDACTED]` (rules R1 to R8). */
 export function maskCredentials(text: string): string {

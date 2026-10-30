@@ -69,6 +69,7 @@ import {
 } from '../tools/approve.js';
 import { createAskTool, type AskOptions } from '../tools/ask.js';
 import { createReplyTool, createTurnEndedTool } from '../tools/reply.js';
+import { createGetAttachmentTool } from '../tools/attachment.js';
 import { createListThreadsTool } from '../tools/threads.js';
 import { createHandoffTools } from '../tools/handoff.js';
 import { suggestedCapabilities } from '../capabilities.js';
@@ -380,7 +381,9 @@ function channelTools(
   approve: ApproveOptions,
 ): ToolDefinition[] {
   return [
-    createReplyTool(state),
+    createReplyTool(state, { files: true }),
+    createReplyTool(state, { files: false }),
+    createGetAttachmentTool(state),
     createAskTool(state, ask),
     createListThreadsTool(state),
     createTurnEndedTool(state),
@@ -401,8 +404,14 @@ function channelTools(
  */
 function servedTools(api: ApiClient, tools: readonly ToolDefinition[]): ToolDefinition[] {
   const served = api.served?.operations;
-  if (served === undefined) return [...tools];
-  return tools.filter((t) => (t.requiresOperations ?? []).every((op) => served.has(op)));
+  // Not said: every tool, the newest variant of each (an older one says so when called).
+  if (served === undefined) return tools.filter((t) => t.listedUnlessOperations === undefined);
+  return tools.filter(
+    (t) =>
+      (t.requiresOperations ?? []).every((op) => served.has(op)) &&
+      (t.listedUnlessOperations === undefined ||
+        !t.listedUnlessOperations.every((op) => served.has(op))),
+  );
 }
 
 export function startStdio(
