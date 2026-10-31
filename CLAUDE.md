@@ -72,12 +72,15 @@ src/
   tools/planning.ts     list_sprints, plan_sprint, list_releases, plan_release, write_release_notes
   tools/pages.ts        list_pages, search_pages, get_page, create_page, update_page
   tools/chat.ts         list_channels, read_channel, read_thread, list_pins, list_emoji
-  tools/plans.ts        get_workflow, list_work_types, the propose_* tools, apply_plan
+  tools/plans.ts        get_workflow, list_work_types, the propose_* tools (with propose_new_items
+                        and propose_item_changes, a request's Apply cards), apply_plan
   tools/setup.ts        create_channel, create_project
   tools/reply.ts        reply (with files on an API that serves them, text only on an older
                         one), and turn_ended for the plugin's Stop hook (channel mode only;
                         not in the catalog)
   tools/threads.ts      list_threads (channel mode only)
+  tools/reporter.ts     ask_reporter: the triage agent's question to a feedback reporter (channel
+                        mode only; listed when the API serves it)
   tools/attachment.ts   get_attachment: a file of the session's threads saved locally, its path
                         back (channel mode only; listed when the API serves files)
   tools/handoff.ts      propose_handoff, withdraw_handoff, decline_handoff (channel mode only;
