@@ -65,7 +65,7 @@ const TOOL_NOTES: Record<string, (details: Record<string, unknown>) => string | 
   request_not_found: () =>
     "This request isn't this session's: use the request_id of the <channel> tag (event=request) you are answering.",
   request_closed: () =>
-    'This request expired or was dropped: nothing more is posted for it. Tell the person in your direct message only if they are waiting for it.',
+    'This request expired or was dropped: nothing more is posted for it. Tell the person only if they are waiting for it, in your direct message (reply with dm: true, without request).',
   token_invalid: () =>
     'In this server the token comes from BUILDIT_TOKEN (or the Authorization header in HTTP mode).',
   // The details list the token's scopes; without them, whoami does.
