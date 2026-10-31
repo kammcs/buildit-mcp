@@ -151,3 +151,30 @@ describe('the request worker', () => {
     );
   });
 });
+
+describe("a thread's own project (review: other projects' items)", () => {
+  // A request's thread or item thread is read by the whole channel, guests too; a link, a parent or
+  // a blocker may be another project's item, which only its key may name there.
+  it('the shared rules keep another project out of a thread or an item thread', () => {
+    expect(skill('buildit-requests')).toContain(
+      "**A thread or an item's thread shows only its own project:**",
+    );
+    expect(skill('buildit-requests')).toContain(
+      'by its key alone, never with its title, status, description or comments',
+    );
+  });
+
+  it('the item helper reads linked items of its own project, and names others by key', () => {
+    const text = skill('buildit-item-helper');
+    expect(section(text, 'Read')).toContain("only those in the item's own project");
+    expect(section(text, 'Each kind')).toContain('a blocker in another project by its key alone');
+    expect(section(text, 'Never')).toContain("Put another project's item text");
+  });
+
+  it('triage and the request worker say it too', () => {
+    expect(section(skill('buildit-triage'), 'Never')).toContain("Put another project's item text");
+    expect(read('agents/buildit-request-worker.md')).toContain(
+      "**A thread or an item's thread shows only its own project**",
+    );
+  });
+});
