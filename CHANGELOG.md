@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [0.12.0] - Unreleased
+## [0.12.0] - 2026-10-31
 
 Built on version 1.14.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). Nothing needs 1.14.0: on a 1.13.0 server `read_channel` lists no item threads and says so, and `list_comments` applies `since` itself.
 
