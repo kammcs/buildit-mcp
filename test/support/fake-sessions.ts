@@ -185,9 +185,15 @@ const CONTROL_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/;
 
 /**
  * The first path where a question card breaks the card schema's rules that
- * buildit-mcp must keep (a subset of the server's), or undefined.
+ * buildit-mcp must keep (a subset of the server's), or undefined. With
+ * `sharedResults` (a newer server), `responses` may also be shared with
+ * results on close (a card in an item's thread); else only private, hidden.
  */
-export function questionCardProblem(card: unknown, nowMs: number): string | undefined {
+export function questionCardProblem(
+  card: unknown,
+  nowMs: number,
+  options: { sharedResults?: boolean } = {},
+): string | undefined {
   if (card === null || typeof card !== 'object' || Array.isArray(card)) return '(card)';
   const c = card as Record<string, unknown>;
   const counted = { ...c };
@@ -270,10 +276,11 @@ export function questionCardProblem(card: unknown, nowMs: number): string | unde
   }
   const r = c.responses as Record<string, unknown> | undefined;
   if (r === undefined) return 'responses';
+  const shared = options.sharedResults === true && r.visibility === 'shared';
   const want = {
     mode: 'once',
-    visibility: 'private',
-    results: 'hidden',
+    visibility: shared ? 'shared' : 'private',
+    results: shared ? 'on_close' : 'hidden',
     guests: false,
     confirm: true,
   };
@@ -849,9 +856,16 @@ export class FakeSessions {
   /** Posts refused before they are made (tests). */
   refusePosts = 0;
 
+  /**
+   * Whether question cards may take shared answers, results on close (a
+   * newer server than the contract's; tests). Off: only private, hidden,
+   * and anything else is card_invalid at responses.<key>.
+   */
+  sharedResults = false;
+
   private checkCard(card: Record<string, unknown>): void {
     // Cards are built with the real clock (the fake clock only times plans).
-    const path = questionCardProblem(card, Date.now());
+    const path = questionCardProblem(card, Date.now(), { sharedResults: this.sharedResults });
     if (path !== undefined) {
       throw new SessionRefusal('card_invalid', {
         errors: [{ path, message: 'The card is invalid at this path.' }],

@@ -115,7 +115,13 @@ describe("AskUserQuestion's hook, with several threads", () => {
 
   it("puts the lead's question in the direct message", async () => {
     const { c, dm } = await lead();
+    api.sessions.sharedResults = true;
     expect(await cardThread(hook(c, { id: '', type: '' }, 'toolu_lead'))).toBe(dm);
+    // The direct message: private to the owner.
+    expect(api.sessions.message(TOKEN, uuidV5('toolu_lead'))!.card!.responses).toMatchObject({
+      visibility: 'private',
+      results: 'hidden',
+    });
     // Fields Claude Code left as written count as absent too.
     session().cards.clear();
     expect(await cardThread(hook(c, { id: '${agent_id}', type: '${agent_type}' }, 'toolu_2'))).toBe(
@@ -136,7 +142,13 @@ describe("AskUserQuestion's hook, with several threads", () => {
       }),
     );
     const worker = 'buildit:buildit-item-worker';
+    api.sessions.sharedResults = true;
     expect(await cardThread(hook(c, { id: 'a1b2c3', type: worker }, 'toolu_w1'))).toBe(two.id);
+    // An item's thread: everyone there sees the answers once sent.
+    expect(api.sessions.message(TOKEN, uuidV5('toolu_w1'))!.card!.responses).toMatchObject({
+      visibility: 'shared',
+      results: 'on_close',
+    });
     session().cards.clear();
     // Recorded by key only: its thread is the item's id.
     expect(await cardThread(hook(c, { id: 'd4e5f6', type: worker }, 'toolu_w2'))).toBe(one.id);

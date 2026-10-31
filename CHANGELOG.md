@@ -2,6 +2,23 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.10.0] - Unreleased
+
+### Questions: one card per ask (channel mode, plugin)
+
+- **Claude's questions arrive as one card**, however many it asks (1 to 4), so the app can show them stacked: one question at a time, then a review page and Send. A single question sends on its answer. Every question needs an answer.
+  - **The card:** the title "<agent> asks", with "N questions" as the subtitle when there are several; exactly one text element per question, in order (cut at 2,000 characters with "…"); per question a pair of inputs, `qn` (the choice) and `qn_other` (Other); one Send.
+  - **No new key:** the structure is what the app recognises, since older apps refuse unknown keys. An older app draws the card as a plain form it can still answer.
+  - **Fit to the limits:** a card over 16 KB or 25 elements has its longest description cut by a fifth (with "…") until it fits, then its longest question text.
+  - **One id:** the card's message id is the UUIDv5 of the hook's `tool_use_id`, as before, so a hook that runs twice posts one card. The derived ids of the later cards are gone (`cardIds`).
+  - **The answer** is decoded for every question (`qn`, `qn_other`); one that leaves a question out is rejected with "Choose an option or type your own answer". Accepting it closes the card.
+  - **The message body** (the fallback, and the push): "<agent> asks: <question>" for one, "<agent> asks N questions: <the first question>" for several. Both new words ("N questions" and this lead) are in en, es-419, fr-CA, sr-Cyrl and sr-Latn; "Question n of N" is gone.
+- **Answers in an item's thread are shared once sent:** there the card's `responses` is `shared` with results `on_close`, so everyone in the thread sees the answers when the card is sent; only the owner answers. In the direct message it stays private, results hidden.
+  - The thread is an item's when `ask` names `item`, when its thread is one of the session's items, or, for the hook, when an item worker asks.
+  - **Older servers:** a server that refuses shared answers (`card_invalid` naming `responses`) gets the same card again, private, with the same id, once.
+- `buildQuestionCards` is now `buildQuestionCard` (one card); `splitText` is gone.
+- The test fake takes shared answers with `sessions.sharedResults = true` (a newer server than the contract's); by default it refuses them at `responses`, as the contract says.
+
 ## [0.9.0] - 2026-10-30
 
 Built on version 1.11.0 of the agent API's contract. Files need a buildIt.Social server with agent API 1.11.0, and a session with the `files:read` and `files:write` scopes. An older server works as before: nothing downloads, `get_attachment` isn't listed, and `reply` doesn't take `files`. A `reply` that still passes `files` there (from a tool list read before the server's version was known) is refused with a tool error ("older than agent API 1.11.0; files can't be sent"), and nothing is posted: the text isn't sent without its files.
