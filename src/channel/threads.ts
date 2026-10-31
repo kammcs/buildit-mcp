@@ -33,6 +33,22 @@ export async function itemThreadId(ref: string, ctx: ToolContext): Promise<strin
   return item.id;
 }
 
+/**
+ * Whether a thread is a work item's (its id is the item's): one of the
+ * items the session works in, an item the events or get_item named, or the
+ * latest message's item. Anything else (none: a new message) is the direct
+ * message's.
+ */
+export function isItemThread(state: ChannelState, threadId: string | undefined): boolean {
+  if (threadId === undefined) return false;
+  const id = threadId.toLowerCase();
+  const same = (other: string | undefined): boolean => other?.toLowerCase() === id;
+  if (same(state.last?.item?.id)) return true;
+  for (const active of state.activeItems.keys()) if (same(active)) return true;
+  for (const known of state.items.values()) if (same(known)) return true;
+  return false;
+}
+
 /** The refusal when several threads are active and none was named. */
 export function threadRequiredMessage(state: ChannelState, tool: string, how: string): string {
   const listed = state

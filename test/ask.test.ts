@@ -1,16 +1,18 @@
 /**
- * ask's pieces on their own: reading the questions, the cards (one per
- * question: its text, a choice with its options' descriptions, Other,
- * Send), decoding answers, the words in each language, the card messages'
- * ids, and the hook's exact JSON.
+ * ask's pieces on their own: reading the questions, the card (one per ask:
+ * a text per question, then each question's choice with its options'
+ * descriptions and its Other field, Send), shrinking it to the limits,
+ * decoding answers, the words in each language, the card message's id, the
+ * older server's refusal, and the hook's exact JSON.
  */
 import { describe, expect, it } from 'vitest';
 
+import { ApiError } from '../src/api/client.js';
 import {
   askMessageId,
-  buildQuestionCards,
-  cardIds,
+  buildQuestionCard,
   cardLocale,
+  cardResponses,
   cardSize,
   CARD_MAX_BYTES,
   CARD_MAX_ELEMENTS,
@@ -24,7 +26,7 @@ import {
   HOOK_PASS,
   noAnswerText,
   parseQuestions,
-  splitText,
+  refusesResponses,
   uuidV5,
   type Question,
 } from '../src/tools/ask.js';
@@ -50,8 +52,7 @@ const inputsOf = (card: Record<string, unknown>): Input[] => card.inputs as Inpu
 const bodyOf = (card: Record<string, unknown>): { type: string; text: string }[] =>
   (card.body ?? []) as { type: string; text: string }[];
 /** The card of one question asked alone. */
-const cardOf = (q: Question, c = ctx): Record<string, unknown> =>
-  buildQuestionCards([q], c)[0]?.card ?? {};
+const cardOf = (q: Question, c = ctx): Record<string, unknown> => buildQuestionCard([q], c).card;
 const BIDI_OVERRIDE = String.fromCharCode(0x202e);
 const BELL = String.fromCharCode(7);
 
@@ -78,77 +79,129 @@ describe('parseQuestions', () => {
   });
 });
 
-describe('the cards', () => {
-  it('are one per question: its text, its choice under its header, Other, Send (golden)', () => {
-    const [only, ...rest] = buildQuestionCards([color], ctx);
-    expect(rest).toEqual([]);
-    expect(only?.text).toBe('Claude asks: Which color?');
-    expect(only?.card).toEqual({
-      v: 1,
-      header: { title: 'Claude asks' },
-      body: [{ type: 'text', text: 'Which color?' }],
-      inputs: [
-        {
-          type: 'choice',
-          id: 'q1',
-          label: 'Color',
-          required: false,
-          options: [
-            { id: 'o1', label: 'Blue', description: 'The default; runs everywhere.' },
-            { id: 'o2', label: 'Green' },
-          ],
-        },
-        {
-          type: 'text_input',
-          id: 'q1_other',
-          label: 'Other',
-          placeholder: 'Or type your own answer',
-          multiline: true,
-          max_length: 2000,
-          required: false,
-        },
-      ],
-      actions: [{ type: 'submit', label: 'Send' }],
-      responses: {
-        mode: 'once',
-        visibility: 'private',
-        results: 'hidden',
-        guests: false,
-        confirm: true,
-        closes_at: '2026-10-28T11:00:00.000Z',
-      },
-      private: { v: 1, map: { q1: { o1: 'Blue', o2: 'Green' } } },
-    });
-    expect(questionCardProblem(only?.card, NOW)).toBeUndefined();
+describe('the card', () => {
+  const responses = {
+    mode: 'once',
+    visibility: 'private',
+    results: 'hidden',
+    guests: false,
+    confirm: true,
+    closes_at: '2026-10-28T11:00:00.000Z',
+  };
+  const other = (n: number) => ({
+    type: 'text_input',
+    id: `q${n}_other`,
+    label: 'Other',
+    placeholder: 'Or type your own answer',
+    multiline: true,
+    max_length: 2000,
+    required: false,
   });
-
-  it('number themselves "Question n of N" when there are several, in order', () => {
-    const cards = buildQuestionCards([color, targets], ctx);
-    expect(cards.map((c) => c.question)).toEqual([color, targets]);
-    expect(cards.map((c) => c.text)).toEqual([
-      'Claude asks: Which color?',
-      'Claude asks: Which targets?',
-    ]);
-    expect(cards.map((c) => c.card.header)).toEqual([
-      { title: 'Claude asks', subtitle: 'Question 1 of 2' },
-      { title: 'Claude asks', subtitle: 'Question 2 of 2' },
-    ]);
-    const second = cards[1]!.card;
-    expect(bodyOf(second)).toEqual([{ type: 'text', text: 'Which targets?' }]);
-    const [choice, other] = inputsOf(second);
-    expect(choice).toMatchObject({ id: 'q1', label: 'Targets', multiple: true, required: false });
-    expect(choice?.options).toEqual([
+  const colorChoice = (n: number) => ({
+    type: 'choice',
+    id: `q${n}`,
+    label: 'Color',
+    required: false,
+    options: [
+      { id: 'o1', label: 'Blue', description: 'The default; runs everywhere.' },
+      { id: 'o2', label: 'Green' },
+    ],
+  });
+  const targetsChoice = (n: number) => ({
+    type: 'choice',
+    id: `q${n}`,
+    label: 'Targets',
+    multiple: true,
+    required: false,
+    options: [
       { id: 'o1', label: 'Windows' },
       { id: 'o2', label: 'macOS' },
       { id: 'o3', label: 'Linux' },
-    ]);
-    expect(other).toMatchObject({ id: 'q1_other', required: false });
-    expect(inputsOf(cards[0]!.card)[0]).not.toHaveProperty('multiple');
-    expect(second.private).toEqual({
+    ],
+  });
+
+  it('for one question: its text, its choice under its header, Other, Send (golden)', () => {
+    const built = buildQuestionCard([color], ctx);
+    expect(built.questions).toEqual([color]);
+    expect(built.text).toBe('Claude asks: Which color?');
+    expect(built.card).toEqual({
       v: 1,
-      map: { q1: { o1: 'Windows', o2: 'macOS', o3: 'Linux' } },
+      header: { title: 'Claude asks' },
+      body: [{ type: 'text', text: 'Which color?' }],
+      inputs: [colorChoice(1), other(1)],
+      actions: [{ type: 'submit', label: 'Send' }],
+      responses,
+      private: { v: 1, map: { q1: { o1: 'Blue', o2: 'Green' } } },
     });
-    for (const c of cards) expect(questionCardProblem(c.card, NOW)).toBeUndefined();
+    expect(questionCardProblem(built.card, NOW)).toBeUndefined();
+  });
+
+  it('for two questions: one card, "2 questions", a text and a pair of inputs each (golden)', () => {
+    const built = buildQuestionCard([color, targets], ctx);
+    expect(built.text).toBe('Claude asks 2 questions: Which color?');
+    expect(built.card).toEqual({
+      v: 1,
+      header: { title: 'Claude asks', subtitle: '2 questions' },
+      body: [
+        { type: 'text', text: 'Which color?' },
+        { type: 'text', text: 'Which targets?' },
+      ],
+      inputs: [colorChoice(1), other(1), targetsChoice(2), other(2)],
+      actions: [{ type: 'submit', label: 'Send' }],
+      responses,
+      private: {
+        v: 1,
+        map: { q1: { o1: 'Blue', o2: 'Green' }, q2: { o1: 'Windows', o2: 'macOS', o3: 'Linux' } },
+      },
+    });
+    expect(questionCardProblem(built.card, NOW)).toBeUndefined();
+  });
+
+  it('for four questions: 4 texts, q1..q4 with their Other fields, one submit (golden)', () => {
+    const set = [color, targets, { ...color, question: 'And the border?' }, targets];
+    const built = buildQuestionCard(set, ctx);
+    expect(built.text).toBe('Claude asks 4 questions: Which color?');
+    expect(built.card).toEqual({
+      v: 1,
+      header: { title: 'Claude asks', subtitle: '4 questions' },
+      body: [
+        { type: 'text', text: 'Which color?' },
+        { type: 'text', text: 'Which targets?' },
+        { type: 'text', text: 'And the border?' },
+        { type: 'text', text: 'Which targets?' },
+      ],
+      inputs: [
+        colorChoice(1),
+        other(1),
+        targetsChoice(2),
+        other(2),
+        colorChoice(3),
+        other(3),
+        targetsChoice(4),
+        other(4),
+      ],
+      actions: [{ type: 'submit', label: 'Send' }],
+      responses,
+      private: {
+        v: 1,
+        map: {
+          q1: { o1: 'Blue', o2: 'Green' },
+          q2: { o1: 'Windows', o2: 'macOS', o3: 'Linux' },
+          q3: { o1: 'Blue', o2: 'Green' },
+          q4: { o1: 'Windows', o2: 'macOS', o3: 'Linux' },
+        },
+      },
+    });
+    expect(cardSize(built.card).elements).toBe(13);
+    expect(questionCardProblem(built.card, NOW)).toBeUndefined();
+  });
+
+  it("takes shared answers, results on close, in an item's thread", () => {
+    const card = buildQuestionCard([color, targets], { ...ctx, shared: true }).card;
+    expect(card.responses).toEqual({ ...responses, visibility: 'shared', results: 'on_close' });
+    expect(cardResponses(ctx.closesAt)).toEqual(responses);
+    expect(questionCardProblem(card, NOW)).toBe('responses.visibility');
+    expect(questionCardProblem(card, NOW, { sharedResults: true })).toBeUndefined();
   });
 
   it('keep line breaks and Markdown in questions and descriptions, and cut only over 2,000', () => {
@@ -183,42 +236,113 @@ describe('the cards', () => {
     expect(cleanText('d'.repeat(2000), 2000)).toBe('d'.repeat(2000));
   });
 
-  it('split a question over 2,000 characters over text elements, cutting nothing', () => {
+  it('give each question exactly one text element, cut at 2,000 with "…"', () => {
     const paragraph = `${'word '.repeat(150).trim()}\n`;
     const long: Question = { ...color, question: paragraph.repeat(7).trim() };
-    const body = bodyOf(cardOf(long));
-    expect(body.length).toBeGreaterThan(1);
-    for (const b of body) expect(Array.from(b.text).length).toBeLessThanOrEqual(2000);
-    expect(body.map((b) => b.text).join('\n')).toBe(long.question);
-    expect(splitText('x'.repeat(4500), 2000).map((p) => p.length)).toEqual([2000, 2000, 500]);
+    const body = bodyOf(buildQuestionCard([long, targets], ctx).card);
+    expect(body).toHaveLength(2);
+    expect(Array.from(body[0]!.text)).toHaveLength(2000);
+    expect(body[0]!.text.endsWith('…')).toBe(true);
+    expect(long.question.startsWith(body[0]!.text.slice(0, -1))).toBe(true);
+    expect(body[1]).toEqual({ type: 'text', text: 'Which targets?' });
   });
 
-  it('keep every description whole when each question has long ones', () => {
-    const wordy = (n: number): Question => ({
+  it('keep every description whole when the set fits', () => {
+    const set = [1, 2].map((n) => ({
       question: `Question ${n}?`,
       header: `Q${n}`,
-      options: [1, 2, 3, 4].map((o) => ({ label: `Option ${o}`, description: 'd'.repeat(1500) })),
-    });
-    for (const c of buildQuestionCards([wordy(1), wordy(2), wordy(3), wordy(4)], ctx)) {
-      expect(questionCardProblem(c.card, NOW)).toBeUndefined();
-      expect(inputsOf(c.card)[0]?.options?.map((o) => o.description)).toEqual(
-        Array(4).fill('d'.repeat(1500)),
-      );
+      options: [1, 2, 3].map((o) => ({ label: `Option ${o}`, description: 'd'.repeat(1500) })),
+    }));
+    const card = buildQuestionCard(set, ctx).card;
+    expect(questionCardProblem(card, NOW)).toBeUndefined();
+    for (const choice of inputsOf(card).filter((i) => i.type === 'choice')) {
+      expect(choice.options?.map((o) => o.description)).toEqual(Array(3).fill('d'.repeat(1500)));
     }
   });
 
-  it('shrink a single question that alone is over the limits until it fits', () => {
-    const tall: Question = { ...color, question: `${'line of text\n'.repeat(1500)}?` };
-    const size = cardSize(cardOf(tall));
-    expect(size.bytes).toBeLessThanOrEqual(CARD_MAX_BYTES);
-    expect(size.elements).toBeLessThanOrEqual(CARD_MAX_ELEMENTS);
-    expect(questionCardProblem(cardOf(tall), NOW)).toBeUndefined();
-    const huge: Question = {
-      question: 'q'.repeat(20_000),
-      header: 'Huge',
-      options: [1, 2, 3, 4].map((o) => ({ label: `O${o}`, description: 'd'.repeat(10_000) })),
-    };
-    expect(questionCardProblem(cardOf(huge), NOW)).toBeUndefined();
+  describe('shrink to 16 KB and 25 elements', () => {
+    const wordy = (n: number, description = 2000, question = 20): Question => ({
+      question: `Question ${n}? ${'q'.repeat(question)}`,
+      header: `Q${n}`,
+      options: [1, 2, 3, 4].map((o) => ({
+        label: `Option ${o}`,
+        description: 'd'.repeat(description),
+      })),
+    });
+
+    it('cutting the longest descriptions first, keeping the questions whole', () => {
+      const set = [1, 2, 3, 4].map((n) => wordy(n, 2000, 1000));
+      const card = buildQuestionCard(set, ctx).card;
+      const size = cardSize(card);
+      expect(size.bytes).toBeLessThanOrEqual(CARD_MAX_BYTES);
+      expect(size.elements).toBe(13);
+      expect(size.elements).toBeLessThanOrEqual(CARD_MAX_ELEMENTS);
+      expect(questionCardProblem(card, NOW)).toBeUndefined();
+      // Every question whole; every description cut, with "…", evenly.
+      expect(bodyOf(card).map((b) => b.text)).toEqual(set.map((q) => q.question));
+      const descriptions = inputsOf(card)
+        .flatMap((i) => i.options ?? [])
+        .map((o) => o.description as string);
+      expect(descriptions).toHaveLength(16);
+      for (const d of descriptions) {
+        expect(d.endsWith('…')).toBe(true);
+        expect(Array.from(d).length).toBeLessThan(2000);
+        expect(Array.from(d).length).toBeGreaterThan(200);
+      }
+      // The private map still names every option.
+      expect(Object.keys((card.private as { map: object }).map)).toEqual(['q1', 'q2', 'q3', 'q4']);
+    });
+
+    it('then the longest question texts, when descriptions are short already', () => {
+      // Four 2,000-character questions of 3-byte characters are 24 KB alone.
+      const wide = (n: number): Question => ({
+        question: `${n}${'問'.repeat(5000)}`,
+        header: `Q${n}`,
+        options: [{ label: 'A', description: 'short' }, { label: 'B' }],
+      });
+      const card = buildQuestionCard([wide(1), wide(2), wide(3), wide(4)], ctx).card;
+      expect(cardSize(card).bytes).toBeLessThanOrEqual(CARD_MAX_BYTES);
+      expect(questionCardProblem(card, NOW)).toBeUndefined();
+      const texts = bodyOf(card).map((b) => b.text);
+      expect(texts).toHaveLength(4);
+      for (const [i, t] of texts.entries()) {
+        expect(t.startsWith(`${i + 1}問`)).toBe(true);
+        expect(t.endsWith('…')).toBe(true);
+      }
+      expect(inputsOf(card)[0]?.options?.[0]?.description).toBe('short');
+    });
+
+    it('in every case, even the largest set this reads', () => {
+      const huge = (n: number): Question => ({
+        question: `${n}${'q'.repeat(20_000)}`,
+        header: 'Huge',
+        options: [1, 2, 3, 4].map((o) => ({ label: `O${o}`, description: 'd'.repeat(10_000) })),
+      });
+      const card = buildQuestionCard([huge(1), huge(2), huge(3), huge(4)], ctx).card;
+      expect(questionCardProblem(card, NOW)).toBeUndefined();
+      expect(bodyOf(card)).toHaveLength(4);
+      const shared = buildQuestionCard([huge(1), huge(2), huge(3), huge(4)], {
+        ...ctx,
+        shared: true,
+      }).card;
+      expect(questionCardProblem(shared, NOW, { sharedResults: true })).toBeUndefined();
+    });
+  });
+
+  it('cut the private map of every question to 2,048 bytes, the card keeping its labels', () => {
+    // 16 labels of 80 three-byte characters are 3,840 bytes: the map takes them cut to 20.
+    const wide = (n: number): Question => ({
+      question: `Q${n}?`,
+      header: `H${n}`,
+      options: [1, 2, 3, 4].map((o) => ({ label: `${o}${'界'.repeat(90)}` })),
+    });
+    const card = buildQuestionCard([1, 2, 3, 4].map(wide), ctx).card;
+    const map = (card.private as { v: number; map: Record<string, Record<string, string>> }).map;
+    expect(Object.keys(map)).toEqual(['q1', 'q2', 'q3', 'q4']);
+    expect(Buffer.byteLength(JSON.stringify(card.private))).toBeLessThanOrEqual(2048);
+    expect(map.q4?.o4).toBe(`4${'界'.repeat(18)}…`);
+    expect(Array.from(inputsOf(card)[6]?.options?.[3]?.label as string)).toHaveLength(80);
+    expect(questionCardProblem(card, NOW)).toBeUndefined();
   });
 
   it('remove control and bidi characters, and keep labels to one line of 80', () => {
@@ -236,14 +360,6 @@ describe('the cards', () => {
     expect(cleanLine('x'.repeat(40), 30)).toBe(`${'x'.repeat(29)}…`);
   });
 
-  it("get their own ids, the first one the tool call's", () => {
-    const first = uuidV5('toolu_1');
-    const ids = cardIds(first, 3);
-    expect(ids[0]).toBe(first);
-    expect(new Set(ids).size).toBe(3);
-    expect(cardIds(first, 3)).toEqual(ids);
-  });
-
   it('close a minute after the wait, at most a day after they are posted', () => {
     expect(closesAt(NOW, 600)).toBe('2026-10-28T10:11:00.000Z');
     expect(closesAt(NOW, 86_400)).toBe('2026-10-29T10:00:00.000Z');
@@ -258,14 +374,24 @@ describe('words', () => {
     expect(cardLocale('sr')).toBe('sr-Latn');
     expect(cardLocale('de')).toBe('en');
     expect(cardLocale(undefined)).toBe('en');
-    for (const [locale, other, placeholder, send, title, subtitle] of [
+    for (const [locale, other, placeholder, send, title, subtitle, body] of [
+      [
+        'en',
+        'Other',
+        'Or type your own answer',
+        'Send',
+        'Claude asks',
+        '3 questions',
+        'Claude asks 3 questions: Which color?',
+      ],
       [
         'es-419',
         'Otra',
         'O escribe tu propia respuesta',
         'Enviar',
         'Claude pregunta',
-        'Pregunta 2 de 2',
+        '3 preguntas',
+        'Claude hace 3 preguntas: Which color?',
       ],
       [
         'fr-CA',
@@ -273,16 +399,40 @@ describe('words', () => {
         'Ou écrivez votre propre réponse',
         'Envoyer',
         'Claude demande',
-        'Question 2 sur 2',
+        '3 questions',
+        'Claude pose 3 questions : Which color?',
       ],
-      ['sr-Cyrl', 'Друго', 'Или упишите свој одговор', 'Пошаљи', 'Claude пита', 'Питање 2 од 2'],
-      ['sr-Latn', 'Drugo', 'Ili upišite svoj odgovor', 'Pošalji', 'Claude pita', 'Pitanje 2 od 2'],
+      [
+        'sr-Cyrl',
+        'Друго',
+        'Или упишите свој одговор',
+        'Пошаљи',
+        'Claude пита',
+        '3 питања',
+        'Claude поставља 3 питања: Which color?',
+      ],
+      [
+        'sr-Latn',
+        'Drugo',
+        'Ili upišite svoj odgovor',
+        'Pošalji',
+        'Claude pita',
+        '3 pitanja',
+        'Claude postavlja 3 pitanja: Which color?',
+      ],
     ] as const) {
-      const card = buildQuestionCards([color, targets], { ...ctx, locale })[1]!.card;
-      expect(card.header).toEqual({ title, subtitle });
-      expect(inputsOf(card)[1]).toMatchObject({ label: other, placeholder });
-      expect(card.actions).toEqual([{ type: 'submit', label: send }]);
+      const built = buildQuestionCard([color, targets, color], { ...ctx, locale });
+      expect(built.card.header).toEqual({ title, subtitle });
+      expect(built.text).toBe(body);
+      expect(inputsOf(built.card)[5]).toMatchObject({ id: 'q3_other', label: other, placeholder });
+      expect(built.card.actions).toEqual([{ type: 'submit', label: send }]);
+      // One question: no subtitle, "<agent> asks: <question>".
+      const one = buildQuestionCard([color], { ...ctx, locale });
+      expect(one.card.header).toEqual({ title });
     }
+    expect(buildQuestionCard([color], { ...ctx, locale: 'fr-CA' }).text).toBe(
+      'Claude demande : Which color?',
+    );
   });
 });
 
@@ -296,6 +446,36 @@ describe('decodeAnswer', () => {
       kind: 'answers',
       answers: { 'Which color?': 'Green' },
     });
+  });
+
+  it('decodes every question of the card, by qn and qn_other', () => {
+    const third: Question = { ...color, question: 'And the border?' };
+    expect(
+      decodeAnswer([color, targets, third], {
+        inputs: { q1: 'o1', q2: ['o2', 'o1'], q2_other: 'FreeBSD', q3_other: 'None' },
+      }),
+    ).toEqual({
+      kind: 'answers',
+      answers: {
+        'Which color?': 'Blue',
+        'Which targets?': 'Windows, macOS, FreeBSD',
+        'And the border?': 'None',
+      },
+    });
+  });
+
+  it('refuses an answer that leaves any question unanswered', () => {
+    const third: Question = { ...color, question: 'And the border?' };
+    for (const inputs of [
+      { q1: 'o1', q2: ['o1'] },
+      { q1: 'o1', q3: 'o2' },
+      { q2: ['o1'], q3: 'o2', q1_other: ' ' },
+    ]) {
+      expect(decodeAnswer([color, targets, third], { inputs })).toEqual({
+        kind: 'reject',
+        note: 'answer_each',
+      });
+    }
   });
 
   it('takes the Other text alone, its lines kept, cleaned and cut to 2,000', () => {
@@ -318,6 +498,38 @@ describe('decodeAnswer', () => {
     ]) {
       expect(decodeAnswer([color], answer)).toEqual({ kind: 'reject', note: 'answer_each' });
     }
+  });
+});
+
+describe('refusesResponses', () => {
+  const refusal = (code: string, details: unknown) =>
+    new ApiError({ status: 422, code, message: 'No.', requestId: 'req_test', details });
+
+  it("is a card_invalid naming a path under responses (an older server's refusal)", () => {
+    expect(
+      refusesResponses(
+        refusal('card_invalid', { errors: [{ path: 'responses.visibility', message: 'x' }] }),
+      ),
+    ).toBe(true);
+    expect(
+      refusesResponses(refusal('card_invalid', { errors: [{ path: 'responses', message: 'x' }] })),
+    ).toBe(true);
+    expect(refusesResponses(refusal('card_invalid', { path: 'responses.results' }))).toBe(true);
+  });
+
+  it('is nothing else', () => {
+    expect(
+      refusesResponses(
+        refusal('card_invalid', { errors: [{ path: 'body[0].text', message: 'x' }] }),
+      ),
+    ).toBe(false);
+    expect(
+      refusesResponses(refusal('card_invalid', { errors: [{ path: 'responsesX', message: 'x' }] })),
+    ).toBe(false);
+    expect(refusesResponses(refusal('validation', { fields: [{ path: 'responses' }] }))).toBe(
+      false,
+    );
+    expect(refusesResponses(new Error('responses'))).toBe(false);
   });
 });
 
