@@ -15,12 +15,8 @@ import type { CallToolResult } from '@modelcontextprotocol/client';
 
 import { ApiClient } from '../src/api/client.js';
 import { listSessionEvents } from '../src/channel/api.js';
-import {
-  channelLabel,
-  requestContent,
-  SessionRequestDataSchema,
-  type SessionRequestData,
-} from '../src/channel/requests.js';
+import { SessionRequestDataSchema } from '../src/api/generated/schemas.js';
+import { channelLabel, requestContent, type SessionRequestData } from '../src/channel/requests.js';
 import { createLogger } from '../src/log.js';
 import {
   buildInstructions,
@@ -52,8 +48,9 @@ const REQUEST = '00000000-0000-4000-8000-0000000a0001';
 // The notification's content (requestContent)
 // ---------------------------------------------------------------------------
 
+/** A request's data; not parsed, so the shapes the contract refuses reach requestContent too. */
 function data(overrides: Partial<Record<keyof SessionRequestData, unknown>> = {}) {
-  return SessionRequestDataSchema.parse({
+  return {
     request: {
       id: REQUEST,
       kind: 'catch_up',
@@ -80,8 +77,12 @@ function data(overrides: Partial<Record<keyof SessionRequestData, unknown>> = {}
     result: { place: 'dm' },
     handed: null,
     ...overrides,
-  });
+  } as SessionRequestData;
 }
+
+it("the default data is the contract's shape", () => {
+  expect(SessionRequestDataSchema.safeParse(data()).success).toBe(true);
+});
 
 const info = { owner: 'Alex', session: 'laptop' };
 
@@ -211,6 +212,13 @@ describe('the morning brief', () => {
     // The list is inside its block.
     expect(outsideBlocks(r.content)).not.toContain('#general (channel_id');
     assertDefused(r.content);
+  });
+
+  it('drops a brief without its channel', () => {
+    expect(requestContent(data({ context: { ...brief, channel: undefined } }), info)).toEqual({
+      ok: false,
+      reason: 'shape',
+    });
   });
 
   it("takes the event's project when the context names none", () => {
@@ -477,7 +485,7 @@ describe('the loop', () => {
       context: {
         type: 'channel',
         channel: { id: CHANNEL, name: 'secret-plans' },
-        from: 'yesterday',
+        from: '2026-10-08T00:00:00.000Z',
         to: '2026-10-07T14:00:00Z',
       },
     });

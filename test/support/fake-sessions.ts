@@ -346,7 +346,10 @@ export class SessionRefusal extends Error {
       | 'not_parent_session'
       | 'handoff_exists'
       | 'handoff_closed'
-      | 'no_target',
+      | 'no_target'
+      | 'request_not_found'
+      | 'request_closed'
+      | 'request_result_private',
     readonly details: Record<string, unknown> = {},
   ) {
     super(code);
@@ -517,6 +520,17 @@ export class FakeSessions {
 
   post(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
     const s = this.live(token);
+    const request = typeof body.request === 'string' ? body.request : undefined;
+    if (request !== undefined) this.checkRequestPost(token, request, body);
+    const posted = this.postMessage(s, body);
+    if (request !== undefined) this.noteRequestPost(token, request);
+    return posted;
+  }
+
+  private postMessage(
+    s: FakeSession,
+    body: Record<string, unknown>,
+  ): { status: number; body: unknown } {
     const id = String(body.id);
     const fileIds = Array.isArray(body.files) ? (body.files as string[]) : undefined;
     if (fileIds !== undefined) return this.postWithFiles(s, id, body, fileIds);
@@ -1714,7 +1728,6 @@ export class FakeSessions {
 
   // -------------------------------------------------------------------------
   // Requests (agent API 1.13.0)
-  // TODO(lane B openapi): the event's shape is the contract's draft, written by hand.
   // -------------------------------------------------------------------------
 
   /** The requests sent to sessions, by id: their session's token, result place and state. */
@@ -1806,40 +1819,26 @@ export class FakeSessions {
     return { eventId, requestId };
   }
 
-  /** A post's `request`, checked as the server would; undefined when it may post. */
-  checkRequestPost(
-    token: string,
-    request: string,
-    body: Record<string, unknown>,
-  ): { status: number; code: string; message: string } | undefined {
+  /**
+   * A post's `request`, checked as the server does: another session's (or an
+   * unknown) request is request_not_found, an expired, dropped or waiting one
+   * request_closed, and a direct-message result elsewhere
+   * request_result_private, each with {request_id}.
+   */
+  private checkRequestPost(token: string, request: string, body: Record<string, unknown>): void {
     const r = this.requests.get(request.toLowerCase());
     if (r === undefined || r.token !== token) {
-      return {
-        status: 404,
-        code: 'request_not_found',
-        message: 'No such request for this session.',
-      };
+      throw new SessionRefusal('request_not_found', { request_id: request });
     }
-    if (r.status === 'closed') {
-      return {
-        status: 409,
-        code: 'request_closed',
-        message: 'The request expired or was dropped.',
-      };
-    }
+    if (r.status === 'closed') throw new SessionRefusal('request_closed', { request_id: request });
     const thread = typeof body.thread_id === 'string' ? body.thread_id : null;
     if (r.place === 'dm' && thread !== null && this.itemIds.has(thread)) {
-      return {
-        status: 409,
-        code: 'request_result_private',
-        message: "This request's result goes only to the agent's direct message.",
-      };
+      throw new SessionRefusal('request_result_private', { request_id: request });
     }
-    return undefined;
   }
 
   /** A post with `request` that passed: the request is answered. */
-  noteRequestPost(token: string, request: string): void {
+  private noteRequestPost(token: string, request: string): void {
     this.requestPosts.push({ token, request });
     const r = this.requests.get(request.toLowerCase());
     if (r !== undefined) r.status = 'answered';

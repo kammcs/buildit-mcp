@@ -277,8 +277,9 @@ export const readChannelTool = defineTool({
       path: { channel: args.channel },
       query: {
         ...(since ? { since } : {}),
-        // TODO(lane B openapi): active_since is in the generated query from 1.13.0; drop the cast.
-        ...((active === true ? { active_since: args.active_since } : {}) as Record<string, never>),
+        ...(active === true && args.active_since !== undefined
+          ? { active_since: args.active_since }
+          : {}),
         ...(args.cursor ? { cursor: args.cursor } : {}),
         ...(args.limit ? { limit: args.limit } : {}),
       },

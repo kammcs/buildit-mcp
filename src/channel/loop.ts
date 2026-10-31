@@ -69,7 +69,6 @@ import {
   SESSION_ENDED_CODES,
   sessionHeartbeat,
   setSessionCapabilities,
-  type ChannelEvent,
   type SessionEvent,
   type SessionInfo,
 } from './api.js';
@@ -668,7 +667,7 @@ export class ChannelLoop {
   }
 
   /** Hands one event on, or drops it. A notification that fails stops the loop. */
-  private async deliver(event: ChannelEvent, info: SessionInfo): Promise<void> {
+  private async deliver(event: SessionEvent, info: SessionInfo): Promise<void> {
     const { logger } = this.options;
     if (this.seen.has(event.id)) {
       logger.debug('channel event dropped', { event_id: event.id, reason: 'repeat' });

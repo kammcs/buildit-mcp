@@ -27,15 +27,6 @@ import {
 } from '../api/generated/schemas.js';
 import type { OperationIO } from '../api/generated/strict.js';
 import { callOperation } from '../api/operations.js';
-import { SessionRequestEventSchema, type SessionRequestEvent } from './requests.js';
-
-/**
- * An event of the session as this version reads it: the contract's, and a
- * request (`agent.request`, agent API 1.13.0).
- */
-// TODO(lane B openapi): once the generated SessionEventSchema includes agent.request, this is
-// SessionEvent again.
-export type ChannelEvent = SessionEvent | SessionRequestEvent;
 
 export type {
   ConnectPollResponse,
@@ -97,7 +88,7 @@ export async function listSessionEvents(
   api: ApiClient,
   query: OperationIO['list_session_events']['query'],
   options: Options = {},
-): Promise<{ events: ChannelEvent[]; cursor: number; more: boolean; skipped: number }> {
+): Promise<{ events: SessionEvent[]; cursor: number; more: boolean; skipped: number }> {
   const op = OPERATIONS.list_session_events;
   if (api.served?.operations !== undefined && !api.served.operations.has('list_session_events')) {
     // callOperation's answer for an operation the deployment doesn't serve.
@@ -112,16 +103,10 @@ export async function listSessionEvents(
     pathTemplate: op.path,
     query: query as Record<string, QueryValue>,
   });
-  const events: ChannelEvent[] = [];
+  const events: SessionEvent[] = [];
   for (const raw of page.events) {
     const parsed = SessionEventSchema.safeParse(raw);
-    if (parsed.success) {
-      events.push(parsed.data);
-      continue;
-    }
-    // TODO(lane B openapi): the generated union reads requests; this fallback goes.
-    const request = SessionRequestEventSchema.safeParse(raw);
-    if (request.success) events.push(request.data);
+    if (parsed.success) events.push(parsed.data);
   }
   return { ...page, events, skipped: page.events.length - events.length };
 }
@@ -131,14 +116,8 @@ export function ackSessionEvents(api: ApiClient, cursor: number, options: Option
   return callOperation(api, 'ack_session_events', { body: { cursor } }, options);
 }
 
-/**
- * post_session_message's body, with `request` (agent API 1.13.0): the
- * request this post answers.
- */
-// TODO(lane B openapi): the generated body has `request`; use it as is.
-export type PostSessionMessageBody = OperationIO['post_session_message']['body'] & {
-  request?: string;
-};
+/** POST /v1/session/messages body (with `request` from agent API 1.13.0: the request it answers). */
+export type PostSessionMessageBody = OperationIO['post_session_message']['body'];
 
 /** POST /v1/session/messages, in the agent's own direct message with its owner. */
 export function postSessionMessage(

@@ -865,7 +865,7 @@ function normalNeeds(raw: unknown): string[] {
 
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.11.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.13.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -1013,7 +1013,6 @@ export class FakeApi {
     v14: true,
     v19: true,
     v111: true,
-    v113: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -1047,7 +1046,6 @@ export class FakeApi {
       v14: true,
       v19: true,
       v111: true,
-      v113: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1271,14 +1269,7 @@ export class FakeApi {
         throw new FakeError('projects_off');
       }
 
-      // TODO(lane B openapi): 1.13.0's fields, until the contract has them (then they parse as usual).
-      const pre = this.v113Fields(route.id, url.searchParams, body, token ?? '');
-      if (pre.refused !== undefined) {
-        this.send(res, pre.refused);
-        return;
-      }
-      body = pre.body;
-      const query = { ...this.parseQuery(route.id, url.searchParams), ...pre.query };
+      const query = this.parseQuery(route.id, url.searchParams);
       const requestSchema = REQUEST_SCHEMAS[route.id];
       let parsedBody: Record<string, unknown> = {};
       if (requestSchema !== null) {
@@ -1307,9 +1298,7 @@ export class FakeApi {
             body: parsedBody,
           });
 
-      const checked = RESPONSE_SCHEMAS[route.id].safeParse(
-        this.withoutRequests(route.id, handled.body),
-      );
+      const checked = RESPONSE_SCHEMAS[route.id].safeParse(handled.body);
       if (!checked.success) {
         this.violations.push(
           `${route.id} response: ${JSON.stringify(checked.error.issues.slice(0, 3))}`,
@@ -1342,65 +1331,6 @@ export class FakeApi {
       this.violations.push(`${route.id} crashed: ${String(err)}`);
       this.send(res, { status: 500, body: errorBody('internal', 'The fake crashed.') });
     }
-  }
-
-  /**
-   * Agent API 1.13.0's additions, read here until the contract has them
-   * (TODO(lane B openapi): drop this, and let the generated schemas check
-   * them): list_channel_messages' `active_since`, and post_session_message's
-   * `request` (its refusals: request_not_found, request_closed,
-   * request_result_private). `compat.v113` false answers like 1.12.0: the
-   * fields are violations there, as an unknown field is.
-   */
-  private v113Fields(
-    id: OperationId,
-    search: URLSearchParams,
-    body: unknown,
-    token: string,
-  ): { body: unknown; query: Record<string, unknown>; refused?: ScriptedResponse } {
-    const query: Record<string, unknown> = {};
-    if (!this.compat.v113) return { body, query };
-    if (id === 'list_channel_messages' && search.has('active_since')) {
-      const value = search.get('active_since') ?? '';
-      search.delete('active_since');
-      if (Number.isNaN(Date.parse(value)) || !/T.*(Z|[+-]\d{2}:\d{2})$/.test(value)) {
-        this.violations.push(`${id} query: active_since is not RFC 3339`);
-      }
-      query.active_since = value;
-    }
-    if (id === 'post_session_message' && body !== null && typeof body === 'object') {
-      const { request: given, ...rest } = body as Record<string, unknown>;
-      if (given === undefined) return { body: rest, query };
-      const request = typeof given === 'string' ? given : '';
-      if (!/^[0-9a-f-]{36}$/i.test(request)) {
-        this.violations.push(`${id} request: request is not a uuid`);
-      }
-      const refused = this.sessions.checkRequestPost(token, request, rest);
-      if (refused !== undefined) {
-        return {
-          body: rest,
-          query,
-          refused: {
-            status: refused.status,
-            body: errorBody(refused.code, refused.message, { kind: 'request', ref: request }),
-          },
-        };
-      }
-      this.sessions.noteRequestPost(token, request);
-      return { body: rest, query };
-    }
-    return { body, query };
-  }
-
-  /** A page of session events without agent.request ones (TODO(lane B openapi): checked by the contract then). */
-  private withoutRequests(id: OperationId, body: unknown): unknown {
-    if (id !== 'list_session_events' || body === null || typeof body !== 'object') return body;
-    const page = body as { events?: unknown };
-    if (!Array.isArray(page.events)) return body;
-    return {
-      ...page,
-      events: page.events.filter((e) => (e as { type?: unknown }).type !== 'agent.request'),
-    };
   }
 
   private parseQuery(id: OperationId, search: URLSearchParams): Record<string, unknown> {

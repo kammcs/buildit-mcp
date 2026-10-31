@@ -15,62 +15,16 @@
  * names cleaned with sanitizeLabel. A field that doesn't fit its shape
  * drops the event (`shape`) instead of passing it on.
  */
-import { z } from 'zod';
-
-import { SessionEventUserSchema } from '../api/generated/schemas.js';
+import type { SessionRequestData, SessionRequestEvent } from '../api/generated/schemas.js';
 import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
+
+export type { SessionRequestData, SessionRequestEvent };
 
 /** The agent API version that sends requests. */
 export const REQUESTS_API = '1.13.0';
 
 /** The event type of a request. */
 export const REQUEST_EVENT_TYPE = 'agent.request';
-
-// TODO(lane B openapi): the schemas below are written by hand from the
-// contract's draft. Once openapi/openapi.json 1.13.0 is copied in and
-// `npm run generate` has run, use the generated SessionRequestEventSchema
-// (in SessionEventSchema's union) and SessionRequestData instead, and drop
-// these (and the parse fallback in api.ts's listSessionEvents).
-
-const Uuid = z.string();
-const Ref = z.looseObject({ id: Uuid, key: z.string() });
-
-/** The `data` of an `agent.request` event, read tolerantly (contexts are checked by type below). */
-export const SessionRequestDataSchema = z.looseObject({
-  request: z.looseObject({
-    id: Uuid,
-    kind: z.string(),
-    source: z.string(),
-    subscription_id: Uuid.nullable().optional(),
-    created_at: z.string(),
-    expires_at: z.string(),
-  }),
-  requester: SessionEventUserSchema,
-  locale: z.string(),
-  time_zone: z.string(),
-  project: Ref.nullable().optional(),
-  context: z.looseObject({ type: z.string() }),
-  result: z.looseObject({ place: z.string() }),
-  handed: z
-    .looseObject({ from_session: z.looseObject({ id: Uuid, label: z.string() }) })
-    .nullable()
-    .optional(),
-});
-export type SessionRequestData = z.infer<typeof SessionRequestDataSchema>;
-
-/** An `agent.request` event: phase 1's envelope with a request's data. */
-export const SessionRequestEventSchema = z.looseObject({
-  v: z.literal(1),
-  id: Uuid,
-  type: z.literal(REQUEST_EVENT_TYPE),
-  created_at: z.string(),
-  org: z.looseObject({ id: Uuid }),
-  app: z.looseObject({ id: Uuid, installation_id: Uuid }),
-  attempt: z.number(),
-  session: z.looseObject({ id: Uuid, label: z.string() }),
-  data: SessionRequestDataSchema,
-});
-export type SessionRequestEvent = z.infer<typeof SessionRequestEventSchema>;
 
 // ---------------------------------------------------------------------------
 // The fixed tables
@@ -118,8 +72,8 @@ export const REQUEST_KINDS: Readonly<Record<string, KindInfo>> = {
 export type ResultPlace = 'dm' | 'thread' | 'item_thread';
 const PLACES: ReadonlySet<string> = new Set(['dm', 'thread', 'item_thread']);
 
-/** The most channels or items a request's content lists. */
-const LIST_MAX = 50;
+/** The most items a request names (the contract's 20). */
+const LIST_MAX = 20;
 
 const UUID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 const KEY_RE = /^[A-Za-z][A-Za-z0-9]{0,9}-[1-9][0-9]{0,8}$/;
@@ -188,9 +142,8 @@ export type RequestContext =
       type: 'brief';
       from: string;
       to: string;
-      project: { id: string; key: string } | undefined;
-      channels: { id: string; label: string }[];
-      projects: { id: string; key: string }[];
+      project: { id: string; key: string };
+      channel: { id: string; label: string };
     };
 
 /**
@@ -229,30 +182,13 @@ export function readContext(
       return { type: 'items', items: items as { id: string; key: string }[] };
     }
     case 'brief': {
+      // One project's channel and items: {project, channel, from, to}.
+      const own = projectRef(raw.project) ?? project;
+      const channel = channelRef(raw.channel);
+      if (own === undefined || channel === undefined) return undefined;
       if (!isTime(raw.from) || !isTime(raw.to)) return undefined;
       if (Date.parse(raw.from) > Date.parse(raw.to)) return undefined;
-      // One brief per project: the context's project, else the event's.
-      const own = raw.project === undefined ? undefined : projectRef(raw.project);
-      if (raw.project !== undefined && raw.project !== null && own === undefined) return undefined;
-      // A list that isn't one (or holds a bad entry) drops the event; null or absent is empty.
-      const lists = (v: unknown): unknown[] =>
-        Array.isArray(v) ? v.slice(0, LIST_MAX) : v === undefined || v === null ? [] : [null];
-      const channels = [
-        ...(raw.channel === undefined || raw.channel === null ? [] : [raw.channel]),
-        ...lists(raw.channels),
-      ].map(channelRef);
-      const projects = lists(raw.projects).map(projectRef);
-      if (channels.some((c) => c === undefined) || projects.some((p) => p === undefined)) {
-        return undefined;
-      }
-      return {
-        type: 'brief',
-        from: raw.from,
-        to: raw.to,
-        project: own ?? project,
-        channels: channels as { id: string; label: string }[],
-        projects: projects as { id: string; key: string }[],
-      };
+      return { type: 'brief', from: raw.from, to: raw.to, project: own, channel };
     }
     default:
       return undefined;
@@ -312,13 +248,8 @@ function aboutLine(ctx: RequestContext, zone: string): string {
       return ctx.item.key;
     case 'items':
       return ctx.items.map((i) => i.key).join(', ');
-    case 'brief': {
-      const scope =
-        ctx.project === undefined
-          ? 'the channels and projects listed below'
-          : `project ${ctx.project.key} (its channel and its items)`;
-      return `${scope} from ${ctx.from} to ${ctx.to} (${zone})`;
-    }
+    case 'brief':
+      return `project ${ctx.project.key} (its channel and its items) from ${ctx.from} to ${ctx.to} (${zone})`;
   }
 }
 
@@ -334,30 +265,17 @@ function contextMeta(ctx: RequestContext): Record<string, string> {
     case 'items':
       return { context: 'items', items: ctx.items.map((i) => i.key).join(',') };
     case 'brief':
-      return {
-        context: 'brief',
-        from: ctx.from,
-        to: ctx.to,
-        ...(ctx.channels.length === 1 && ctx.channels[0] !== undefined
-          ? { channel_id: ctx.channels[0].id }
-          : {}),
-      };
+      return { context: 'brief', channel_id: ctx.channel.id, from: ctx.from, to: ctx.to };
   }
 }
 
 /** The brief's scope as a list (in an untrusted block: channel names are people-written). */
-function briefList(ctx: Extract<RequestContext, { type: 'brief' }>): string | undefined {
+function briefList(ctx: Extract<RequestContext, { type: 'brief' }>): string {
   const lines = [
-    ...(ctx.project === undefined
-      ? []
-      : [`- project ${ctx.project.key} (project_id ${ctx.project.id})`]),
-    ...ctx.projects
-      .filter((p) => p.id !== ctx.project?.id)
-      .map((p) => `- project ${p.key} (project_id ${p.id})`),
-    ...ctx.channels.map((c) => `- ${c.label} (channel_id ${c.id})`),
+    `- project ${ctx.project.key} (project_id ${ctx.project.id})`,
+    `- ${ctx.channel.label} (channel_id ${ctx.channel.id})`,
   ];
-  if (lines.length === 0) return undefined;
-  return wrapUntrusted(lines.join('\n'), { source: 'request_scope', maxChars: 20_000 });
+  return wrapUntrusted(lines.join('\n'), { source: 'request_scope', maxChars: 2_000 });
 }
 
 /**
@@ -425,11 +343,11 @@ export function requestContent(data: SessionRequestData, info: RequestInfo): Req
       request_id: r.id,
       source,
       ...contextMeta(ctx),
-      ...(project === undefined
-        ? ctx.type === 'brief' && ctx.project !== undefined
-          ? { project: ctx.project.key }
-          : {}
-        : { project: project.key }),
+      ...(ctx.type === 'brief'
+        ? { project: ctx.project.key }
+        : project === undefined
+          ? {}
+          : { project: project.key }),
       locale: lang.locale,
       time_zone: zone,
       result: place,
