@@ -849,6 +849,9 @@ export const V111_OPS = new Set<OperationId>([
   'complete_session_upload',
 ]);
 
+/** What an API older than 1.15.0 doesn't serve (compat.v115 false). */
+const V115_OPS = new Set<OperationId>(['ask_session_reporter']);
+
 /** An item's Needs as the API stores them: trimmed, lower case, unique, sorted; at most 10. */
 function normalNeeds(raw: unknown): string[] {
   const tags = [
@@ -865,7 +868,7 @@ function normalNeeds(raw: unknown): string[] {
 
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.14.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.15.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -1001,7 +1004,9 @@ export class FakeApi {
    * and text-search paging, or the served operations in /v1/meta (1.0.0);
    * without search_pages, list_members, link and activity filters and
    * org.test (1.1.0); without list_pins and list_emoji (1.2.0); without
-   * read_channel's item threads and list_comments' since (v114 false: 1.13.0).
+   * read_channel's item threads and list_comments' since (v114 false: 1.13.0);
+   * without create_items, edit_items, post_plan_card's request and
+   * ask_session_reporter (v115 false: 1.14.0).
    */
   compat = {
     hints: true,
@@ -1015,6 +1020,7 @@ export class FakeApi {
     v19: true,
     v111: true,
     v114: true,
+    v115: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -1049,6 +1055,7 @@ export class FakeApi {
       v19: true,
       v111: true,
       v114: true,
+      v115: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1256,7 +1263,8 @@ export class FakeApi {
         (V12_OPS.has(route.id) && !this.compat.v12) ||
         (V14_OPS.has(route.id) && !this.compat.v14) ||
         (V19_OPS.has(route.id) && !this.compat.v19) ||
-        (V111_OPS.has(route.id) && !this.compat.v111);
+        (V111_OPS.has(route.id) && !this.compat.v111) ||
+        (V115_OPS.has(route.id) && !this.compat.v115);
       if (olderRoute) {
         this.send(res, {
           status: 404,
@@ -1670,6 +1678,7 @@ export class FakeApi {
       .filter((id) => this.compat.v14 || !V14_OPS.has(id))
       .filter((id) => this.compat.v19 || !V19_OPS.has(id))
       .filter((id) => this.compat.v111 || !V111_OPS.has(id))
+      .filter((id) => this.compat.v115 || !V115_OPS.has(id))
       .sort();
   }
 
@@ -1859,6 +1868,8 @@ export class FakeApi {
         return this.sessionCheck(() => this.sessions.typing(call.token, call.body));
       case 'post_plan_card':
         return this.sessionCheck(() => this.postPlanCard(call));
+      case 'ask_session_reporter':
+        return this.sessionCheck(() => this.sessions.askReporter(call.token, call.body));
       case 'list_session_threads':
         return this.sessionCheck(() => this.sessions.threads(call.token));
       case 'post_session_approval':
@@ -2720,6 +2731,22 @@ export class FakeApi {
     const link: FakeLink = { id: nextId(), fromId, toId, kind };
     this.store.links.push(link);
     return { status: 201, body: { link: this.linkFrom(item, link), created: true } };
+  }
+
+  /** Whether "item kind target" exists already (as addLink stores it). */
+  private linkExists(item: FakeItem, kind: string, target: FakeItem): boolean {
+    const [fromId, toId, k] =
+      kind === 'blocked_by'
+        ? [target.id, item.id, 'blocks']
+        : kind === 'duplicated_by'
+          ? [target.id, item.id, 'duplicates']
+          : [item.id, target.id, kind];
+    return this.store.links.some(
+      (l) =>
+        l.kind === k &&
+        ((l.fromId === fromId && l.toId === toId) ||
+          (k === 'relates' && l.fromId === toId && l.toId === fromId)),
+    );
   }
 
   private removeLink({ identity, params }: Call): Handled {
@@ -4264,6 +4291,180 @@ export class FakeApi {
         };
         break;
       }
+      case 'create_items': {
+        const p = this.project(args.project as string, identity);
+        const items = args.items as {
+          ref: string;
+          title: string;
+          type?: string;
+          parent?: string | { ref: string };
+          labels?: string[];
+          priority?: string;
+        }[];
+        const levels = new Map<string, string>();
+        const effects = items.map((i) => {
+          let parentLevel: string | undefined;
+          let parentName: string | undefined;
+          if (typeof i.parent === 'string') {
+            const parent = this.item(i.parent, identity);
+            if (parent.project !== p.key) {
+              throw new FakeError('validation', {
+                fields: [{ path: 'args.items.parent', message: 'One project per plan.' }],
+              });
+            }
+            track(parent);
+            parentLevel = p.types.find((t) => t.id === parent.typeId)?.level;
+            parentName = key(parent);
+          } else if (i.parent !== undefined) {
+            parentLevel = levels.get(i.parent.ref);
+            parentName = `{ref ${i.parent.ref}}`;
+          }
+          const type = i.type
+            ? this.type(p, i.type)
+            : this.type(p, parentLevel === 'standard' ? 'Subtask' : 'Story');
+          const fits =
+            parentLevel === undefined ||
+            (parentLevel === 'epic' && type.level === 'standard') ||
+            (parentLevel === 'standard' && type.level === 'subtask');
+          if (!fits) {
+            throw new FakeError('validation', {
+              fields: [
+                {
+                  path: 'args.items.parent',
+                  message: 'An epic holds standard items; a standard item holds subtasks.',
+                },
+              ],
+            });
+          }
+          for (const l of i.labels ?? []) this.label(p, l);
+          levels.set(i.ref, type.level);
+          return this.effect(
+            'create',
+            'item',
+            `+ ${type.name} "${i.title}"${parentName === undefined ? '' : ` — parent: ${parentName}`}`,
+            null,
+            null,
+            { ...i, type: type.name },
+          );
+        });
+        preview = {
+          summary: `Creates ${items.length} item(s) in ${p.key}.`,
+          effects,
+          item_count: items.length,
+          warnings: [],
+        };
+        break;
+      }
+      case 'edit_items': {
+        const changes = args.items as {
+          item: string;
+          type?: string;
+          priority?: string;
+          estimate?: number | null;
+          add_labels?: string[];
+          description?: { mode: 'append' | 'replace'; text: string; description_version: number };
+          add_links?: { kind: string; target: string }[];
+        }[];
+        const effects: PlanEffect[] = [];
+        const warnings: string[] = [];
+        let project: string | undefined;
+        for (const c of changes) {
+          const item = this.item(c.item, identity);
+          project ??= item.project;
+          if (item.project !== project) {
+            throw new FakeError('validation', {
+              fields: [{ path: 'args.items', message: 'One project per plan.' }],
+            });
+          }
+          const p = this.projectOf(item);
+          for (const l of c.add_labels ?? []) this.label(p, l);
+          const before: Record<string, unknown> = {};
+          const after: Record<string, unknown> = {};
+          if (c.priority !== undefined) {
+            before.priority = item.priority;
+            after.priority = c.priority;
+          }
+          if (c.estimate !== undefined) {
+            before.estimate = item.estimate;
+            after.estimate = c.estimate;
+          }
+          if (c.add_labels !== undefined) {
+            before.labels = item.labels;
+            after.labels = [...new Set([...item.labels, ...c.add_labels])];
+          }
+          if (c.type !== undefined) {
+            // A type change keeps the item's level (an epic stays an epic).
+            const type = this.type(p, c.type);
+            const level = p.types.find((t) => t.id === item.typeId)?.level;
+            if (level !== undefined && type.level !== level) {
+              throw new FakeError('validation', {
+                fields: [
+                  {
+                    path: 'args.items.type',
+                    message: `${key(item)} is a ${level} item; its new type must be one too.`,
+                  },
+                ],
+              });
+            }
+            before.type = p.types.find((t) => t.id === item.typeId)?.name ?? null;
+            after.type = type.name;
+          }
+          if (c.description !== undefined) {
+            // The version read is checked now: a moved description is a conflict, not a plan.
+            if (c.description.description_version !== item.descriptionVersion) {
+              throw new FakeError(
+                'conflict',
+                {
+                  kind: 'description',
+                  current: { version: item.version, description_version: item.descriptionVersion },
+                },
+                `${key(item)}'s description changed since you read it.`,
+              );
+            }
+            before.description = `version ${item.descriptionVersion}`;
+            after.description = `+${c.description.text.split('\n').length} lines (${c.description.mode})`;
+          }
+          if (Object.keys(after).length > 0) {
+            effects.push(this.effect('update', 'item', key(item), item.id, before, after));
+          }
+          for (const l of c.add_links ?? []) {
+            const target = this.item(l.target, identity);
+            if (target.project !== project) {
+              throw new FakeError('validation', {
+                fields: [{ path: 'args.items.add_links', message: 'One project per plan.' }],
+              });
+            }
+            if (this.linkExists(item, l.kind, target)) {
+              warnings.push(`${key(item)} ${l.kind} ${key(target)} already: left as it is.`);
+              continue;
+            }
+            effects.push(
+              this.effect(
+                'link',
+                'link',
+                `${key(item)} ${l.kind} ${key(target)}`,
+                null,
+                null,
+                null,
+              ),
+            );
+          }
+        }
+        if (effects.length === 0) {
+          throw new FakeError('validation', {
+            fields: [
+              { path: 'items', message: 'Nothing to change: every link asked for exists already.' },
+            ],
+          });
+        }
+        preview = {
+          summary: `Changes ${changes.length} item(s) in ${project ?? ''}.`,
+          effects,
+          item_count: changes.length,
+          warnings,
+        };
+        break;
+      }
       default:
         throw new FakeError('validation', {
           fields: [{ path: 'action', message: 'Unknown action.' }],
@@ -4295,6 +4496,7 @@ export class FakeApi {
   private postPlanCard({ token, body }: Call): Handled {
     const handle = String(body.handle);
     const id = String(body.id);
+    const request = typeof body.request === 'string' ? body.request : undefined;
     const plan = this.store.plans.find((x) => x.handle === handle && x.token === token);
     if (!plan) throw new FakeError('not_found', { kind: 'plan', ref: handle });
     if (plan.cardMessageId === id) {
@@ -4320,8 +4522,21 @@ export class FakeApi {
     if (this.plansOutsideThread && typeof body.thread_id === 'string') {
       throw new FakeError('plan_outside_thread', { thread_id: body.thread_id, key: 'OPS' });
     }
+    // A request's card goes only to the request's place (1.15.0), and lasts 24 hours.
+    if (request !== undefined) {
+      this.sessionCheck(() => {
+        this.sessions.checkRequestPost(token, request, body);
+      });
+    }
     plan.cardMessageId = id;
-    plan.expiresAt = this.clock + 60 * 60_000;
+    plan.expiresAt = this.clock + (request === undefined ? 60 : 24 * 60) * 60_000;
+    if (request !== undefined) {
+      this.sessions.noteRequestPost(
+        token,
+        request,
+        typeof body.thread_id === 'string' ? body.thread_id : null,
+      );
+    }
     this.sessions.postPlanCard(token, {
       id,
       threadId: typeof body.thread_id === 'string' ? body.thread_id : null,
@@ -4483,6 +4698,79 @@ export class FakeApi {
         for (const s of p.statuses)
           s.allowed = s.allowed.filter((a) => lower(a.to) !== lower(status.name));
         result = { action: 'archive_status', moved_items: moved.length };
+        break;
+      }
+      case 'create_items': {
+        const made = new Map<string, FakeItem>();
+        const created: FakeItem[] = [];
+        for (const raw of args.items as Record<string, unknown>[]) {
+          const { ref, parent, ...rest } = raw as { ref: string; parent?: unknown };
+          const parentKey =
+            typeof parent === 'string'
+              ? parent
+              : parent !== undefined
+                ? (() => {
+                    const m = made.get((parent as { ref: string }).ref);
+                    return m === undefined ? undefined : `${m.project}-${m.number}`;
+                  })()
+                : undefined;
+          const out = this.createItem({
+            identity,
+            token,
+            params: {},
+            query: {},
+            body: {
+              ...rest,
+              ...(parentKey === undefined ? { project: args.project } : { parent: parentKey }),
+            },
+          }).body as { item: { id: string } };
+          const item = this.store.items.find((i) => i.id === out.item.id)!;
+          made.set(ref, item);
+          created.push(item);
+        }
+        result = { action: 'create_items', items: created.map((i) => this.summary(i)) };
+        break;
+      }
+      case 'edit_items': {
+        let links = 0;
+        const changed: FakeItem[] = [];
+        for (const raw of args.items as Record<string, unknown>[]) {
+          const {
+            item: ref,
+            add_links: addLinks,
+            ...fields
+          } = raw as {
+            item: string;
+            add_links?: { kind: string; target: string }[];
+          };
+          const item = this.item(ref, identity);
+          const k = `${item.project}-${item.number}`;
+          if (Object.keys(fields).length > 0) {
+            try {
+              this.updateItem({ identity, token, params: { key: k }, query: {}, body: fields });
+            } catch (err) {
+              // A replace against a moved description: the plan is stale, nothing is guessed.
+              if (err instanceof FakeError && err.code === 'conflict') {
+                throw new FakeError(
+                  'plan_stale',
+                  { handle, changed: [{ kind: 'item', ref: k }] },
+                  'Something changed since the preview.',
+                );
+              }
+              throw err;
+            }
+          }
+          for (const l of addLinks ?? []) {
+            const added = this.addLink({ identity, token, params: { key: k }, query: {}, body: l });
+            if (added.status === 201) links += 1;
+          }
+          changed.push(item);
+        }
+        result = {
+          action: 'edit_items',
+          items: changed.map((i) => this.summary(i)),
+          links_added: links,
+        };
         break;
       }
       case 'workflow_change': {

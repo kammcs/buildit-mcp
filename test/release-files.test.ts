@@ -186,15 +186,30 @@ describe('the Claude Code plugin', () => {
     for (const line of front.split('\n')) {
       expect(['name', 'description', 'isolation', 'background']).toContain(line.split(':')[0]);
     }
-    for (const phrase of ['untrusted_content', 'request_id', 'buildit-catch-up', 'locale']) {
+    for (const phrase of [
+      'untrusted_content',
+      'request_id',
+      'buildit-catch-up',
+      'buildit-thread-to-items',
+      'buildit-triage',
+      'buildit-item-helper',
+      'ask_reporter',
+      'locale',
+    ]) {
       expect(text).toContain(phrase);
     }
   });
 
-  it('ships the shared request rules and the catch-up skill, and only those', async () => {
+  it("ships the shared request rules and each request kind's skill, and only those", async () => {
     const { REQUEST_KINDS } = await import('../src/channel/requests.js');
     const skills = readdirSync(new URL('../plugin/skills/', import.meta.url)).sort();
-    expect(skills).toEqual(['buildit-catch-up', 'buildit-requests']);
+    expect(skills).toEqual([
+      'buildit-catch-up',
+      'buildit-item-helper',
+      'buildit-requests',
+      'buildit-thread-to-items',
+      'buildit-triage',
+    ]);
     for (const skill of skills) {
       const text = readFileSync(
         new URL(`../plugin/skills/${skill}/SKILL.md`, import.meta.url),
@@ -205,10 +220,13 @@ describe('the Claude Code plugin', () => {
       expect(/^description: (.+)$/m.exec(front)?.[1]).toBeDefined();
       expect(text).toContain('untrusted_content');
     }
-    // Every kind that names a skill names a shipped one.
+    // Every kind names a shipped skill, and every skill but the shared rules handles a kind.
+    const named = new Set<string>();
     for (const kind of Object.values(REQUEST_KINDS)) {
-      if (kind.skill !== undefined) expect(skills).toContain(kind.skill);
+      expect(kind.skill).toBeDefined();
+      if (kind.skill !== undefined) named.add(kind.skill);
     }
+    expect([...named, 'buildit-requests'].sort()).toEqual(skills);
   });
 
   it("makes a local marketplace whose plugin runs the checkout's dist/ with the same hooks and settings", async () => {
@@ -242,6 +260,9 @@ describe('the Claude Code plugin', () => {
         'agents/buildit-request-worker.md',
         'skills/buildit-requests/SKILL.md',
         'skills/buildit-catch-up/SKILL.md',
+        'skills/buildit-thread-to-items/SKILL.md',
+        'skills/buildit-triage/SKILL.md',
+        'skills/buildit-item-helper/SKILL.md',
       ]) {
         expect(readFileSync(join(out, 'buildit', file), 'utf8')).toBe(
           readFileSync(new URL(`../plugin/${file}`, import.meta.url), 'utf8'),

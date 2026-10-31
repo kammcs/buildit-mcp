@@ -64,6 +64,8 @@ const ALL_TOOLS = [
   'list_sprints',
   'plan_release',
   'plan_sprint',
+  'propose_item_changes',
+  'propose_new_items',
   'write_release_notes',
   // pages
   'create_page',
@@ -135,7 +137,7 @@ describe('the tool list', () => {
   it('has every tool with every toolset on and every scope', async () => {
     const c = await client(TOKENS.full);
     expect(await names(c)).toEqual(ALL_TOOLS);
-    expect(ALL_TOOLS).toHaveLength(43);
+    expect(ALL_TOOLS).toHaveLength(45);
   });
 
   it('keeps admin and destructive off by default, even for a token with their scopes', async () => {
@@ -202,9 +204,16 @@ describe('the tool list', () => {
     expect(deleter).toContain('propose_delete_item');
     expect(deleter).toContain('apply_plan');
     expect(deleter).not.toContain('get_workflow');
-    // A writer has no propose_* tool, so no apply_plan either.
-    const writer = await names(await client(tokenWith('projects:write')));
+    // A writer's only propose_* tools are the planning toolset's: without it, no apply_plan.
+    const writer = await names(
+      await client(tokenWith('projects:write'), { toolsets: DEFAULT_TOOLSETS }),
+    );
     expect(writer).not.toContain('apply_plan');
+    const planner = await names(await client(tokenWith('projects:write')));
+    expect(planner).toContain('propose_new_items');
+    expect(planner).toContain('propose_item_changes');
+    expect(planner).toContain('apply_plan');
+    expect(planner).not.toContain('propose_delete_item');
     // Excluding every propose_* tool takes apply_plan away too.
     const proposals = ALL_TOOLS.filter((n) => n.startsWith('propose_'));
     const excluded = await names(await client(TOKENS.full, { excludeTools: proposals }));
@@ -253,8 +262,9 @@ describe('the tool list', () => {
     const all = await client(TOKENS.full);
     const { tools } = await all.client.listTools();
     // 160,000 until the items' Needs (needs on create_item and update_item, and in every item);
-    // 161,500 until read_channel's item threads and list_comments' since (agent API 1.14.0).
-    expect(JSON.stringify(tools).length).toBeLessThan(163_500);
+    // 161,500 until read_channel's item threads and list_comments' since (agent API 1.14.0);
+    // 163,500 until propose_new_items and propose_item_changes (agent API 1.15.0).
+    expect(JSON.stringify(tools).length).toBeLessThan(173_000);
     const defaults = await client(TOKENS.full, { toolsets: DEFAULT_TOOLSETS });
     // About 16,000 tokens: 60,000 until get_item's feedback block (62,000),
     // then search_items' link and activity filters and find_users without a project (64,000),

@@ -61,7 +61,7 @@ const NEW_PLAN_NOTE =
 const TOOL_NOTES: Record<string, (details: Record<string, unknown>) => string | undefined> = {
   // reply's `request` (agent API 1.13.0).
   request_result_private: () =>
-    "This request's result is private: a catch-up goes only to your direct message with the person. Send it again with reply, without thread_id or item, and with the same request.",
+    'This request\'s result goes only to its own place: a catch-up\'s (result="dm") only to your direct message with the person: send it again without thread_id or item, and with the same request; a thread\'s or an item\'s (result="thread" or "item_thread") only to the request\'s thread or one of its items\' threads, so send it again with request and no thread named, or with one of its items.',
   request_not_found: () =>
     "This request isn't this session's: use the request_id of the <channel> tag (event=request) you are answering.",
   request_closed: () =>

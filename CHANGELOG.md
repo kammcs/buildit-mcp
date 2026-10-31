@@ -2,6 +2,39 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.13.0] - Unreleased
+
+Built on version 1.15.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). The new tools and `request` on a card need a 1.15.0 server: on an older one they are refused before any call (`ask_reporter` isn't listed), and everything else works as in 0.12.0.
+
+### Work item requests
+
+The work item kinds of [requests](README.md#requests-from-builditsocial), each answered with an Apply card that only the person's tap applies:
+
+- **`thread_to_items`** ("Turn into items with my agent" on a thread): the `buildit-thread-to-items` skill drafts the work a thread describes (stories, tasks or bugs with subtasks, each with acceptance criteria) as one card in that thread.
+- **`triage`** ("Triage with my agent" on items, or a subscription to new items in Triage): the `buildit-triage` skill finds duplicates and suggests the type, priority, labels and fields, as one card per item in its own thread, never changing the status; for a feedback report it may ask the reporter (below).
+- **`item_helper.spec`, `.subtasks`, `.estimate`, `.related` and `.stalled`** (the item's "With my agent" menu): the `buildit-item-helper` skill appends a spec with acceptance criteria, breaks the item down, estimates it on the project's scale, links related items, or reports on a stalled item, in the item's own thread.
+- **The lead line** names the result's place and the tools for it (the card with a `propose_*` tool and `card_thread`, or a note with `reply`, each with `request`; questions for the person with `ask` and `dm: true`), and lists an item request's items by key and id. Each kind has one place: another drops the event (`shape`). A subscription other than the morning brief says so.
+- **The oldest buildit-mcp per kind:** 0.11.0 for a catch-up, 0.13.0 for these. buildIt.Social offers a kind only to sessions new enough; this version checks it too, and an older one's lead says which version is needed.
+
+### New tools
+
+- **`propose_new_items`** (toolset `planning`, `projects:write`): previews creating 1 to 25 items of one project at once (plan action `create_items`), each with a `ref` so a later item's parent can be `{"ref": "a1"}`; refs are checked before any call.
+- **`propose_item_changes`** (toolset `planning`, `projects:write`): previews changes to 1 to 20 items of one project, each its own (plan action `edit_items`): type, status, priority, assignee, estimate, labels, custom fields, a description `append` (never overwrites) or `replace` (only while `description_version` is current), and up to 10 links within the project. Only the fields it changes are checked when it is applied. A `description_version` that already moved is refused when proposing (`conflict`), a plan whose links all exist already is refused (422 on `items`), and a type change keeps the item's level.
+- **`ask_reporter`** (channel mode, `ask_session_reporter`): one question to a feedback report's reporter for a triage request. The request's kind, its items and the question's form are checked before any call, with the server's rules, names and order (`empty`, `control`, `too_long` and `too_many_lines` on the text; then, in its NFKC form, `not_a_question`, `code`, `link`, `markdown_link`, `html`, `email`, `mention`, `uuid`, `item_key` and `domain`; at most 500 code points and 4 lines); buildIt.Social checks them again with the report, the switches and the caps (2 per report until a person on the team steps in, per org and per platform day), shows it in the item's thread first and sends it in its own words. Refusals come back in words and are final in this session: after one, the request asks that reporter nothing more in any form (after a switch or a daily cap, no reporter), before any call; a question refused for its form may be rewritten once. The answer gives the item's key, and a replayed question that wasn't sent says why (`reason`).
+- `apply_plan` and `plan_resolved` name the items created or changed and the links added.
+
+### Posting by request
+
+- **`request` on `propose_new_items` and `propose_item_changes`** (`post_plan_card`'s `request`): the card answers the request, goes only to its thread or item thread (the default; named among several items), and stays open 24 hours. A refusal there is an error: never a second post in the direct message.
+- **`reply` with a thread or item request** posts in the request's place by default, whatever thread is the latest; another place is refused before any call. The server allows 3 posts per place (`request_post_limit`) within a day of delivery.
+- The refusals' notes cover the new places and codes (`request_post_limit`, `reporter_questions_off`, `reporter_question_limit`, `reporter_text_invalid`, `not_a_report`, `request_kind_mismatch`, `reporter_question_locked`).
+
+### The plugin
+
+- The request worker writes each result to its place, sends notes and questions to the direct message without `request`, never writes items directly, and reaches reporters only through `ask_reporter`. The lead leaves a request card's outcome alone unless it failed.
+- The `buildit-requests` rules cover the new kinds, places, cards, the per-place cap and the reporter rule, and keep other projects out of a thread or an item's thread (read by the whole channel, guests too): an item of another project (a link, a parent, a blocker) is named there by its key alone. The item helper reads only its own project's linked items.
+- New skills: `buildit-thread-to-items`, `buildit-triage`, `buildit-item-helper`.
+
 ## [0.12.0] - 2026-10-31
 
 Built on version 1.14.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). Nothing needs 1.14.0: on a 1.13.0 server `read_channel` lists no item threads and says so, and `list_comments` applies `since` itself.

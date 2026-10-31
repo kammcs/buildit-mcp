@@ -349,7 +349,14 @@ export class SessionRefusal extends Error {
       | 'no_target'
       | 'request_not_found'
       | 'request_closed'
-      | 'request_result_private',
+      | 'request_result_private'
+      | 'request_post_limit'
+      | 'request_kind_mismatch'
+      | 'not_a_report'
+      | 'reporter_questions_off'
+      | 'reporter_question_limit'
+      | 'reporter_text_invalid'
+      | 'plan_outside_thread',
     readonly details: Record<string, unknown> = {},
   ) {
     super(code);
@@ -523,7 +530,13 @@ export class FakeSessions {
     const request = typeof body.request === 'string' ? body.request : undefined;
     if (request !== undefined) this.checkRequestPost(token, request, body);
     const posted = this.postMessage(s, body);
-    if (request !== undefined) this.noteRequestPost(token, request);
+    if (request !== undefined) {
+      this.noteRequestPost(
+        token,
+        request,
+        typeof body.thread_id === 'string' ? body.thread_id : null,
+      );
+    }
     return posted;
   }
 
@@ -545,9 +558,13 @@ export class FakeSessions {
     if (threadId !== null && this.otherSessionThreads.has(threadId)) {
       throw new SessionRefusal('thread_other_session', { thread_id: threadId });
     }
+    // A thread's or an item's request result goes to its place with no binding (1.15.0).
+    const placed =
+      typeof body.request === 'string' &&
+      (this.requests.get(body.request.toLowerCase())?.place ?? 'dm') !== 'dm';
     // An item's thread: only one this session works in.
     const inItem = threadId !== null && this.itemIds.has(threadId);
-    if (inItem && !s.items.has(threadId)) {
+    if (inItem && !placed && !s.items.has(threadId)) {
       throw new SessionRefusal('thread_not_bound', { thread_id: threadId });
     }
     const existing = s.messages.find((m) => m.id === id);
@@ -565,7 +582,7 @@ export class FakeSessions {
     }
     const message = {
       id,
-      conversation_id: inItem ? SESSION_IDS.demoChannel : SESSION_IDS.dm,
+      conversation_id: inItem || placed ? SESSION_IDS.demoChannel : SESSION_IDS.dm,
       text,
       thread_id: threadId,
       reply_to_id: replyTo,
@@ -1730,13 +1747,28 @@ export class FakeSessions {
   // Requests (agent API 1.13.0)
   // -------------------------------------------------------------------------
 
-  /** The requests sent to sessions, by id: their session's token, result place and state. */
+  /**
+   * The requests sent to sessions, by id: their session's token, kind,
+   * result place and state, and (1.15.0) the threads a thread or item
+   * result may go to, with each place's post count.
+   */
   readonly requests = new Map<
     string,
-    { token: string; place: string; status: 'delivered' | 'answered' | 'closed' }
+    {
+      token: string;
+      kind: string;
+      place: string;
+      status: 'delivered' | 'answered' | 'closed';
+      /** The context's thread, or its items' ids (their threads). */
+      threads: string[];
+      /** Posts per place (at most 3: request_post_limit). */
+      posts: Map<string, number>;
+      /** The context's items. */
+      items: { id: string; key: string }[];
+    }
   >();
   /** Every post with `request`, in order. */
-  readonly requestPosts: { token: string; request: string }[] = [];
+  readonly requestPosts: { token: string; request: string; thread_id?: string | null }[] = [];
 
   /**
    * Sends a request to the session as an agent.request event (tests). The
@@ -1814,7 +1846,26 @@ export class FakeSessions {
       ...options.event,
     } as unknown as SessionEvent);
     if (!this.requests.has(requestId)) {
-      this.requests.set(requestId, { token, place, status: 'delivered' });
+      const ctx = data.context;
+      const listed = (v: unknown): { id: string; key: string }[] =>
+        Array.isArray(v)
+          ? v.map((i) => {
+              const r = i as { id?: unknown; key?: unknown };
+              return { id: String(r.id).toLowerCase(), key: String(r.key).toUpperCase() };
+            })
+          : [];
+      const items =
+        ctx.type === 'item' ? listed([ctx.item]) : ctx.type === 'items' ? listed(ctx.items) : [];
+      const threads = ctx.type === 'thread' ? [String(ctx.thread_id)] : items.map((i) => i.id);
+      this.requests.set(requestId, {
+        token,
+        kind: options.kind ?? 'catch_up',
+        place,
+        status: 'delivered',
+        threads: threads.map((t) => t.toLowerCase()),
+        posts: new Map(),
+        items,
+      });
     }
     return { eventId, requestId };
   }
@@ -1825,23 +1876,120 @@ export class FakeSessions {
    * request_closed, and a direct-message result elsewhere
    * request_result_private, each with {request_id}.
    */
-  private checkRequestPost(token: string, request: string, body: Record<string, unknown>): void {
+  checkRequestPost(token: string, request: string, body: Record<string, unknown>): void {
     const r = this.requests.get(request.toLowerCase());
     if (r === undefined || r.token !== token) {
       throw new SessionRefusal('request_not_found', { request_id: request });
     }
     if (r.status === 'closed') throw new SessionRefusal('request_closed', { request_id: request });
-    const thread = typeof body.thread_id === 'string' ? body.thread_id : null;
+    const thread = typeof body.thread_id === 'string' ? body.thread_id.toLowerCase() : null;
     if (r.place === 'dm' && thread !== null && this.itemIds.has(thread)) {
       throw new SessionRefusal('request_result_private', { request_id: request });
+    }
+    // 1.15.0: a thread's or an item's result goes only to its place, at most 3 times there.
+    if (r.place !== 'dm') {
+      if (thread === null || !r.threads.includes(thread)) {
+        throw new SessionRefusal('request_result_private', { request_id: request });
+      }
+      if ((r.posts.get(thread) ?? 0) >= 3) {
+        throw new SessionRefusal('request_post_limit', { request_id: request });
+      }
     }
   }
 
   /** A post with `request` that passed: the request is answered. */
-  private noteRequestPost(token: string, request: string): void {
-    this.requestPosts.push({ token, request });
+  noteRequestPost(token: string, request: string, threadId: string | null = null): void {
+    this.requestPosts.push({ token, request, thread_id: threadId });
     const r = this.requests.get(request.toLowerCase());
-    if (r !== undefined) r.status = 'answered';
+    if (r === undefined) return;
+    r.status = 'answered';
+    if (threadId !== null) {
+      const t = threadId.toLowerCase();
+      r.posts.set(t, (r.posts.get(t) ?? 0) + 1);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Questions to a feedback reporter (agent API 1.15.0)
+  // -------------------------------------------------------------------------
+
+  /** The items that are open feedback reports, by id (tests add them). */
+  readonly reportItems = new Set<string>();
+  /** Questions to reporters switched off, by the agent's owner or the platform (tests). */
+  reporterQuestionsOff: 'agent' | 'platform' | undefined;
+  /** The questions asked, by id. */
+  readonly reporterQuestions = new Map<
+    string,
+    { id: string; request: string; itemId: string; text: string; token: string }
+  >();
+  /** Questions asked per report since a person on the team last stepped in. */
+  private readonly askedSinceStepIn = new Map<string, number>();
+
+  /** A person on the team comments in the report's thread: two more questions are allowed. */
+  stepIn(itemId: string): void {
+    this.askedSinceStepIn.delete(itemId.toLowerCase());
+  }
+
+  /** POST /v1/session/reporter-questions, checked in the server's order. */
+  askReporter(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
+    const s = this.live(token);
+    const request = String(body.request);
+    const r = this.requests.get(request.toLowerCase());
+    if (r === undefined || r.token !== token) {
+      throw new SessionRefusal('request_not_found', { request_id: request });
+    }
+    if (r.status === 'closed') throw new SessionRefusal('request_closed', { request_id: request });
+    if (r.kind !== 'triage') {
+      throw new SessionRefusal('request_kind_mismatch', { request_id: request, kind: r.kind });
+    }
+    const ref = String(body.item).replace(/^#/, '');
+    const item = r.items.find((i) => i.id === ref.toLowerCase() || i.key === ref.toUpperCase());
+    if (item === undefined) {
+      throw new SessionRefusal('request_result_private', { request_id: request });
+    }
+    if (!this.reportItems.has(item.id))
+      throw new SessionRefusal('not_a_report', { item: item.key });
+    if (this.reporterQuestionsOff !== undefined) {
+      throw new SessionRefusal('reporter_questions_off', { by: this.reporterQuestionsOff });
+    }
+    const id = String(body.id).toLowerCase();
+    const earlier = this.reporterQuestions.get(id);
+    if (earlier !== undefined) {
+      return { status: 200, body: this.questionOut(earlier.id, item, false) };
+    }
+    const text = String(body.text);
+    // The server's form rules, in short (the client checks them first, so a test scripts the rest).
+    const rule = !/[?¿]/.test(text)
+      ? 'not_a_question'
+      : Array.from(text).length > 500
+        ? 'too_long'
+        : /:\/\/|www\.|@|`|[A-Z][A-Z0-9]{1,9}-\d/.test(text)
+          ? 'link'
+          : undefined;
+    if (rule !== undefined) throw new SessionRefusal('reporter_text_invalid', { rule });
+    if ((this.askedSinceStepIn.get(item.id) ?? 0) >= 2) {
+      throw new SessionRefusal('reporter_question_limit', { limit: 'per_report' });
+    }
+    // Posted first in the item's thread, as the session, under the request's place and cap.
+    this.checkRequestPost(token, request, { thread_id: item.id });
+    this.postMessage(s, { id, text, thread_id: item.id, request });
+    this.noteRequestPost(token, request, item.id);
+    this.askedSinceStepIn.set(item.id, (this.askedSinceStepIn.get(item.id) ?? 0) + 1);
+    this.reporterQuestions.set(id, { id, request, itemId: item.id, text, token });
+    return { status: 201, body: this.questionOut(id, item, true) };
+  }
+
+  private questionOut(id: string, item: { id: string; key: string }, created: boolean) {
+    return {
+      created,
+      question: {
+        id,
+        item: item.key,
+        status: 'pending',
+        reason: null,
+        sends_at: '2026-10-07T15:02:00.000Z',
+      },
+    };
   }
 
   /** The session of a token (tests). */

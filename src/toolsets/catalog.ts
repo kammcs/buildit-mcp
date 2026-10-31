@@ -45,8 +45,10 @@ import {
   proposeBulkUpdateTool,
   proposeDeleteItemTool,
   proposeFieldChangeTool,
+  proposeItemChangesTool,
   proposeLabelChangeTool,
   proposeMoveItemTool,
+  proposeNewItemsTool,
   proposeWorkflowChangeTool,
   proposeWorkTypeChangeTool,
 } from '../tools/plans.js';
@@ -79,6 +81,8 @@ export const CATALOG: readonly ToolDefinition[] = [
   listReleasesTool,
   planReleaseTool,
   writeReleaseNotesTool,
+  proposeNewItemsTool,
+  proposeItemChangesTool,
   // pages
   listPagesTool,
   searchPagesTool,

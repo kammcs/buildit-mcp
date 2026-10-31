@@ -72,6 +72,7 @@ import { createReplyTool, createTurnEndedTool } from '../tools/reply.js';
 import { createGetAttachmentTool } from '../tools/attachment.js';
 import { createListThreadsTool } from '../tools/threads.js';
 import { createHandoffTools } from '../tools/handoff.js';
+import { createAskReporterTool } from '../tools/reporter.js';
 import { suggestedCapabilities } from '../capabilities.js';
 import { CATALOG } from '../toolsets/catalog.js';
 import type { ToolDefinition, ToolPolicy } from '../toolsets/registry.js';
@@ -370,8 +371,8 @@ function noteActivity(state: ChannelState, tool: string, args: unknown): void {
 }
 
 /**
- * The tools only channel mode has (reply, ask, list_threads, and the
- * plugin's hooks: turn_ended, approve and the hooks that end approvals),
+ * The tools only channel mode has (reply, ask, list_threads, ask_reporter,
+ * and the plugin's hooks: turn_ended, approve and the hooks that end approvals),
  * under the operator's read-only and exclude rules.
  */
 function channelTools(
@@ -390,6 +391,7 @@ function channelTools(
     createApproveTool(state, approve),
     ...createApprovalHookTools(state),
     ...createHandoffTools(state),
+    createAskReporterTool(state),
   ].filter(
     (tool) =>
       (!policy.readOnly || tool.annotations.readOnlyHint || READ_ONLY_SAFE_HOOKS.has(tool.name)) &&

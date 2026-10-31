@@ -32,6 +32,7 @@ import {
   dmThread,
   isItemThread,
   isUuid,
+  requestThread,
   resolveThread,
 } from '../channel/threads.js';
 import { ToolInputError } from '../errors.js';
@@ -75,7 +76,7 @@ const RequestInput = z
   .uuid()
   .optional()
   .describe(
-    'The request_id of a <channel> tag with event="request", when this post is its result. A request whose result is "dm" (a catch-up) goes only to your direct message: leave thread_id and item out.',
+    'The request_id of a <channel> tag with event="request", when this post is its result. result="dm" (a catch-up) goes only to your direct message: leave thread_id and item out. result="thread" or "item_thread" goes only to that request\'s own thread or item thread (the default; with several items, name one).',
   );
 
 /**
@@ -152,7 +153,7 @@ const ReplyWithFilesOutputSchema = ReplyOutputSchema.extend({
 
 const BASE_DESCRIPTION = `Answers the person who directs this session, in buildIt.Social: posts your text as the agent (labelled with this session) in its conversation with them, or in a work item's thread when the message came from one (meta item), where they read it on their computer or phone. Use it for every answer to a message that arrived as a <channel> tag: pass that tag's thread_id so the answer lands in the same thread (left out, it goes to the thread of the latest message, mention or assignment; with none yet, it starts a new message in your conversation with them). For an item assigned to you, post progress, questions and the result in its thread: pass its thread_id, or item with its key. You can post only in the threads of items you work on; everyone in the project's channel reads them. Markdown, at most ${REPLY_MAX_CHARS} characters; split longer answers. idempotency_key makes a retry return the first message instead of posting twice; one is generated and returned if you leave it out.`;
 
-const REQUEST_DESCRIPTION = ` For the result of a request (a <channel> tag with event="request"), pass its request_id as request, and post where the tag's result says: result="dm" means your direct message only, so leave thread_id and item out. Anything else about a request (a note, a queued notice) goes with dm: true, so it never lands in an item's thread.`;
+const REQUEST_DESCRIPTION = ` For the result of a request (a <channel> tag with event="request"), pass its request_id as request, and post where the tag's result says: result="dm" means your direct message only, so leave thread_id and item out; "thread" and "item_thread" mean the request's own thread or item thread, which request picks for you. Anything else about a request (a question, a queued notice) goes with dm: true.`;
 
 const FILES_DESCRIPTION = ` To share files (a render, a screenshot, a log, a document), pass their local paths in files: they are posted at once in the same thread, with the text, and everyone who reads the thread can open them. Before anything is uploaded, every file is checked: it must be inside the project folder or the temp folder, not a secret store (.env files, keys, certificates, .ssh and the like), not a program, within the size limit (250 MiB for a video, 100 MiB for anything else), and a text file must not hold anything that looks like a credential. Location is removed from photos and videos. One refused file sends nothing, and the error says why: fix it and send the reply again. Share only files the person asked for or that your work needs.`;
 
@@ -210,6 +211,9 @@ async function replyThread(
     return dmThread(state);
   }
   if (args.request === undefined) return resolveThread(state, ctx, args, 'reply');
+  // A thread's or an item's result: its own place, whatever thread is the latest.
+  const placed = requestThread(state, args.request, args);
+  if (placed !== undefined) return placed.threadId;
   const known = state.requests.get(args.request.toLowerCase());
   if (known?.place === 'dm') {
     if (args.item !== undefined) throw new ToolInputError(PRIVATE_RESULT);
