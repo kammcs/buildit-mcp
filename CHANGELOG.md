@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [0.11.0] - Unreleased
+## [0.11.0] - 2026-10-31
 
 Built on version 1.13.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). Requests need a buildIt.Social server with agent API 1.13.0; an older server sends none, and `read_channel`'s `active_since` is read as `since` there.
 
