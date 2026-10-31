@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [0.10.0] - Unreleased
+## [0.10.0] - 2026-10-31
 
 ### Questions: one card per ask (channel mode, plugin)
 
@@ -18,6 +18,10 @@ All notable changes to buildit-mcp are listed here. The project follows [semanti
   - **Older servers:** a server that refuses shared answers (`card_invalid` naming `responses`) gets the same card again, private, with the same id, once.
 - `buildQuestionCards` is now `buildQuestionCard` (one card); `splitText` is gone.
 - The test fake takes shared answers with `sessions.sharedResults = true` (a newer server than the contract's); by default it refuses them at `responses`, as the contract says.
+
+### Fixed
+
+- **A question cancelled while its card is being posted now closes the card.** Before, the cancel could cut the post short and leave an open card nobody was waiting for, answerable until it expired. The post now finishes, and the wait that follows sees the cancel and closes the card.
 
 ## [0.9.0] - 2026-10-30
 

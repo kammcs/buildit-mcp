@@ -1,6 +1,6 @@
 {
   "name": "buildit",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "license": "MIT",
   "description": "Talk to this Claude Code session from buildIt.Social: messages, questions and tool approvals as cards.",
   "author": {
@@ -10,7 +10,7 @@
   "mcpServers": {
     "buildit": {
       "command": "npx",
-      "args": ["-y", "@kammcs/buildit-mcp@0.9.0", "--channel", "--from-plugin"],
+      "args": ["-y", "@kammcs/buildit-mcp@0.10.0", "--channel", "--from-plugin"],
       "env": {
         "BUILDIT_TOOLSETS": "all",
         "BUILDIT_ASK_TIMEOUT_MINUTES": "${user_config.ask_timeout_minutes}",
