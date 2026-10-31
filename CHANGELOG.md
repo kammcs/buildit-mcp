@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [0.13.0] - Unreleased
+## [0.13.0] - 2026-10-31
 
 Built on version 1.15.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). The new tools and `request` on a card need a 1.15.0 server: on an older one they are refused before any call (`ask_reporter` isn't listed), and everything else works as in 0.12.0.
 
