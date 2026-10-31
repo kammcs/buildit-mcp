@@ -706,12 +706,19 @@ export function refusesResponses(err: unknown): boolean {
  * that refuses that (`card_invalid` on `responses`) gets the same card,
  * private, with the same id, once. A refused post makes no message, so the
  * second post isn't answered with the first.
+ *
+ * Not with the call's signal: a cancel that cut the post short could leave
+ * a card the server already made open, with nobody waiting for its answer.
+ * The post finishes (each attempt has the client's timeout), and the wait
+ * that follows sees the cancel and closes the card, after the post.
  */
 async function postCard(
   ctx: ToolContext,
   init: { id: string; text: string; threadId: string | undefined; card: Record<string, unknown> },
   closes: string,
 ): Promise<void> {
+  const options = { ...ctx.apiOptions };
+  delete options.signal;
   const post = (card: Record<string, unknown>) =>
     postSessionMessage(
       ctx.api,
@@ -721,7 +728,7 @@ async function postCard(
         ...(init.threadId === undefined ? {} : { thread_id: init.threadId }),
         card,
       },
-      ctx.apiOptions,
+      options,
     );
   const shared = asRecord(init.card.responses)?.visibility === 'shared';
   try {

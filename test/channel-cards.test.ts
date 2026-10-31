@@ -522,6 +522,28 @@ describe('ask from Claude', () => {
     expect(card!.closedBy).toBe('app');
   });
 
+  it('closes the card when the call is cancelled while the card is posted', async () => {
+    api.sessions.open(TOKEN);
+    const c = await start();
+    await ready();
+    const abort = new AbortController();
+    // The cancel lands after the server made the card, before its answer reaches the tool.
+    const post = api.sessions.post.bind(api.sessions);
+    api.sessions.post = (token, body) => {
+      const r = post(token, body);
+      if (body.card !== undefined) abort.abort();
+      return r;
+    };
+    const pending = c.client
+      .callTool({ name: 'ask', arguments: { questions: [color] } }, { signal: abort.signal })
+      .catch(() => 'cancelled');
+    expect(await pending).toBe('cancelled');
+    await waitFor(() => session().cards.size === 1);
+    const [card] = [...session().cards.values()];
+    await waitFor(() => card!.closedAt !== null);
+    expect(card!.closedBy).toBe('app');
+  });
+
   it('says the session ended, after it has', async () => {
     api.sessions.open(TOKEN);
     const c = await start();
