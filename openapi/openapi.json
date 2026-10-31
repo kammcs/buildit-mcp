@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "buildIt.Social agent API",
-    "version": "1.13.0",
+    "version": "1.14.0",
     "summary": "The versioned API that AI agents (through buildit-mcp) use to work with an org's projects, pages and channels.",
     "description": "Every call runs as the token's owner, so the app's permissions, history and notifications apply. v1 only grows: new operations, optional request fields, response fields and enum values; clients must ignore what they don't know. A breaking change is /v2, with /v1 kept for 12 months. The oldest supported buildit-mcp is 0.1.0. Generated from the API's schemas; don't edit by hand."
   },
@@ -103,7 +103,7 @@
                   "$ref": "#/components/schemas/MetaResponse"
                 },
                 "example": {
-                  "api_version": "1.13.0",
+                  "api_version": "1.14.0",
                   "min_mcp_version": "0.1.0",
                   "deprecations": [],
                   "operations": [
@@ -2117,7 +2117,7 @@
           "items"
         ],
         "summary": "List an item's comments",
-        "description": "The comments in the item's thread, paged, with its system lines (an agent waiting, picking it up, a handoff, handed back or expired) as entries of kind system whose body is the line in English.",
+        "description": "The comments in the item's thread, paged, with its system lines (an agent waiting, picking it up, a handoff, handed back or expired) as entries of kind system whose body is the line in English. Since 1.14.0, `since` keeps the comments posted after a time.",
         "parameters": [
           {
             "name": "key",
@@ -2142,6 +2142,16 @@
               ]
             },
             "example": "asc"
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Only comments posted after this time (RFC 3339), for catching up on an item's thread. Since API 1.14.0 (an older server ignores it and lists them all: check get_meta's api_version).",
+            "schema": {
+              "$ref": "#/components/schemas/Timestamp"
+            },
+            "example": "2026-10-06T00:00:00Z"
           },
           {
             "name": "cursor",
@@ -6170,7 +6180,7 @@
           "chat"
         ],
         "summary": "Read a channel",
-        "description": "Top-level messages, newest first, optionally since a time. Item threads aren't listed. Since 1.13.0, `active_since` lists the messages created or replied to after a time, to catch up.",
+        "description": "Top-level messages, newest first, optionally since a time. Item threads aren't listed, except with `active_since`. Since 1.13.0, `active_since` lists the messages created or replied to after a time, to catch up. Since 1.14.0 it also lists the channel's work item threads with comments after that time (kind work_item, with `item`: key, title, status) when the token reads the project (projects:read); list_comments with `since` reads their new comments.",
         "parameters": [
           {
             "name": "channel",
@@ -6188,17 +6198,17 @@
             "description": "Only messages created after this time.",
             "schema": {
               "$ref": "#/components/schemas/Timestamp"
-            },
-            "example": "2026-10-06T00:00:00Z"
+            }
           },
           {
             "name": "active_since",
             "in": "query",
             "required": false,
-            "description": "Only messages created or replied to after this time: a reply in an older thread brings its top-level message back (read the replies with get_thread). For catching up on a channel. With `since` too, both apply. Since API 1.13.0 (an older server ignores it: check get_meta's api_version).",
+            "description": "Only messages created or replied to after this time: a reply in an older thread brings its top-level message back (read the replies with get_thread). For catching up on a channel. With `since` too, both apply. Since API 1.13.0 (an older server ignores it: check get_meta's api_version). Since API 1.14.0 it also lists the threads of the channel's work items that had comments after this time, when the token reads the project (projects:read): entries of kind work_item with their `item` (key, title, status), in order by the item's creation; read their comments with list_comments and `since`. Work items without new comments aren't listed.",
             "schema": {
               "$ref": "#/components/schemas/Timestamp"
-            }
+            },
+            "example": "2026-10-06T00:00:00Z"
           },
           {
             "name": "cursor",
@@ -6284,6 +6294,37 @@
                         "display_name": "Sam Lee",
                         "email": "sam@example.com",
                         "type": "user"
+                      }
+                    },
+                    {
+                      "id": "00000000-0000-4000-8000-000000000032",
+                      "channel_id": "00000000-0000-4000-8000-00000000000b",
+                      "author": null,
+                      "kind": "work_item",
+                      "body": "",
+                      "code": null,
+                      "code_language": null,
+                      "file": null,
+                      "photos": [],
+                      "mentions": [],
+                      "reply_count": 4,
+                      "last_reply_at": "2026-10-07T15:20:00Z",
+                      "created_at": "2026-10-02T10:00:00Z",
+                      "edited_at": null,
+                      "deleted": false,
+                      "via_agent": null,
+                      "pinned": false,
+                      "pinned_at": null,
+                      "pinned_by": null,
+                      "item": {
+                        "id": "00000000-0000-4000-8000-000000000032",
+                        "key": "DEMO-42",
+                        "title": "Export reports as CSV",
+                        "status": {
+                          "id": "00000000-0000-4000-8000-000000000020",
+                          "name": "In progress",
+                          "category": "started"
+                        }
                       }
                     }
                   ],
@@ -20156,7 +20197,7 @@
           "items",
           "next_cursor"
         ],
-        "description": "Top-level messages, newest first by when they were posted; next_cursor goes further back (down to `since`, or `active_since`)."
+        "description": "Top-level messages, newest first by when they were posted; next_cursor goes further back (down to `since`, or `active_since`). With `active_since`, also the work items' threads with new comments (kind work_item, with `item`; since API 1.14.0), placed by when the item was created."
       },
       "ListChannelsResponse": {
         "type": "object",
@@ -20748,6 +20789,10 @@
               }
             ],
             "description": "Who pinned it: a person, or a bot of the org (type app). Null when it isn't pinned, and for a deleted account."
+          },
+          "item": {
+            "description": "Only on a work item's thread (kind work_item), which list_channel_messages lists with `active_since` when the item's thread had comments after that time and the token reads the item's project (projects:read): the item. Its reply_count and last_reply_at are the thread's; read the comments with list_comments (the item's key, and `since` for the new ones). Absent on every other message. Since API 1.14.0.",
+            "$ref": "#/components/schemas/MessageItem"
           }
         },
         "required": [
@@ -20806,6 +20851,31 @@
           "type"
         ],
         "description": "Who sent a message: a person (the fields of User) or a bot of the org. Null for lines without a sender and for a deleted account."
+      },
+      "MessageItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Uuid"
+          },
+          "key": {
+            "description": "The item's key (DEMO-42): list_comments takes it.",
+            "$ref": "#/components/schemas/ItemKey"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusBrief"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "title",
+          "status"
+        ],
+        "description": "The work item whose thread a channel message is: its key, title and status."
       },
       "MessageKind": {
         "type": "string",

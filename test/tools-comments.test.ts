@@ -59,6 +59,56 @@ describe('list_comments', () => {
     expect(r.text).toMatch(/author="Test User" via_agent="Test token">/);
   });
 
+  it('keeps the comments posted after since (1.14.0), sent to the API', async () => {
+    const c = await client(TOKENS.read);
+    const r = await c.call('list_comments', { item: 'DEMO-42', since: '2026-10-06T00:00:00Z' });
+    expect(r.isError).toBe(false);
+    const comments = r.structured.comments as { author: { name: string } }[];
+    expect(comments.map((x) => x.author.name)).toEqual(['Test User']);
+    expect(r.structured).not.toHaveProperty('note');
+    expect(api.requests.at(-1)?.query).toBe('?since=2026-10-06T00%3A00%3A00Z');
+    expect(r.text).toContain('1 comment(s) on DEMO-42 since then, oldest first:');
+    const none = await c.call('list_comments', { item: 'DEMO-42', since: '2026-10-07T14:03:00Z' });
+    expect(none.structured.comments).toEqual([]);
+    expect(none.text).toContain('No comments on DEMO-42 since then.');
+    const bad = await c.call('list_comments', { item: 'DEMO-42', since: 'yesterday' });
+    expect(bad.isError).toBe(true);
+  });
+
+  it('applies since page by page on an older server, and says so', async () => {
+    api.meta = { ...api.meta, api_version: '1.13.0' };
+    api.compat.v114 = false;
+    const c = await client(TOKENS.read);
+    const r = await c.call('list_comments', { item: 'DEMO-42', since: '2026-10-06T00:00:00Z' });
+    expect(r.isError).toBe(false);
+    expect(
+      (r.structured.comments as { author: { name: string } }[]).map((x) => x.author.name),
+    ).toEqual(['Test User']);
+    // Not sent: the server would ignore it.
+    expect(api.requests.at(-1)?.query).toBe('');
+    expect(r.structured.note).toContain('older than agent API 1.14.0');
+    expect(r.text).toContain('applied to each page');
+    // Newest first, a page that reaches before since is the last.
+    const first = await c.call('list_comments', {
+      item: 'DEMO-42',
+      order: 'desc',
+      limit: 1,
+      since: '2026-10-06T00:00:00Z',
+    });
+    expect((first.structured.comments as unknown[]).length).toBe(1);
+    const cursor = first.structured.next_cursor as string;
+    expect(cursor).toBeTruthy();
+    const second = await c.call('list_comments', {
+      item: 'DEMO-42',
+      order: 'desc',
+      limit: 1,
+      since: '2026-10-06T00:00:00Z',
+      cursor,
+    });
+    expect(second.structured.comments).toEqual([]);
+    expect(second.structured.next_cursor).toBeNull();
+  });
+
   it('pages newest first with a cursor', async () => {
     const c = await client(TOKENS.read);
     const first = await c.call('list_comments', { item: 'DEMO-42', order: 'desc', limit: 1 });

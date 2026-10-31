@@ -69,6 +69,20 @@ export function apiAtLeast(api: ApiClient, version: string): boolean | undefined
   return known === undefined ? undefined : compareVersions(known, version) >= 0;
 }
 
+/**
+ * Whether the API serves `version` or newer: from /v1/meta, read once when
+ * this process hasn't yet; true when it can't say, so the API answers for
+ * itself.
+ */
+export async function servesApi(api: ApiClient, version: string): Promise<boolean> {
+  let known = apiAtLeast(api, version);
+  if (known === undefined) {
+    await api.getMeta().catch(() => undefined);
+    known = apiAtLeast(api, version);
+  }
+  return known !== false;
+}
+
 /** Refuses `what` when the API is known to be older than `version`. */
 export function requireApi(api: ApiClient, version: string, what: string): void {
   if (apiAtLeast(api, version) === false) {

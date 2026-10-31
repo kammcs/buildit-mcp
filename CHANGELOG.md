@@ -2,6 +2,18 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.12.0] - Unreleased
+
+Built on version 1.14.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). Nothing needs 1.14.0: on a 1.13.0 server `read_channel` lists no item threads and says so, and `list_comments` applies `since` itself.
+
+### A catch-up reads the work items' threads
+
+In a project's channel most of the talk is in the items' threads, which a catch-up missed: `read_channel` listed only the channel's own messages.
+
+- **`read_channel`** with `active_since` also lists the work items' threads with comments after that time (agent API 1.14.0, for a token that reads the project), marked as item threads: `kind` `work_item` and `item` (key, title, status) in the structured output; in the text, "item thread DEMO-42", its comment count and latest, how to read them, and the key, title and status in an `untrusted_content` block. They are placed by when the item was created. On an older server the `note` says they are missing and how to find them (`search_items` with `activity_since`).
+- **`list_comments`** takes `since`: only the comments posted after a time. The tool also applies it to each page itself, so an older server (which ignores it) still gets it right page by page, with a `note`; newest first, a page that reaches before `since` is the last.
+- **The `buildit-catch-up` skill** reads each item thread's new comments (`list_comments` with `since`) and summarizes them by item (key and title), with the channel's own messages; decisions and questions to the person from item threads go in those sections. A summary longer than one post (4,000 characters) goes in parts, each with `request`. The `buildit-requests` rules and the request worker say so too.
+
 ## [0.11.0] - 2026-10-31
 
 Built on version 1.13.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). Requests need a buildIt.Social server with agent API 1.13.0; an older server sends none, and `read_channel`'s `active_since` is read as `since` there.
