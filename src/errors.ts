@@ -17,6 +17,7 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 
 import { ApiError, LOCAL_ERROR_CODES } from './api/client.js';
 import { ERROR_HINTS } from './api/generated/operations.js';
+import { PART2_ERROR_HINTS } from './api/part2.js';
 import type { Error as ApiErrorBody } from './api/generated/strict.js';
 import { scrubString } from './log.js';
 import { neutralize, sanitizeLabel, wrapUntrusted } from './untrusted.js';
@@ -61,7 +62,7 @@ const NEW_PLAN_NOTE =
 const TOOL_NOTES: Record<string, (details: Record<string, unknown>) => string | undefined> = {
   // reply's `request` (agent API 1.13.0).
   request_result_private: () =>
-    "This request's result is private: a catch-up goes only to your direct message with the person. Send it again with reply, without thread_id or item, and with the same request.",
+    'This request\'s result goes only to its own place: a catch-up\'s (result="dm") only to your direct message with the person: send it again without thread_id or item, and with the same request; a thread\'s or an item\'s (result="thread" or "item_thread") only to the request\'s thread or one of its items\' threads, so send it again with request and no thread named, or with one of its items.',
   request_not_found: () =>
     "This request isn't this session's: use the request_id of the <channel> tag (event=request) you are answering.",
   request_closed: () =>
@@ -172,7 +173,13 @@ function inServerTerms(hint: string): string {
 
 /** The next step for an error: the API's hint, else the contract's, else this server's own. */
 export function hintFor(code: string, apiHint?: string): string | undefined {
-  return apiHint ?? (ERROR_HINTS as Record<string, string | undefined>)[code] ?? LOCAL_HINTS[code];
+  return (
+    apiHint ??
+    (ERROR_HINTS as Record<string, string | undefined>)[code] ??
+    // TODO(lane B openapi): in ERROR_HINTS once the contract is 1.15.0.
+    (PART2_ERROR_HINTS as Record<string, string | undefined>)[code] ??
+    LOCAL_HINTS[code]
+  );
 }
 
 /** Lower case letters and digits only, to tell whether one text already says another. */

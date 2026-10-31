@@ -501,3 +501,122 @@ describe('scope gating', () => {
     expect(item('DEMO-43')).toBeDefined();
   });
 });
+
+describe('planning: new items and item changes (agent API 1.15.0)', () => {
+  it('drafts a story with subtasks, and creates them only on apply_plan', async () => {
+    const c = await client(TOKENS.full, { toolsets: ['items', 'planning'] });
+    const before = api.store.items.length;
+    const p = await propose(c, 'propose_new_items', {
+      project: 'demo',
+      items: [
+        {
+          ref: 'a1',
+          title: 'Export reports as CSV',
+          parent: 'DEMO-12',
+          description: '## Acceptance criteria\n- [ ] A CSV downloads',
+          labels: ['backend'],
+          priority: 'high',
+        },
+        { ref: 'a2', title: 'Write the CSV writer', parent: { ref: 'a1' } },
+      ],
+    });
+    expect(p.structured).toMatchObject({ action: 'create_items', item_count: 2 });
+    expect(p.text).toContain('Creates 2 item(s) in DEMO.');
+    expect(p.text).toContain('+ Story "Export reports as CSV" — parent: DEMO-12');
+    expect(p.text).toContain('+ Subtask "Write the CSV writer" — parent: {ref a1}');
+    // The request went out with the key as a key, and the ref parent as given.
+    const sent = api.requests.filter((r) => r.path === '/v1/plans').at(-1)?.body as {
+      action: string;
+      args: { project: string; items: Record<string, unknown>[] };
+    };
+    expect(sent.action).toBe('create_items');
+    expect(sent.args.items[0]).toMatchObject({ parent: 'DEMO-12' });
+    expect(sent.args.items[1]).toMatchObject({ parent: { ref: 'a1' } });
+
+    const applied = await c.call('apply_plan', { handle: p.handle });
+    expect(applied.isError, applied.text).toBe(false);
+    expect(api.store.items).toHaveLength(before + 2);
+    const keys = applied.structured.items as string[];
+    expect(keys).toHaveLength(2);
+    expect(applied.text).toContain(`Created 2 item(s): ${keys.join(', ')}.`);
+    const story = item(keys[0]!)!;
+    const sub = item(keys[1]!)!;
+    expect(sub.parentId).toBe(story.id);
+    expect(story.parentId).toBe(item('DEMO-12')!.id);
+  });
+
+  it('changes several items, each its own, with links, only on apply_plan', async () => {
+    const c = await client(TOKENS.full, { toolsets: ['items', 'planning'] });
+    const p = await propose(c, 'propose_item_changes', {
+      items: [
+        {
+          item: 'DEMO-44',
+          priority: 'high',
+          add_labels: ['frontend'],
+          add_links: [{ kind: 'relates', target: 'DEMO-42' }],
+        },
+        {
+          item: 'DEMO-42',
+          description: { mode: 'append', text: '- [ ] Shows a notice', description_version: 2 },
+        },
+      ],
+    });
+    expect(p.structured).toMatchObject({ action: 'edit_items', item_count: 2 });
+    expect(p.text).toContain('DEMO-44 priority: urgent → high');
+    expect(p.text).toContain('- link DEMO-44 relates DEMO-42: link');
+    expect(item('DEMO-44')!.labels).not.toContain('frontend');
+    const applied = await c.call('apply_plan', { handle: p.handle });
+    expect(applied.isError, applied.text).toBe(false);
+    expect(applied.structured).toMatchObject({
+      action: 'edit_items',
+      items: ['DEMO-44', 'DEMO-42'],
+    });
+    expect(applied.text).toContain('Changed 2 item(s): DEMO-44, DEMO-42; 1 link(s) added.');
+    expect(item('DEMO-44')!.labels).toContain('frontend');
+    expect(item('DEMO-42')!.description).toContain('Shows a notice');
+  });
+
+  it('refuses a replace whose description moved since the preview (plan_stale)', async () => {
+    const c = await client(TOKENS.full, { toolsets: ['items', 'planning'] });
+    const p = await propose(c, 'propose_item_changes', {
+      items: [
+        {
+          item: 'DEMO-42',
+          description: { mode: 'replace', text: 'A new spec.', description_version: 2 },
+        },
+      ],
+    });
+    item('DEMO-42')!.descriptionVersion = 3;
+    const applied = await c.call('apply_plan', { handle: p.handle });
+    expect(applied.isError).toBe(true);
+    expect(applied.text).toContain('plan_stale');
+    expect(item('DEMO-42')!.description).not.toBe('A new spec.');
+  });
+
+  it('keeps a plan to one project', async () => {
+    const c = await client(TOKENS.full, { toolsets: ['items', 'planning'] });
+    const r = await c.call('propose_item_changes', {
+      items: [
+        { item: 'DEMO-44', priority: 'high' },
+        { item: 'OPS-1', priority: 'high' },
+      ],
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('One project per plan.');
+  });
+
+  it('is listed with the planning toolset for a writer, and refused by an older API', async () => {
+    api.compat.v115 = false;
+    api.meta = { ...api.meta, api_version: '1.14.0' };
+    const c = await client(TOKENS.full, { toolsets: ['items', 'planning'] });
+    await c.call('whoami');
+    const before = api.requests.length;
+    const r = await c.call('propose_new_items', {
+      project: 'DEMO',
+      items: [{ ref: 'a1', title: 'One' }],
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("needs buildIt.Social's agent API 1.15.0 or newer");
+    expect(api.requests.length).toBe(before);
+  });
+});

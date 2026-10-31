@@ -67,7 +67,8 @@ export const TOOLSETS: readonly ToolsetInfo[] = [
   },
   {
     name: 'planning',
-    description: 'Sprints and releases, and release notes pages.',
+    description:
+      'Sprints and releases, release notes pages, and new items or item changes drafted as one plan, previewed and confirmed.',
     defaultEnabled: false,
     // Release notes are written as a page.
     scopes: ['projects:read', 'projects:write', 'pages:write'],

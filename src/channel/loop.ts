@@ -121,10 +121,17 @@ const ITEMS_MAX = 500;
 /** How many requests are remembered (id to kind and place), for reply's check. */
 const REQUESTS_MAX = 200;
 
-/** A request this session was sent: what reply checks before it posts a result. */
+/**
+ * A request this session was sent: what reply, the propose_* cards and
+ * ask_reporter check before they post for it.
+ */
 export interface KnownRequest {
   kind: string;
   place: ResultPlace;
+  /** A `thread` result's place: the context's root message (its thread id). */
+  thread?: string | undefined;
+  /** An `item_thread` result's places: the context's items (an item's thread id is its id). */
+  items?: readonly { key: string; id: string }[] | undefined;
 }
 
 /**
@@ -799,9 +806,15 @@ export class ChannelLoop {
     this.seen.add(seenKey);
     this.noteLocale({ locale: built.meta.locale });
     await this.send({ content: built.content, meta: built.meta });
+    const ctx = built.context;
+    const items = ctx.type === 'item' ? [ctx.item] : ctx.type === 'items' ? ctx.items : undefined;
+    // The context's items: a key named by a later post finds its thread without get_item.
+    for (const i of items ?? []) state.rememberItem(i.key, i.id);
     state.rememberRequest(built.requestId, {
       kind: request.kind,
       place: built.meta.result as ResultPlace,
+      ...(ctx.type === 'thread' ? { thread: ctx.thread_id } : {}),
+      ...(items === undefined ? {} : { items }),
     });
     logger.info('request delivered', {
       event_id: event.id,

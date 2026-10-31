@@ -31,8 +31,18 @@ import { z } from 'zod';
 import type { CreatePlanResponse, PlanEffect } from '../api/generated/schemas.js';
 import type { CreatePlanBody } from '../api/generated/strict.js';
 import { ApiError } from '../api/client.js';
+import {
+  applyPlan,
+  CREATE_ITEMS_MAX,
+  EDIT_ITEMS_MAX,
+  LINKS_PER_ITEM_MAX,
+  PART2_API,
+  PART2_PLAN_SCOPES,
+  type Part2PlanBody,
+  type PostPlanCardBodyWithRequest,
+} from '../api/part2.js';
 import { postPlanCard } from '../channel/api.js';
-import { isUuid, resolveThread } from '../channel/threads.js';
+import { isUuid, requestThread, resolveThread } from '../channel/threads.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolContext, type ToolOutput } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
@@ -43,6 +53,7 @@ import {
   ItemRefInput,
   planScopesOf,
   ProjectKeyInput,
+  requireApi,
   scopesOf,
   UserRefInput,
   wrapLines,
@@ -236,6 +247,14 @@ export const CARD_STEP =
 export const CARD_IN_DM_NOTE =
   "The card was posted in your direct message with the person, not in the item's thread: the plan reaches outside the item's project, and an item's thread takes only cards for its own project. Tell the person in the item's thread that the approval waits in their direct message.";
 
+/** What the result adds when the card answers a request. */
+export const REQUEST_CARD_NOTE =
+  "The card is the request's result, in its place: the request is answered. Don't post the result again; once the outcome arrives, a one-line note in that thread (reply with request) is enough, or nothing.";
+
+/** What a refused request card says: it never moves to the direct message. */
+const REQUEST_CARD_REFUSED =
+  "A request's card goes only to the request's place, so it wasn't posted anywhere else, and the plan can't be applied without its card. Fix what the error says (a plan about another project can't go in this thread; split it, or leave that part out), then propose again; or tell the person in your direct message (reply with dm: true, without request).";
+
 /** What a session's result says when its card couldn't be posted. */
 export function cardFailedStep(code: string): string {
   return `The approval card couldn't be posted in buildIt.Social (${sanitizeLabel(code, 60)}), and this session can't apply plans itself. Tell the person; propose again in a moment, or they can make the change in the app.`;
@@ -259,12 +278,15 @@ const CARD_THREAD = {
 async function propose(
   ctx: ToolContext,
   cardThread: string | undefined,
-  body: CreatePlanBody,
+  // TODO(lane B openapi): CreatePlanBody alone once the contract has create_items and edit_items.
+  body: CreatePlanBody | Part2PlanBody,
+  request?: string,
 ): Promise<ToolOutput<PlanOut>> {
+  if (request !== undefined) requireApi(ctx.api, PART2_API, 'request');
   // Which thread the card goes to is settled first: a refusal creates no plan.
-  const thread = await cardThreadOf(ctx, cardThread);
-  const out = planOutput(await ctx.call('create_plan', { body }));
-  const carded = await postCard(ctx, out.structured.handle, thread);
+  const thread = await cardThreadOf(ctx, cardThread, request);
+  const out = planOutput(await ctx.call('create_plan', { body: body as CreatePlanBody }));
+  const carded = await postCard(ctx, out.structured.handle, thread, request);
   if (carded === undefined) return out;
   if ('failed' in carded) {
     const step = cardFailedStep(carded.failed);
@@ -273,7 +295,11 @@ async function propose(
       text: out.text.replace(CONFIRM_STEP, step),
     };
   }
-  const step = carded.inDm ? `${CARD_STEP} ${CARD_IN_DM_NOTE}` : CARD_STEP;
+  const step = carded.inDm
+    ? `${CARD_STEP} ${CARD_IN_DM_NOTE}`
+    : request !== undefined
+      ? `${CARD_STEP} ${REQUEST_CARD_NOTE}`
+      : CARD_STEP;
   const structured = { ...out.structured, expires_at: carded.expiresAt, next_step: step };
   const text = out.text
     .replace(
@@ -287,26 +313,44 @@ async function propose(
 /**
  * With a session token: posts the plan as a card for the owner, in the
  * thread of the latest message (when this server is the channel and knows
- * one). Undefined for a personal access token (the two-step flow stands);
- * `failed` with the code when the post fails.
+ * one), or a request's place. Undefined for a personal access token (the
+ * two-step flow stands); `failed` with the code when the post fails.
+ *
+ * A card for a request goes only to the request's place: a refusal there
+ * (plan_outside_thread, request_closed, ...) is thrown, never moved to the
+ * direct message.
  */
 async function postCard(
   ctx: ToolContext,
   handle: string,
   threadId: string | undefined,
+  request?: string,
 ): Promise<{ expiresAt: string; inDm: boolean } | { failed: string } | undefined> {
   if (!ctx.api.sessionToken) return undefined;
   const state = ctx.channel;
-  const post = (thread: string | undefined) =>
-    postPlanCard(
-      ctx.api,
-      {
-        handle,
-        id: uuidV5(`plan:${handle}`),
-        ...(thread === undefined ? {} : { thread_id: thread }),
-      },
-      ctx.apiOptions,
-    );
+  const post = (thread: string | undefined) => {
+    // TODO(lane B openapi): post_plan_card's body has request once the contract is 1.15.0.
+    const body: PostPlanCardBodyWithRequest = {
+      handle,
+      id: uuidV5(`plan:${handle}`),
+      ...(thread === undefined ? {} : { thread_id: thread }),
+      ...(request === undefined ? {} : { request }),
+    };
+    return postPlanCard(ctx.api, body, ctx.apiOptions);
+  };
+  if (request !== undefined) {
+    try {
+      const r = await post(threadId);
+      state?.typing?.stop(threadId);
+      ctx.logger.info('plan card posted', { message_id: r.message.id });
+      return { expiresAt: r.plan.expires_at, inDm: false };
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : 'error';
+      ctx.logger.info('plan card not posted', { code });
+      if (err instanceof ApiError) throw err.withNote(REQUEST_CARD_REFUSED);
+      throw err;
+    }
+  }
   try {
     let inDm = false;
     let r;
@@ -329,14 +373,29 @@ async function postCard(
   }
 }
 
-/** The approval card's thread with a session token in channel mode (see resolveThread). */
+/**
+ * The approval card's thread with a session token in channel mode (see
+ * resolveThread); with `request`, the request's place (requestThread),
+ * whatever thread is the latest.
+ */
 async function cardThreadOf(
   ctx: ToolContext,
   given: string | undefined,
+  request?: string,
 ): Promise<string | undefined> {
   const state = ctx.channel;
   if (!ctx.api.sessionToken || state === undefined) return undefined;
   const named = given === undefined ? {} : isUuid(given) ? { thread_id: given } : { item: given };
+  if (request !== undefined) {
+    const placed = requestThread(state, request, named);
+    if (placed !== undefined) return placed.threadId;
+    // Not known here (a restart forgets requests): the card needs its place named.
+    if (given === undefined && !state.requests.has(request.toLowerCase())) {
+      throw new ToolInputError(
+        "This session doesn't know that request (it may have restarted): give card_thread, the request's thread_id or item key as its <channel> tag says.",
+      );
+    }
+  }
   return resolveThread(
     state,
     ctx,
@@ -380,6 +439,15 @@ function resultSummary(result: Record<string, unknown>): string {
     case 'archive_status': {
       const moved = typeof result.moved_items === 'number' ? result.moved_items : 0;
       return `Archived the status; ${moved} item(s) moved to the replacement.`;
+    }
+    case 'create_items': {
+      const items = keysOf(result.items);
+      return `Created ${items.length} item(s)${items.length > 0 ? `: ${items.join(', ')}` : ''}.`;
+    }
+    case 'edit_items': {
+      const items = keysOf(result.items);
+      const links = typeof result.links_added === 'number' ? result.links_added : 0;
+      return `Changed ${items.length} item(s)${items.length > 0 ? `: ${items.join(', ')}` : ''}; ${links} link(s) added.`;
     }
     default: {
       const action =
@@ -1111,6 +1179,184 @@ export const proposeArchiveStatusTool = defineTool({
 });
 
 // ---------------------------------------------------------------------------
+// planning: new items and item changes, previewed (agent API 1.15.0)
+// ---------------------------------------------------------------------------
+
+/** A propose_* tool's request: the card is that request's result, in its place. */
+const REQUEST_INPUT = {
+  request: z
+    .uuid()
+    .optional()
+    .describe(
+      "A request_id, when this card is its result: it goes only to that request's thread or item thread.",
+    ),
+};
+
+const PriorityInput = z.enum(['none', 'low', 'medium', 'high', 'urgent']);
+const LabelInput = z.string().min(1).max(40);
+const CustomValuesInput = z
+  .record(
+    z.string().min(1).max(60),
+    z.union([z.string(), z.number(), z.boolean(), z.array(z.string()), z.null()]),
+  )
+  .describe('Custom fields by name, as in update_item.');
+const EstimateValue = z.number().min(0).max(9999.99);
+const PlanText = z.string().max(262_144);
+const REF_RE = /^[A-Za-z0-9_-]{1,20}$/;
+
+const NewItemInput = z.object({
+  ref: z
+    .string()
+    .regex(REF_RE, '1 to 20 letters, digits, _ or -.')
+    .describe('A short id, unique in the plan (a1, a2).'),
+  title: z
+    .string()
+    .min(1)
+    .max(255)
+    .refine((t) => t.trim().length > 0, 'The title cannot be blank.'),
+  type: NameRef('A type of the project.').optional(),
+  description: PlanText.optional().describe('Markdown.'),
+  parent: z
+    .union([ItemRefInput.describe('A key.'), z.object({ ref: z.string().regex(REF_RE) })])
+    .optional()
+    .describe('An existing key, or {"ref"} of an earlier new item.'),
+  priority: PriorityInput.optional(),
+  labels: z.array(LabelInput).max(100).optional(),
+  custom: CustomValuesInput.optional(),
+  estimate: EstimateValue.optional(),
+  assignee: UserRefInput.optional(),
+  status: NameRef('A status a new item may start in.').optional(),
+});
+
+/** create_items' items, checked: refs unique, a {ref} parent an earlier item, keys as keys. */
+function newItems(items: readonly z.infer<typeof NewItemInput>[]): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  return items.map((i) => {
+    const parent = i.parent;
+    if (seen.has(i.ref)) throw new ToolInputError(`items: ref "${i.ref}" is used twice.`);
+    if (parent !== undefined && typeof parent !== 'string' && !seen.has(parent.ref)) {
+      throw new ToolInputError(
+        `items: the parent {"ref": "${parent.ref}"} of "${i.ref}" must be an earlier item of this plan.`,
+      );
+    }
+    seen.add(i.ref);
+    const out: Record<string, unknown> = Object.fromEntries(
+      Object.entries(i as Record<string, unknown>).filter(([, v]) => v !== undefined),
+    );
+    if (typeof parent === 'string') out.parent = itemRef(parent);
+    return out;
+  });
+}
+
+export const proposeNewItemsTool = defineTool({
+  name: 'propose_new_items',
+  toolset: 'planning',
+  title: 'Propose new items',
+  description: `Proposes creating 1 to ${CREATE_ITEMS_MAX} items of one project at once (stories, tasks or bugs with subtasks), each with its type, parent, description and fields by name, as in create_item. ${PREVIEW_NOTE}
+- Each item has a ref (a1, a2); a later item's parent may be {"ref": "a1"} or an existing key, in the project's hierarchy.`,
+  // TODO(lane B openapi): planScopesOf('create_items') once the contract has it.
+  scopes: [...PART2_PLAN_SCOPES.create_items],
+  annotations: proposeAnnotations('Propose new items'),
+  inputSchema: z.object({
+    ...CARD_THREAD,
+    ...REQUEST_INPUT,
+    project: ProjectKeyInput,
+    items: z.array(NewItemInput).min(1).max(CREATE_ITEMS_MAX),
+  }),
+  outputSchema: PlanOut,
+  run(args, ctx) {
+    requireApi(ctx.api, PART2_API, 'propose_new_items');
+    const items = newItems(args.items);
+    return propose(
+      ctx,
+      args.card_thread,
+      {
+        action: 'create_items',
+        args: { project: args.project, items },
+      } as unknown as Part2PlanBody,
+      args.request,
+    );
+  },
+});
+
+const LinkKindInput = z.enum(['blocks', 'blocked_by', 'relates', 'duplicates', 'duplicated_by']);
+
+const ItemChangesInput = z.object({
+  item: ItemRefInput,
+  type: NameRef('A new type.').optional(),
+  status: NameRef("A status of the item's workflow.").optional(),
+  priority: PriorityInput.optional(),
+  assignee: UserRefInput.nullable().optional().describe('null unassigns.'),
+  estimate: EstimateValue.nullable().optional().describe("On the project's scale; null clears."),
+  add_labels: z.array(LabelInput).max(100).optional(),
+  remove_labels: z.array(LabelInput).max(100).optional(),
+  custom: CustomValuesInput.optional(),
+  description: z
+    .object({
+      mode: z.enum(['append', 'replace']),
+      text: PlanText.min(1),
+      description_version: z.number().int().min(1).describe('From get_item.'),
+    })
+    .optional(),
+  add_links: z
+    .array(z.object({ kind: LinkKindInput, target: ItemRefInput.describe('A key.') }))
+    .max(LINKS_PER_ITEM_MAX)
+    .optional()
+    .describe('Kind as seen from the item; targets in the same project.'),
+});
+
+export const proposeItemChangesTool = defineTool({
+  name: 'propose_item_changes',
+  toolset: 'planning',
+  title: 'Propose changes to items',
+  description: `Proposes changes to 1 to ${EDIT_ITEMS_MAX} items of one project, each its own: type, status, priority, assignee, estimate, labels, custom fields, a description edit and links (at most ${LINKS_PER_ITEM_MAX} each, within the project). ${PREVIEW_NOTE}
+- Only the fields given change, and only they are checked when applied.
+- description "append" adds text and never overwrites; "replace" only while description_version is the one read. Append unless the person asked to replace.`,
+  // TODO(lane B openapi): planScopesOf('edit_items') once the contract has it.
+  scopes: [...PART2_PLAN_SCOPES.edit_items],
+  annotations: proposeAnnotations('Propose changes to items'),
+  inputSchema: z.object({
+    ...CARD_THREAD,
+    ...REQUEST_INPUT,
+    items: z.array(ItemChangesInput).min(1).max(EDIT_ITEMS_MAX),
+  }),
+  outputSchema: PlanOut,
+  run(args, ctx) {
+    requireApi(ctx.api, PART2_API, 'propose_item_changes');
+    const seen = new Set<string>();
+    const items = args.items.map((i) => {
+      const key = itemRef(i.item).toUpperCase();
+      if (seen.has(key)) {
+        throw new ToolInputError(`items: ${key} is listed twice; give its changes once.`);
+      }
+      seen.add(key);
+      const out: Record<string, unknown> = Object.fromEntries(
+        Object.entries(i as Record<string, unknown>).filter(([, v]) => v !== undefined),
+      );
+      if (Object.keys(out).length === 1) {
+        throw new ToolInputError(`items: ${key} has nothing to change.`);
+      }
+      out.item = itemRef(i.item);
+      if (i.add_links !== undefined) {
+        out.add_links = i.add_links.map((l) => {
+          if (itemRef(l.target).toUpperCase() === key) {
+            throw new ToolInputError(`items: ${key} can't link to itself.`);
+          }
+          return { kind: l.kind, target: itemRef(l.target) };
+        });
+      }
+      return out;
+    });
+    return propose(
+      ctx,
+      args.card_thread,
+      { action: 'edit_items', args: { items } } as unknown as Part2PlanBody,
+      args.request,
+    );
+  },
+});
+
+// ---------------------------------------------------------------------------
 // apply_plan
 // ---------------------------------------------------------------------------
 
@@ -1157,7 +1403,8 @@ export const applyPlanTool = defineTool({
   async run(args, ctx) {
     let r;
     try {
-      r = await ctx.call('apply_plan', { path: { handle: args.handle } });
+      // TODO(lane B openapi): ctx.call('apply_plan') once its result has the 1.15.0 actions.
+      r = await applyPlan(ctx.api, args.handle, ctx.apiOptions);
     } catch (err) {
       const kind =
         err instanceof ApiError ? (err.details as { kind?: unknown } | undefined)?.kind : undefined;
@@ -1205,6 +1452,12 @@ export const applyPlanTool = defineTool({
       case 'archive_status': {
         moved = typeof result.moved_items === 'number' ? result.moved_items : null;
         done = `Archived the status; ${moved ?? 0} item(s) moved to the replacement.`;
+        break;
+      }
+      case 'create_items':
+      case 'edit_items': {
+        items = keysOf(result.items);
+        done = resultSummary(result);
         break;
       }
       default: {

@@ -64,6 +64,15 @@ import {
 import { expandScopes } from '../../src/toolsets/toolsets.js';
 import { FilesRefusal } from './fake-files.js';
 import { FakeSessions, SESSION_IDS, SESSION_TOKENS, SessionRefusal } from './fake-sessions.js';
+import {
+  ASK_REPORTER_PATH,
+  AskReporterRequestSchema,
+  AskReporterResponseSchema,
+  PART2_REQUEST_SCHEMAS,
+  PART2_RESPONSE_SCHEMAS,
+  PART2_STATUS,
+  isPart2Code,
+} from './fake-part2.js';
 
 // ---------------------------------------------------------------------------
 // Identities and tokens
@@ -865,7 +874,13 @@ function normalNeeds(raw: unknown): string[] {
 
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.14.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.15.0', min_mcp_version: '0.1.0', deprecations: [] };
+}
+
+/** The status of an error code, 1.15.0's included. */
+function statusOf(code: string): number {
+  if (isPart2Code(code)) return PART2_STATUS[code];
+  return (ERROR_STATUS as Record<string, number | undefined>)[code] ?? 500;
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -878,7 +893,8 @@ const OLDER_RELEASE_OPS = new Set<OperationId>([
 
 class FakeError extends Error {
   constructor(
-    readonly code: ErrorCode,
+    // TODO(lane B openapi): ErrorCode alone once the contract has 1.15.0's codes.
+    readonly code: ErrorCode | keyof typeof PART2_STATUS,
     readonly details: Record<string, unknown> = {},
     message?: string,
   ) {
@@ -1001,7 +1017,9 @@ export class FakeApi {
    * and text-search paging, or the served operations in /v1/meta (1.0.0);
    * without search_pages, list_members, link and activity filters and
    * org.test (1.1.0); without list_pins and list_emoji (1.2.0); without
-   * read_channel's item threads and list_comments' since (v114 false: 1.13.0).
+   * read_channel's item threads and list_comments' since (v114 false: 1.13.0);
+   * without create_items, edit_items, post_plan_card's request and
+   * ask_session_reporter (v115 false: 1.14.0).
    */
   compat = {
     hints: true,
@@ -1015,6 +1033,7 @@ export class FakeApi {
     v19: true,
     v111: true,
     v114: true,
+    v115: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -1049,6 +1068,7 @@ export class FakeApi {
       v19: true,
       v111: true,
       v114: true,
+      v115: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1086,7 +1106,7 @@ export class FakeApi {
       );
     }
     this.enqueue(path, {
-      status: ERROR_STATUS[code],
+      status: statusOf(code),
       body,
       ...(options.headers ? { headers: options.headers } : {}),
     });
@@ -1215,6 +1235,12 @@ export class FakeApi {
       return;
     }
 
+    // TODO(lane B openapi): an ordinary route once the contract has ask_session_reporter.
+    if (method === 'POST' && path === ASK_REPORTER_PATH && this.compat.v115) {
+      this.askReporter(res, token ?? '', body);
+      return;
+    }
+
     const matches = ROUTES.map((r) => ({ r, m: r.pattern.exec(path) })).filter(
       (x): x is { r: Route; m: RegExpExecArray } => x.m !== null,
     );
@@ -1273,7 +1299,10 @@ export class FakeApi {
       }
 
       const query = this.parseQuery(route.id, url.searchParams);
-      const requestSchema = REQUEST_SCHEMAS[route.id];
+      // TODO(lane B openapi): REQUEST_SCHEMAS alone once the contract is 1.15.0.
+      const requestSchema =
+        (this.compat.v115 ? PART2_REQUEST_SCHEMAS[route.id] : undefined) ??
+        REQUEST_SCHEMAS[route.id];
       let parsedBody: Record<string, unknown> = {};
       if (requestSchema !== null) {
         const checked = requestSchema.safeParse(body ?? {});
@@ -1288,7 +1317,7 @@ export class FakeApi {
             })),
           });
         }
-        parsedBody = checked.data;
+        parsedBody = checked.data as Record<string, unknown>;
       }
 
       const handled = this.examples.has(route.id)
@@ -1301,7 +1330,10 @@ export class FakeApi {
             body: parsedBody,
           });
 
-      const checked = RESPONSE_SCHEMAS[route.id].safeParse(handled.body);
+      const checked = (
+        (this.compat.v115 ? PART2_RESPONSE_SCHEMAS[route.id] : undefined) ??
+        RESPONSE_SCHEMAS[route.id]
+      ).safeParse(handled.body);
       if (!checked.success) {
         this.violations.push(
           `${route.id} response: ${JSON.stringify(checked.error.issues.slice(0, 3))}`,
@@ -1323,12 +1355,13 @@ export class FakeApi {
         ) as { error: { hint?: string } };
         if (!this.compat.hints) delete errBody.error.hint;
         const checkedError = ErrorSchema.safeParse(errBody);
-        if (!checkedError.success) {
+        // TODO(lane B openapi): 1.15.0's codes are in ErrorSchema once the contract has them.
+        if (!checkedError.success && !isPart2Code(err.code)) {
           this.violations.push(
             `${route.id} error ${err.code}: ${JSON.stringify(checkedError.error.issues.slice(0, 3))}`,
           );
         }
-        this.send(res, { status: ERROR_STATUS[err.code], body: errBody });
+        this.send(res, { status: statusOf(err.code), body: errBody });
         return;
       }
       this.violations.push(`${route.id} crashed: ${String(err)}`);
@@ -1670,6 +1703,7 @@ export class FakeApi {
       .filter((id) => this.compat.v14 || !V14_OPS.has(id))
       .filter((id) => this.compat.v19 || !V19_OPS.has(id))
       .filter((id) => this.compat.v111 || !V111_OPS.has(id))
+      .concat(this.compat.v115 ? ['ask_session_reporter' as OperationId] : [])
       .sort();
   }
 
@@ -4264,6 +4298,137 @@ export class FakeApi {
         };
         break;
       }
+      // TODO(lane B openapi): checked against the 1.15.0 contract once it is copied in.
+      case 'create_items': {
+        const p = this.project(args.project as string, identity);
+        const items = args.items as {
+          ref: string;
+          title: string;
+          type?: string;
+          parent?: string | { ref: string };
+          labels?: string[];
+          priority?: string;
+        }[];
+        const levels = new Map<string, string>();
+        const effects = items.map((i) => {
+          let parentLevel: string | undefined;
+          let parentName: string | undefined;
+          if (typeof i.parent === 'string') {
+            const parent = this.item(i.parent, identity);
+            if (parent.project !== p.key) {
+              throw new FakeError('validation', {
+                fields: [{ path: 'args.items.parent', message: 'One project per plan.' }],
+              });
+            }
+            track(parent);
+            parentLevel = p.types.find((t) => t.id === parent.typeId)?.level;
+            parentName = key(parent);
+          } else if (i.parent !== undefined) {
+            parentLevel = levels.get(i.parent.ref);
+            parentName = `{ref ${i.parent.ref}}`;
+          }
+          const type = i.type
+            ? this.type(p, i.type)
+            : this.type(p, parentLevel === 'standard' ? 'Subtask' : 'Story');
+          const fits =
+            parentLevel === undefined ||
+            (parentLevel === 'epic' && type.level === 'standard') ||
+            (parentLevel === 'standard' && type.level === 'subtask');
+          if (!fits) {
+            throw new FakeError('validation', {
+              fields: [
+                {
+                  path: 'args.items.parent',
+                  message: 'An epic holds standard items; a standard item holds subtasks.',
+                },
+              ],
+            });
+          }
+          for (const l of i.labels ?? []) this.label(p, l);
+          levels.set(i.ref, type.level);
+          return this.effect(
+            'create',
+            'item',
+            `+ ${type.name} "${i.title}"${parentName === undefined ? '' : ` — parent: ${parentName}`}`,
+            null,
+            null,
+            { ...i, type: type.name },
+          );
+        });
+        preview = {
+          summary: `Creates ${items.length} item(s) in ${p.key}.`,
+          effects,
+          item_count: items.length,
+          warnings: [],
+        };
+        break;
+      }
+      case 'edit_items': {
+        const changes = args.items as {
+          item: string;
+          priority?: string;
+          estimate?: number | null;
+          add_labels?: string[];
+          description?: { mode: 'append' | 'replace'; text: string; description_version: number };
+          add_links?: { kind: string; target: string }[];
+        }[];
+        const effects: PlanEffect[] = [];
+        let project: string | undefined;
+        for (const c of changes) {
+          const item = this.item(c.item, identity);
+          project ??= item.project;
+          if (item.project !== project) {
+            throw new FakeError('validation', {
+              fields: [{ path: 'args.items', message: 'One project per plan.' }],
+            });
+          }
+          const p = this.projectOf(item);
+          for (const l of c.add_labels ?? []) this.label(p, l);
+          const before: Record<string, unknown> = {};
+          const after: Record<string, unknown> = {};
+          if (c.priority !== undefined) {
+            before.priority = item.priority;
+            after.priority = c.priority;
+          }
+          if (c.estimate !== undefined) {
+            before.estimate = item.estimate;
+            after.estimate = c.estimate;
+          }
+          if (c.add_labels !== undefined) {
+            before.labels = item.labels;
+            after.labels = [...new Set([...item.labels, ...c.add_labels])];
+          }
+          if (c.description !== undefined) {
+            before.description = `version ${item.descriptionVersion}`;
+            after.description = `+${c.description.text.split('\n').length} lines (${c.description.mode})`;
+          }
+          effects.push(this.effect('update', 'item', key(item), item.id, before, after));
+          for (const l of c.add_links ?? []) {
+            const target = this.item(l.target, identity);
+            if (target.project !== project) {
+              throw new FakeError('validation', {
+                fields: [{ path: 'args.items.add_links', message: 'One project per plan.' }],
+              });
+            }
+            // TODO(lane B openapi): PlanEffect has op and kind "link" once the contract is 1.15.0.
+            effects.push({
+              op: 'link',
+              kind: 'link',
+              target: `${key(item)} ${l.kind} ${key(target)}`,
+              id: null,
+              before: null,
+              after: null,
+            } as unknown as PlanEffect);
+          }
+        }
+        preview = {
+          summary: `Changes ${changes.length} item(s) in ${project ?? ''}.`,
+          effects,
+          item_count: changes.length,
+          warnings: [],
+        };
+        break;
+      }
       default:
         throw new FakeError('validation', {
           fields: [{ path: 'action', message: 'Unknown action.' }],
@@ -4287,6 +4452,44 @@ export class FakeApi {
     };
   }
 
+  /** POST /v1/session/reporter-questions (1.15.0), checked against the hand-written schemas. */
+  private askReporter(res: ServerResponse, token: string, body: unknown): void {
+    const send = (status: number, out: unknown) => {
+      this.send(res, { status, body: out });
+    };
+    try {
+      this.sessionCheck(() => {
+        this.sessions.checkToken(token);
+      });
+      const checked = AskReporterRequestSchema.safeParse(body ?? {});
+      if (!checked.success) {
+        this.violations.push(
+          `ask_session_reporter request: ${JSON.stringify(checked.error.issues.slice(0, 3))}`,
+        );
+        throw new FakeError('validation', {
+          fields: checked.error.issues
+            .slice(0, 20)
+            .map((i) => ({ path: i.path.join('.') || '(body)', message: i.message })),
+        });
+      }
+      const handled = this.sessionCheck(() =>
+        this.sessions.askReporter(token, checked.data as Record<string, unknown>),
+      );
+      const out = AskReporterResponseSchema.safeParse(handled.body);
+      if (!out.success) {
+        this.violations.push(`ask_session_reporter response: ${JSON.stringify(out.error.issues)}`);
+      }
+      send(handled.status, handled.body);
+    } catch (err) {
+      if (err instanceof FakeError) {
+        send(statusOf(err.code), errorBody(err.code, err.message, err.details));
+        return;
+      }
+      this.violations.push(`ask_session_reporter crashed: ${String(err)}`);
+      send(500, errorBody('internal', 'The fake crashed.'));
+    }
+  }
+
   /** Plan cards refused before they are posted (tests). */
   refusePlanCards = 0;
   /** Plan cards in a thread are refused as reaching outside its item's project (tests). */
@@ -4295,6 +4498,7 @@ export class FakeApi {
   private postPlanCard({ token, body }: Call): Handled {
     const handle = String(body.handle);
     const id = String(body.id);
+    const request = typeof body.request === 'string' ? body.request : undefined;
     const plan = this.store.plans.find((x) => x.handle === handle && x.token === token);
     if (!plan) throw new FakeError('not_found', { kind: 'plan', ref: handle });
     if (plan.cardMessageId === id) {
@@ -4320,8 +4524,21 @@ export class FakeApi {
     if (this.plansOutsideThread && typeof body.thread_id === 'string') {
       throw new FakeError('plan_outside_thread', { thread_id: body.thread_id, key: 'OPS' });
     }
+    // A request's card goes only to the request's place (1.15.0), and lasts 24 hours.
+    if (request !== undefined) {
+      this.sessionCheck(() => {
+        this.sessions.checkRequestPost(token, request, body);
+      });
+    }
     plan.cardMessageId = id;
-    plan.expiresAt = this.clock + 60 * 60_000;
+    plan.expiresAt = this.clock + (request === undefined ? 60 : 24 * 60) * 60_000;
+    if (request !== undefined) {
+      this.sessions.noteRequestPost(
+        token,
+        request,
+        typeof body.thread_id === 'string' ? body.thread_id : null,
+      );
+    }
     this.sessions.postPlanCard(token, {
       id,
       threadId: typeof body.thread_id === 'string' ? body.thread_id : null,
@@ -4483,6 +4700,79 @@ export class FakeApi {
         for (const s of p.statuses)
           s.allowed = s.allowed.filter((a) => lower(a.to) !== lower(status.name));
         result = { action: 'archive_status', moved_items: moved.length };
+        break;
+      }
+      case 'create_items': {
+        const made = new Map<string, FakeItem>();
+        const created: FakeItem[] = [];
+        for (const raw of args.items as Record<string, unknown>[]) {
+          const { ref, parent, ...rest } = raw as { ref: string; parent?: unknown };
+          const parentKey =
+            typeof parent === 'string'
+              ? parent
+              : parent !== undefined
+                ? (() => {
+                    const m = made.get((parent as { ref: string }).ref);
+                    return m === undefined ? undefined : `${m.project}-${m.number}`;
+                  })()
+                : undefined;
+          const out = this.createItem({
+            identity,
+            token,
+            params: {},
+            query: {},
+            body: {
+              ...rest,
+              ...(parentKey === undefined ? { project: args.project } : { parent: parentKey }),
+            },
+          }).body as { item: { id: string } };
+          const item = this.store.items.find((i) => i.id === out.item.id)!;
+          made.set(ref, item);
+          created.push(item);
+        }
+        result = { action: 'create_items', items: created.map((i) => this.summary(i)) };
+        break;
+      }
+      case 'edit_items': {
+        let links = 0;
+        const changed: FakeItem[] = [];
+        for (const raw of args.items as Record<string, unknown>[]) {
+          const {
+            item: ref,
+            add_links: addLinks,
+            ...fields
+          } = raw as {
+            item: string;
+            add_links?: { kind: string; target: string }[];
+          };
+          const item = this.item(ref, identity);
+          const k = `${item.project}-${item.number}`;
+          if (Object.keys(fields).length > 0) {
+            try {
+              this.updateItem({ identity, token, params: { key: k }, query: {}, body: fields });
+            } catch (err) {
+              // A replace against a moved description: the plan is stale, nothing is guessed.
+              if (err instanceof FakeError && err.code === 'conflict') {
+                throw new FakeError(
+                  'plan_stale',
+                  { handle, changed: [{ kind: 'item', ref: k }] },
+                  'Something changed since the preview.',
+                );
+              }
+              throw err;
+            }
+          }
+          for (const l of addLinks ?? []) {
+            this.addLink({ identity, token, params: { key: k }, query: {}, body: l });
+            links += 1;
+          }
+          changed.push(item);
+        }
+        result = {
+          action: 'edit_items',
+          items: changed.map((i) => this.summary(i)),
+          links_added: links,
+        };
         break;
       }
       case 'workflow_change': {

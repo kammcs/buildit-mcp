@@ -13,7 +13,7 @@
 import { ToolInputError } from '../errors.js';
 import type { ToolContext } from '../toolsets/registry.js';
 import { sanitizeLabel } from '../untrusted.js';
-import type { ChannelState } from './loop.js';
+import type { ChannelState, KnownRequest } from './loop.js';
 
 const UUID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
@@ -104,4 +104,77 @@ export async function resolveThread(
     throw new ToolInputError(threadRequiredMessage(state, tool, how));
   }
   return state.lastThreadId;
+}
+
+/** A request's place in words, for refusals. */
+function placeWords(known: KnownRequest): string {
+  if (known.place === 'thread')
+    return `the thread it was made in (thread_id ${known.thread ?? '?'})`;
+  const items = (known.items ?? []).map((i) => i.key);
+  return items.length === 1
+    ? `the thread of ${items[0] ?? '?'}`
+    : `the threads of its items (${items.join(', ')}), each item's result in its own`;
+}
+
+/** The refusal of a request's post outside its place, before any call. */
+export function outsidePlace(known: KnownRequest): string {
+  return `Not posted (request_result_private): this request's result goes only to ${placeWords(known)}. Post it there with the same request, or leave thread_id, item and card_thread out to use that place.`;
+}
+
+/**
+ * The thread a post for a request goes to (reply, a propose_* card,
+ * ask_reporter), when this session knows the request and its result goes
+ * to a thread or an item's thread: the place named, which must be one of
+ * the request's, or the only one it has. Undefined when the request is
+ * unknown here (a restart forgets them) or its result is the direct
+ * message's: the caller's own rules apply, and the server checks again.
+ * Throws ToolInputError for a place outside the request's, or when it has
+ * several (triage on several items) and none is named.
+ */
+export function requestThread(
+  state: ChannelState,
+  request: string,
+  given: { thread_id?: string | undefined; item?: string | undefined },
+): { known: KnownRequest; threadId: string } | undefined {
+  const known = state.requests.get(request.toLowerCase());
+  if (known === undefined || known.place === 'dm') return undefined;
+  if (known.place === 'thread') {
+    const thread = known.thread;
+    if (thread === undefined) return undefined;
+    if (given.item !== undefined) throw new ToolInputError(outsidePlace(known));
+    if (given.thread_id !== undefined && given.thread_id.toLowerCase() !== thread.toLowerCase()) {
+      throw new ToolInputError(outsidePlace(known));
+    }
+    return { known, threadId: thread };
+  }
+  const items = known.items ?? [];
+  const byItem =
+    given.item === undefined
+      ? undefined
+      : items.find((i) =>
+          isUuid(keyOf(given.item ?? ''))
+            ? i.id.toLowerCase() === keyOf(given.item ?? '').toLowerCase()
+            : i.key === keyOf(given.item ?? '').toUpperCase(),
+        );
+  if (given.item !== undefined && byItem === undefined)
+    throw new ToolInputError(outsidePlace(known));
+  const byThread =
+    given.thread_id === undefined
+      ? undefined
+      : items.find((i) => i.id.toLowerCase() === given.thread_id?.toLowerCase());
+  if (given.thread_id !== undefined && byThread === undefined) {
+    throw new ToolInputError(outsidePlace(known));
+  }
+  if (byItem !== undefined && byThread !== undefined && byItem.id !== byThread.id) {
+    throw new ToolInputError(
+      "Give item or thread_id, not both: item's thread is the item's own id, and this thread_id is another thread.",
+    );
+  }
+  const chosen = byItem ?? byThread ?? (items.length === 1 ? items[0] : undefined);
+  if (chosen === undefined) {
+    throw new ToolInputError(
+      `This request is about several items (${items.map((i) => i.key).join(', ')}): name the one this post is for (item or card_thread set to its key). Each item's result goes in its own thread.`,
+    );
+  }
+  return { known, threadId: chosen.id };
 }
