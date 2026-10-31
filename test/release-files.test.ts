@@ -3,7 +3,7 @@
  * package.json: the MCP Registry's server.json and the Claude Desktop
  * bundle's manifest.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -169,6 +169,48 @@ describe('the Claude Code plugin', () => {
     expect(text).toContain('card_thread');
   });
 
+  it('has the request worker that the lead instructions name', async () => {
+    const { REQUEST_WORKER_AGENT } = await import('../src/server.js');
+    const text = readFileSync(
+      new URL('../plugin/agents/buildit-request-worker.md', import.meta.url),
+      'utf8',
+    );
+    const front = /^---\n([\s\S]*?)\n---\n/.exec(text.replace(/\r\n/g, '\n'))?.[1] ?? '';
+    const field = (name: string): string | undefined =>
+      new RegExp(`^${name}: (.+)$`, 'm').exec(front)?.[1];
+    expect(`${plugin.name}:${field('name') ?? ''}`).toBe(REQUEST_WORKER_AGENT);
+    expect(field('description')).toBeDefined();
+    // It reads and writes one message: no worktree of its own.
+    expect(field('isolation')).toBeUndefined();
+    expect(field('background')).toBe('true');
+    for (const line of front.split('\n')) {
+      expect(['name', 'description', 'isolation', 'background']).toContain(line.split(':')[0]);
+    }
+    for (const phrase of ['untrusted_content', 'request_id', 'buildit-catch-up', 'locale']) {
+      expect(text).toContain(phrase);
+    }
+  });
+
+  it('ships the shared request rules and the catch-up skill, and only those', async () => {
+    const { REQUEST_KINDS } = await import('../src/channel/requests.js');
+    const skills = readdirSync(new URL('../plugin/skills/', import.meta.url)).sort();
+    expect(skills).toEqual(['buildit-catch-up', 'buildit-requests']);
+    for (const skill of skills) {
+      const text = readFileSync(
+        new URL(`../plugin/skills/${skill}/SKILL.md`, import.meta.url),
+        'utf8',
+      ).replace(/\r\n/g, '\n');
+      const front = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? '';
+      expect(/^name: (.+)$/m.exec(front)?.[1]).toBe(skill);
+      expect(/^description: (.+)$/m.exec(front)?.[1]).toBeDefined();
+      expect(text).toContain('untrusted_content');
+    }
+    // Every kind that names a skill names a shipped one.
+    for (const kind of Object.values(REQUEST_KINDS)) {
+      if (kind.skill !== undefined) expect(skills).toContain(kind.skill);
+    }
+  });
+
   it("makes a local marketplace whose plugin runs the checkout's dist/ with the same hooks and settings", async () => {
     const { DEV_MARKETPLACE, devCommands, writeDevMarketplace } =
       await import('../scripts/dev-marketplace.js');
@@ -195,9 +237,16 @@ describe('the Claude Code plugin', () => {
         args: [join(checkout, 'dist', 'index.js'), '--channel', '--from-plugin'],
       });
       expect(readJsonAt(join(out, 'buildit', 'hooks', 'hooks.json'))).toEqual(hooks);
-      expect(readFileSync(join(out, 'buildit', 'agents', 'buildit-item-worker.md'), 'utf8')).toBe(
-        readFileSync(new URL('../plugin/agents/buildit-item-worker.md', import.meta.url), 'utf8'),
-      );
+      for (const file of [
+        'agents/buildit-item-worker.md',
+        'agents/buildit-request-worker.md',
+        'skills/buildit-requests/SKILL.md',
+        'skills/buildit-catch-up/SKILL.md',
+      ]) {
+        expect(readFileSync(join(out, 'buildit', file), 'utf8')).toBe(
+          readFileSync(new URL(`../plugin/${file}`, import.meta.url), 'utf8'),
+        );
+      }
       expect(devCommands(out)).toEqual([
         `claude plugin marketplace add ${out}`,
         'claude plugin install buildit@buildit-dev',

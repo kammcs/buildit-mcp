@@ -8,7 +8,7 @@
  * and an installed plugin is copied into its plugin cache, so the plugin
  * can't find the checkout relative to itself: the server's path is written
  * in absolute. The plugin is made from plugin/ (the release plugin: the
- * same hooks, subagents, settings and channel), with the server `node
+ * same hooks, subagents, skills, settings and channel), with the server `node
  * <checkout>/dist/index.js` and the version `<package version>-local`.
  *
  * The folder is written where you say (default: .dev-marketplace in this
@@ -73,8 +73,9 @@ export function writeDevMarketplace(checkout: string, out: string): { version: s
     join(pluginDir, 'hooks', 'hooks.json'),
     readJson(join(checkout, 'plugin', 'hooks', 'hooks.json')),
   );
-  // The subagents (the item worker), as they are.
+  // The subagents (the item and request workers) and the skills, as they are.
   cpSync(join(checkout, 'plugin', 'agents'), join(pluginDir, 'agents'), { recursive: true });
+  cpSync(join(checkout, 'plugin', 'skills'), join(pluginDir, 'skills'), { recursive: true });
   const marketplace = readJson(join(checkout, '.claude-plugin', 'marketplace.json'));
   writeJson(join(out, '.claude-plugin', 'marketplace.json'), {
     name: DEV_MARKETPLACE,
