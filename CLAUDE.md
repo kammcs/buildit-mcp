@@ -94,8 +94,10 @@ src/
                         events (assigned, mentions and replies in an item's thread, unassigned)
   channel/item-events.ts  the content of a work item's notifications (lead, data blocks)
   channel/handoffs.ts   the handoffs seen, and the content of child_done and handoff_resolved
+  channel/requests.ts   requests from buildIt.Social (agent.request): the event's shape, the checks,
+                        and the content of event=request (attributes and the lead line)
   channel/workers.ts    where the question hook posts: the lead's in the DM, a worker's in its
-                        item's thread (the lead's table)
+                        item's thread (the lead's table), a request worker's in the DM
   channel/threads.ts    which thread reply, ask and the approval cards post in (named once
                         several are active)
   channel/waiters.ts    who waits for answers to the session's cards, by message id
@@ -149,7 +151,8 @@ deploy/                 team self-hosting: Compose with Caddy, and a guide
 bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes from package.json)
 plugin/                 the Claude Code plugin (channel server; AskUserQuestion, Stop and the
                         tool approval hooks;
-                        the item worker subagent in agents/);
+                        the item and request worker subagents in agents/; the request skills
+                        in skills/);
                         .claude-plugin/marketplace.json lists it (versions match package.json)
 server.json             the MCP Registry entry (its versions must match package.json; a test checks)
 docs/releasing.md       how a release ships through npm, GHCR, the bundle and the Registry
