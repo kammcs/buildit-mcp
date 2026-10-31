@@ -38,7 +38,7 @@ import { answerSessionResponse, closeSessionCard, postSessionMessage } from '../
 import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import type { ChannelState } from '../channel/loop.js';
 import { isItemThread, isUuid, itemThreadId, resolveThread } from '../channel/threads.js';
-import { isItemWorker, workerEntry } from '../channel/workers.js';
+import { isItemWorker, isRequestWorker, workerEntry } from '../channel/workers.js';
 import { CardInbox, eventMessageId, type CardWaiters } from '../channel/waiters.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolContext, type ToolDefinition } from '../toolsets/registry.js';
@@ -878,7 +878,8 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
  * Where the hook's question goes (channel/workers.ts): the main agent's
  * (no agent_id or agent_type) in the direct message, its latest thread
  * (undefined: a new message there); an item worker's in its item's thread,
- * from the lead's table; anything else is null (the terminal asks). `item`
+ * from the lead's table; a request worker's in the direct message too (a
+ * request is private); anything else is null (the terminal asks). `item`
  * says whether the thread is an item's.
  */
 async function hookThread(
@@ -895,6 +896,8 @@ async function hookThread(
   const id = clean(agentId);
   const type = clean(agentType);
   if (id === '' && type === '') return { thread: state.lastDmThread, item: false };
+  // A request worker asks in the direct message, never in an item's thread.
+  if (isRequestWorker(type)) return { thread: dmThread(state), item: false };
   if (id === '' || !isItemWorker(type) || state.folder === undefined) return null;
   const entry = workerEntry(state.folder, id);
   if (entry === undefined) return null;
@@ -907,6 +910,12 @@ async function hookThread(
   } catch {
     return null;
   }
+}
+
+/** The direct message's latest thread, when it is one (never an item's thread). */
+function dmThread(state: ChannelState): string | undefined {
+  const t = state.lastDmThread;
+  return t !== undefined && !isItemThread(state, t) ? t : undefined;
 }
 
 /** The questions as the hook passed them, parsed (AskUserQuestion's updatedInput takes them back). */

@@ -1712,6 +1712,139 @@ export class FakeSessions {
     return messageId;
   }
 
+  // -------------------------------------------------------------------------
+  // Requests (agent API 1.12.0)
+  // TODO(lane B openapi): the event's shape is the contract's draft, written by hand.
+  // -------------------------------------------------------------------------
+
+  /** The requests sent to sessions, by id: their session's token, result place and state. */
+  readonly requests = new Map<
+    string,
+    { token: string; place: string; status: 'delivered' | 'answered' | 'closed' }
+  >();
+  /** Every post with `request`, in order. */
+  readonly requestPosts: { token: string; request: string }[] = [];
+
+  /**
+   * Sends a request to the session as an agent.request event (tests). The
+   * data's parts can be replaced or left out with `data`; `event` replaces
+   * envelope fields (another session's id, say). Returns the ids.
+   */
+  pushRequest(
+    token: string,
+    options: {
+      kind?: string;
+      source?: 'button' | 'subscription';
+      requestId?: string;
+      context?: Record<string, unknown>;
+      project?: { id: string; key: string } | null;
+      place?: string;
+      locale?: string;
+      timeZone?: string;
+      requester?: { id: string; name: string; is_guest?: boolean };
+      handedFrom?: string;
+      data?: Record<string, unknown>;
+      event?: Record<string, unknown>;
+    } = {},
+  ): { eventId: string; requestId: string } {
+    const s = this.sessions.get(token);
+    if (!s) throw new Error('no session for this token');
+    const identity = this.identity(token);
+    const requestId = options.requestId ?? randomUUID();
+    const eventId = randomUUID();
+    const place = options.place ?? 'dm';
+    const requester = options.requester ?? { id: s.ownerId, name: s.ownerName };
+    const data = {
+      request: {
+        id: requestId,
+        kind: options.kind ?? 'catch_up',
+        source: options.source ?? 'button',
+        subscription_id: options.source === 'subscription' ? randomUUID() : null,
+        created_at: '2026-10-07T14:00:00.000Z',
+        expires_at: '2026-10-14T14:00:00.000Z',
+      },
+      requester: {
+        id: requester.id,
+        name: requester.name,
+        is_guest: requester.is_guest ?? false,
+        locale: options.locale ?? 'en',
+      },
+      locale: options.locale ?? 'en',
+      time_zone: options.timeZone ?? 'America/Toronto',
+      project:
+        options.project === undefined
+          ? { id: SESSION_IDS.demoProject, key: 'DEMO' }
+          : options.project,
+      context: options.context ?? {
+        type: 'channel',
+        channel: { id: SESSION_IDS.demoChannel, name: 'general' },
+        from: '2026-10-06T21:40:00.000Z',
+        to: '2026-10-07T14:00:00.000Z',
+      },
+      result: { place },
+      handed:
+        options.handedFrom === undefined
+          ? null
+          : { from_session: { id: randomUUID(), label: options.handedFrom } },
+      ...options.data,
+    };
+    s.events.push({
+      v: 1,
+      id: eventId,
+      type: 'agent.request',
+      created_at: this.host.now(),
+      org: { id: identity.org.id },
+      app: { id: SESSION_IDS.agent, installation_id: SESSION_IDS.installation },
+      attempt: 1,
+      session: { id: s.id, label: s.label },
+      data,
+      ...options.event,
+    } as unknown as SessionEvent);
+    if (!this.requests.has(requestId)) {
+      this.requests.set(requestId, { token, place, status: 'delivered' });
+    }
+    return { eventId, requestId };
+  }
+
+  /** A post's `request`, checked as the server would; undefined when it may post. */
+  checkRequestPost(
+    token: string,
+    request: string,
+    body: Record<string, unknown>,
+  ): { status: number; code: string; message: string } | undefined {
+    const r = this.requests.get(request.toLowerCase());
+    if (r === undefined || r.token !== token) {
+      return {
+        status: 404,
+        code: 'request_not_found',
+        message: 'No such request for this session.',
+      };
+    }
+    if (r.status === 'closed') {
+      return {
+        status: 409,
+        code: 'request_closed',
+        message: 'The request expired or was dropped.',
+      };
+    }
+    const thread = typeof body.thread_id === 'string' ? body.thread_id : null;
+    if (r.place === 'dm' && thread !== null && this.itemIds.has(thread)) {
+      return {
+        status: 409,
+        code: 'request_result_private',
+        message: "This request's result goes only to the agent's direct message.",
+      };
+    }
+    return undefined;
+  }
+
+  /** A post with `request` that passed: the request is answered. */
+  noteRequestPost(token: string, request: string): void {
+    this.requestPosts.push({ token, request });
+    const r = this.requests.get(request.toLowerCase());
+    if (r !== undefined) r.status = 'answered';
+  }
+
   /** The session of a token (tests). */
   session(token: string): FakeSession {
     const s = this.sessions.get(token);

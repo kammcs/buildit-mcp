@@ -13,6 +13,11 @@
  * `mention` (the owner mentioned it in the item's thread), `message` (the
  * owner's other replies in a thread it works in) and `item_unassigned`
  * (stop: it also stops "is writing" and the waiters of that thread).
+ * A request (`agent.request`, requests.ts) becomes `event="request"`, with
+ * its kind, context ids and the owner's language and time zone as
+ * attributes and a lead line written here from structured fields; only
+ * this session's, only the owner's, and once per request (a hand-on to
+ * another session writes a new event for the same request).
  * Session handoffs (handoffs.ts): an assignment that came by handoff is an
  * `item_assigned` with `handoff="true"`; `work_item.child_done` becomes
  * `child_done` (a subtask this session handed on is in review or done, was
@@ -64,12 +69,19 @@ import {
   SESSION_ENDED_CODES,
   sessionHeartbeat,
   setSessionCapabilities,
+  type ChannelEvent,
   type SessionEvent,
   type SessionInfo,
 } from './api.js';
 import { apiApprovalCloser, type ToolApprovals } from './approvals.js';
 import { attachmentsBlock, forwardedFilesLead } from './attachment-blocks.js';
 import { AttachmentStore, filesServed, type AttachmentOutcome } from './attachments.js';
+import {
+  REQUEST_EVENT_TYPE,
+  requestContent,
+  type ResultPlace,
+  type SessionRequestEvent,
+} from './requests.js';
 import { ToolRing } from './tool-ring.js';
 import type { TypingIndicator } from './typing.js';
 import { CardWaiters, eventMessageId } from './waiters.js';
@@ -106,6 +118,15 @@ export interface ChannelThread {
 
 /** How many item keys are remembered (key to id). */
 const ITEMS_MAX = 500;
+
+/** How many requests are remembered (id to kind and place), for reply's check. */
+const REQUESTS_MAX = 200;
+
+/** A request this session was sent: what reply checks before it posts a result. */
+export interface KnownRequest {
+  kind: string;
+  place: ResultPlace;
+}
 
 /**
  * What the loop and the channel tools (reply, ask, the plan cards) share:
@@ -170,6 +191,18 @@ export class ChannelState {
         ? []
         : [{ thread_id: this.lastDmThread, item: undefined }]),
     ];
+  }
+  /** The requests this session was sent, by id (the oldest forgotten past REQUESTS_MAX). */
+  readonly requests = new Map<string, KnownRequest>();
+  /** Remembers a request's kind and where its result goes. */
+  rememberRequest(id: string, request: KnownRequest): void {
+    const k = id.toLowerCase();
+    this.requests.delete(k);
+    this.requests.set(k, request);
+    if (this.requests.size > REQUESTS_MAX) {
+      const oldest = this.requests.keys().next().value;
+      if (oldest !== undefined) this.requests.delete(oldest);
+    }
   }
   /** The owner's locale, from their latest event (the cards' language). */
   ownerLocale: string | undefined;
@@ -635,13 +668,17 @@ export class ChannelLoop {
   }
 
   /** Hands one event on, or drops it. A notification that fails stops the loop. */
-  private async deliver(event: SessionEvent, info: SessionInfo): Promise<void> {
+  private async deliver(event: ChannelEvent, info: SessionInfo): Promise<void> {
     const { logger } = this.options;
     if (this.seen.has(event.id)) {
       logger.debug('channel event dropped', { event_id: event.id, reason: 'repeat' });
       return;
     }
     this.seen.add(event.id);
+    if (event.type === REQUEST_EVENT_TYPE) {
+      await this.deliverRequest(event, info);
+      return;
+    }
     if (event.type === 'card.response' || event.type === 'card.closed') {
       await this.deliverCard(event, info);
       return;
@@ -726,6 +763,52 @@ export class ChannelLoop {
     };
     this.options.state.typing?.start(threadId);
     logger.info('channel message delivered', { event_id: event.id, message_id: message.id });
+  }
+
+  /**
+   * A request (agent.request): the owner's tap on a "... with my agent"
+   * button, or a subscription they set up. Dropped when it is another
+   * session's (other_session), not the owner's (not_owner: the server sends
+   * only the owner's, and this checks again), a request already handed on
+   * (repeat: by request id, since a hand-on writes a new event), or a shape
+   * this version can't read (shape).
+   */
+  private async deliverRequest(event: SessionRequestEvent, info: SessionInfo): Promise<void> {
+    const { logger, state } = this.options;
+    if (event.session.id !== info.session.id) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: 'other_session' });
+      return;
+    }
+    const { requester, request } = event.data;
+    if (requester.id !== info.owner.id || requester.is_guest) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: 'not_owner' });
+      return;
+    }
+    const seenKey = `r:${request.id.toLowerCase()}`;
+    if (this.seen.has(seenKey)) {
+      logger.debug('channel event dropped', { event_id: event.id, reason: 'repeat' });
+      return;
+    }
+    const built = requestContent(event.data, {
+      owner: info.owner.name,
+      session: event.session.label,
+    });
+    if (!built.ok) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: built.reason });
+      return;
+    }
+    this.seen.add(seenKey);
+    this.noteLocale({ locale: built.meta.locale });
+    await this.send({ content: built.content, meta: built.meta });
+    state.rememberRequest(built.requestId, {
+      kind: request.kind,
+      place: built.meta.result as ResultPlace,
+    });
+    logger.info('request delivered', {
+      event_id: event.id,
+      request_id: built.requestId,
+      kind: request.kind,
+    });
   }
 
   /** Sends one notification; a failure stops the loop (the page is not acknowledged). */
