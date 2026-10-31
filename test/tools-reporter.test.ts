@@ -66,12 +66,13 @@ async function start(): Promise<ChannelClient> {
 async function triage(c: ChannelClient, kind = 'triage'): Promise<string> {
   const report = storeItem(44);
   api.sessions.reportItems.add(report.id);
+  const seen = channelNotes(c.notes).length;
   const { requestId } = api.sessions.pushRequest(TOKEN, {
     kind,
     context: { type: 'item', item: report },
     place: 'item_thread',
   });
-  await waitFor(() => channelNotes(c.notes).length >= 1);
+  await waitFor(() => channelNotes(c.notes).length > seen);
   return requestId;
 }
 
@@ -163,18 +164,29 @@ describe('a question', () => {
 
   it('says why the server refused it: not a report, switched off, closed', async () => {
     const c = await start();
-    const request = await triage(c);
+    // Each refusal is final for its request, so each is asked for a request of its own.
+    const notReportRequest = await triage(c);
     api.sessions.reportItems.clear();
-    const notReport = await ask(c, { request, item: 'DEMO-44', question: 'Which version?' });
+    const notReport = await ask(c, {
+      request: notReportRequest,
+      item: 'DEMO-44',
+      question: 'Which version?',
+    });
     expect(textOf(notReport)).toContain("not_a_report: this item isn't an open feedback report");
-    api.sessions.reportItems.add(storeItem(44).id);
+    const offRequest = await triage(c);
     api.sessions.reporterQuestionsOff = 'agent';
-    const off = await ask(c, { request, item: 'DEMO-44', question: 'Which version?' });
+    const off = await ask(c, { request: offRequest, item: 'DEMO-44', question: 'Which version?' });
     expect(textOf(off)).toContain('turned off "Ask reporters on my own"');
+    const platformRequest = await triage(c);
     api.sessions.reporterQuestionsOff = 'platform';
-    const platform = await ask(c, { request, item: 'DEMO-44', question: 'Which version?' });
+    const platform = await ask(c, {
+      request: platformRequest,
+      item: 'DEMO-44',
+      question: 'Which version?',
+    });
     expect(textOf(platform)).toContain('reporter_questions_off: questions to reporters are off');
     api.sessions.reporterQuestionsOff = undefined;
+    const request = await triage(c);
     const r = api.sessions.requests.get(request);
     if (r) r.status = 'closed';
     const closed = await ask(c, { request, item: 'DEMO-44', question: 'Which version?' });
@@ -184,11 +196,11 @@ describe('a question', () => {
 
   it("says the limit the server names: the org's day, the platform's day", async () => {
     const c = await start();
-    const request = await triage(c);
     for (const [limit, says] of [
       ['org_day', "the reporter's organization has had today's questions"],
       ['platform_day', 'no more questions to reporters today'],
     ] as const) {
+      const request = await triage(c);
       api.enqueue('/v1/session/reporter-questions', {
         status: 429,
         body: {
@@ -310,8 +322,10 @@ describe('injection through a report', () => {
 
   it('never sends what the report asks the agent to post, and says why', async () => {
     const c = await start();
-    const request = await triage(c);
     for (const question of HOSTILE_ASKS) {
+      expect(reporterTextProblem(question), question).toBeDefined();
+      // Each in a request of its own: two text refusals end a request's questions to a report.
+      const request = await triage(c);
       const r = await ask(c, { request, item: 'DEMO-44', question });
       expect(r.isError, question).toBe(true);
       expect(textOf(r)).toContain('Not asked (reporter_text_invalid:');
@@ -319,6 +333,71 @@ describe('injection through a report', () => {
     }
     expect(asks()).toHaveLength(0);
     expect(session().messages.some((m) => m.thread_id === storeItem(44).id)).toBe(false);
+  });
+
+  it('lets a steered agent rewrite once, then asks nothing more in any form (review)', async () => {
+    const c = await start();
+    const request = await triage(c);
+    const [first, second, third] = HOSTILE_ASKS;
+    for (const question of [first, second]) {
+      const r = await ask(c, { request, item: 'DEMO-44', question });
+      expect(textOf(r)).toContain('Rewrite it once');
+    }
+    // The third form, and then even a clean question, are refused before any call.
+    for (const question of [third, 'Which version of the app were you using?']) {
+      const r = await ask(c, { request, item: 'DEMO-44', question });
+      expect(r.isError, question).toBe(true);
+      expect(textOf(r)).toContain('broke the text rules 2 times');
+      expect(textOf(r)).toContain('Ask nothing more of this reporter for this report');
+    }
+    // Named by its id instead of its key: the same report, still refused.
+    const byId = await ask(c, { request, item: storeItem(44).id, question: 'Which version?' });
+    expect(textOf(byId)).toContain('broke the text rules 2 times');
+    expect(asks()).toHaveLength(0);
+    // A new request is a new start.
+    const next = await triage(c);
+    const fresh = await ask(c, { request: next, item: 'DEMO-44', question: 'Which version?' });
+    expect(fresh.isError, textOf(fresh)).toBeFalsy();
+  });
+
+  it("counts the server's text refusals too, and keeps its other refusals final (review)", async () => {
+    const c = await start();
+    const request = await triage(c);
+    for (const rule of ['domain', 'item_key']) {
+      api.enqueue('/v1/session/reporter-questions', {
+        status: 422,
+        body: {
+          error: {
+            code: 'reporter_text_invalid',
+            message: "The question can't be sent.",
+            details: { rule },
+          },
+        },
+      });
+      const r = await ask(c, { request, item: 'DEMO-44', question: `Is it about the ${rule}?` });
+      expect(textOf(r)).toContain(`reporter_text_invalid (${rule})`);
+    }
+    const calls = asks().length;
+    const after = await ask(c, { request, item: 'DEMO-44', question: 'Which version?' });
+    expect(textOf(after)).toContain('broke the text rules 2 times');
+    expect(asks()).toHaveLength(calls);
+
+    // Switched off: final for every report of the request, whatever the wording.
+    const offRequest = await triage(c);
+    api.sessions.reporterQuestionsOff = 'agent';
+    await ask(c, { request: offRequest, item: 'DEMO-44', question: 'Which version?' });
+    api.sessions.reporterQuestionsOff = undefined;
+    const offCalls = asks().length;
+    const reworded = await ask(c, {
+      request: offRequest,
+      item: 'DEMO-44',
+      question: 'Could you tell us which version you use?',
+    });
+    expect(reworded.isError).toBe(true);
+    expect(textOf(reworded)).toContain(
+      'Not asked (reporter_questions_off): this was refused before',
+    );
+    expect(asks()).toHaveLength(offCalls);
   });
 
   it("refuses a form the client let pass when the server's rule catches it", async () => {
