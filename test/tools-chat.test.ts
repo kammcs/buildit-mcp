@@ -154,8 +154,78 @@ describe('read_channel', () => {
       MESSAGES.other,
       MESSAGES.root,
     ]);
-    expect(r.structured).not.toHaveProperty('note');
     expect(api.requests.at(-1)?.query).toBe('?active_since=2026-10-06T09%3A15%3A00Z');
+    // No work items' threads before 1.14.0: it says so, and how to find them.
+    expect(r.structured.note).toContain('older than agent API 1.14.0');
+    expect(r.structured.note).not.toContain('older than agent API 1.13.0');
+    expect(r.text).toContain('activity_since');
+  });
+
+  it("lists work items' threads with new comments, marked with the item (1.14.0)", async () => {
+    const c = await client(TOKENS.full);
+    const r = await c.call('read_channel', {
+      channel: CHANNELS.demo,
+      active_since: '2026-10-06T00:00:00Z',
+    });
+    expect(r.isError).toBe(false);
+    expect(r.structured).not.toHaveProperty('note');
+    const messages = r.structured.messages as {
+      kind: string;
+      reply_count: number;
+      last_reply_at: string | null;
+      item?: { key: string; title: string; status: string; status_category: string };
+    }[];
+    // DEMO-42 was commented on after the time; DEMO-44 and the rest weren't.
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      kind: 'work_item',
+      reply_count: 2,
+      last_reply_at: '2026-10-07T14:03:00Z',
+      item: {
+        key: 'DEMO-42',
+        title: 'Share notices on Windows',
+        status: 'In progress',
+        status_category: 'started',
+      },
+    });
+    expect(r.text).toContain("1 of them work items' threads with new comments");
+    expect(r.text).toContain('item thread DEMO-42');
+    expect(r.text).toContain('read the new ones with list_comments (item DEMO-42, since)');
+    expect(r.text).toContain('Share notices on Windows');
+    // Before the last comment only.
+    const later = await c.call('read_channel', {
+      channel: CHANNELS.demo,
+      active_since: '2026-10-07T14:03:00Z',
+    });
+    expect(later.structured.messages).toEqual([]);
+    // Without active_since, no item threads.
+    const plain = await c.call('read_channel', { channel: CHANNELS.demo });
+    expect(plain.structured.messages).toEqual([]);
+  });
+
+  it("wraps an item thread's title and status as untrusted content", async () => {
+    const story = api.store.items.find((i) => i.number === 42)!;
+    story.title = HOSTILE;
+    const c = await client(TOKENS.full);
+    const r = await c.call('read_channel', {
+      channel: CHANNELS.demo,
+      active_since: '2026-10-06T00:00:00Z',
+    });
+    expect(r.isError).toBe(false);
+    assertDefused(r.text);
+    expect(injectionIsInsideBlocks(r.text)).toBe(true);
+    expect(stripIds(r.text)).toContain('<untrusted_content source="item">\nDEMO-42 — ');
+  });
+
+  it("leaves work items' threads out for a token that doesn't read projects", async () => {
+    const c = await client();
+    const r = await c.call('read_channel', {
+      channel: CHANNELS.demo,
+      active_since: '2026-10-06T00:00:00Z',
+    });
+    expect(r.isError).toBe(false);
+    expect(r.structured.messages).toEqual([]);
+    expect(r.structured).not.toHaveProperty('note');
   });
 
   it('reads active_since as since on an older server, and says so', async () => {

@@ -865,7 +865,7 @@ function normalNeeds(raw: unknown): string[] {
 
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.13.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.14.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -1000,7 +1000,8 @@ export class FakeApi {
    * members route or the release operations; without description windows
    * and text-search paging, or the served operations in /v1/meta (1.0.0);
    * without search_pages, list_members, link and activity filters and
-   * org.test (1.1.0); without list_pins and list_emoji (1.2.0).
+   * org.test (1.1.0); without list_pins and list_emoji (1.2.0); without
+   * read_channel's item threads and list_comments' since (v114 false: 1.13.0).
    */
   compat = {
     hints: true,
@@ -1013,6 +1014,7 @@ export class FakeApi {
     v14: true,
     v19: true,
     v111: true,
+    v114: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -1046,6 +1048,7 @@ export class FakeApi {
       v14: true,
       v19: true,
       v111: true,
+      v114: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -2279,7 +2282,12 @@ export class FakeApi {
 
   private listComments({ identity, params, query }: Call): Handled {
     const item = this.item(params.key ?? '', identity);
-    let comments = this.store.comments.filter((c) => c.itemId === item.id);
+    // 1.14.0: since, the comments posted after a time (an older API ignores it).
+    const since =
+      this.compat.v114 && typeof query.since === 'string' ? Date.parse(query.since) : undefined;
+    let comments = this.store.comments.filter(
+      (c) => c.itemId === item.id && (since === undefined || Date.parse(c.createdAt) > since),
+    );
     if (query.order === 'desc') comments = [...comments].reverse();
     const offset = decodeCursor(query.cursor);
     const limit = (query.limit as number | undefined) ?? 25;
@@ -3375,9 +3383,70 @@ export class FakeApi {
       .filter((m) => m.channelId === c.id && m.parentId === null)
       .filter((m) => since === undefined || Date.parse(m.createdAt) > since)
       .filter((m) => active === undefined || lastActivity(m) > active)
-      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-      .map((m) => this.messageOut(m));
-    return { status: 200, body: this.page(messages, query) };
+      .map((m) => ({ at: m.createdAt, out: this.messageOut(m) }));
+    // 1.14.0: with active_since, the work items' threads with comments after it.
+    const threads =
+      active !== undefined && this.compat.v114
+        ? this.itemThreads(c, identity, active).filter(
+            (t) => since === undefined || Date.parse(t.at) > since,
+          )
+        : [];
+    const all = [...messages, ...threads].sort((a, b) => (a.at < b.at ? 1 : -1)).map((x) => x.out);
+    return { status: 200, body: this.page(all, query) };
+  }
+
+  /**
+   * A channel's work item threads with comments after `active`, as 1.14.0
+   * lists them: only for a token that reads the channel's project (with
+   * projects:read, within its limits); each placed by its item's creation.
+   */
+  private itemThreads(
+    c: FakeChannel,
+    identity: FakeIdentity,
+    active: number,
+  ): { at: string; out: Message }[] {
+    const p = this.store.projects.find((x) => x.key === c.projectKey);
+    if (!p || !expandScopes(identity.token.scopes).has('projects:read')) return [];
+    const limited = identity.token.limits.projects;
+    if (limited && !limited.some((l) => l.id === p.id)) return [];
+    return this.store.items
+      .filter((i) => i.project === p.key)
+      .flatMap((i) => {
+        const comments = this.store.comments.filter((x) => x.itemId === i.id);
+        const last = comments
+          .map((x) => x.createdAt)
+          .sort()
+          .pop();
+        if (last === undefined || Date.parse(last) <= active) return [];
+        const out: Message = {
+          id: i.id,
+          channel_id: c.id,
+          author: null,
+          kind: 'work_item',
+          body: '',
+          code: null,
+          code_language: null,
+          file: null,
+          photos: [],
+          mentions: [],
+          reply_count: comments.length,
+          last_reply_at: last,
+          created_at: i.createdAt,
+          edited_at: null,
+          deleted: false,
+          via_agent: null,
+          pinned: false,
+          pinned_at: null,
+          pinned_by: null,
+          item: {
+            id: i.id,
+            key: `${p.key}-${i.number}`,
+            title: i.title,
+            status: this.statusBrief(this.statusOf(i)),
+          },
+        };
+        return [{ at: i.createdAt, out }];
+      });
   }
 
   private getThread({ identity, params, query }: Call): Handled {
