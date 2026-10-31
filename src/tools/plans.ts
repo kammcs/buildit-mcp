@@ -29,18 +29,8 @@
 import { z } from 'zod';
 
 import type { CreatePlanResponse, PlanEffect } from '../api/generated/schemas.js';
-import type { CreatePlanBody } from '../api/generated/strict.js';
+import type { CreatePlanBody, PostPlanCardBody } from '../api/generated/strict.js';
 import { ApiError } from '../api/client.js';
-import {
-  applyPlan,
-  CREATE_ITEMS_MAX,
-  EDIT_ITEMS_MAX,
-  LINKS_PER_ITEM_MAX,
-  PART2_API,
-  PART2_PLAN_SCOPES,
-  type Part2PlanBody,
-  type PostPlanCardBodyWithRequest,
-} from '../api/part2.js';
 import { postPlanCard } from '../channel/api.js';
 import { isUuid, requestThread, resolveThread } from '../channel/threads.js';
 import { ToolInputError } from '../errors.js';
@@ -65,6 +55,14 @@ const ColorInput = z
   .regex(/^#[0-9A-Fa-f]{6}$/, 'A color such as #3366FF.')
   .describe('A color such as #3366FF.');
 const DateInput = z.iso.date();
+
+/** The agent API version with create_items, edit_items and post_plan_card's request. */
+export const PLAN_ITEMS_API = '1.15.0';
+
+/** The most items create_items and edit_items take, and links per item (the contract's). */
+const CREATE_ITEMS_MAX = 25;
+const EDIT_ITEMS_MAX = 20;
+const LINKS_PER_ITEM_MAX = 10;
 
 /** How many effects a preview shows (the API lists up to 500). */
 const MAX_EFFECTS = 50;
@@ -278,14 +276,13 @@ const CARD_THREAD = {
 async function propose(
   ctx: ToolContext,
   cardThread: string | undefined,
-  // TODO(lane B openapi): CreatePlanBody alone once the contract has create_items and edit_items.
-  body: CreatePlanBody | Part2PlanBody,
+  body: CreatePlanBody,
   request?: string,
 ): Promise<ToolOutput<PlanOut>> {
-  if (request !== undefined) requireApi(ctx.api, PART2_API, 'request');
+  if (request !== undefined) requireApi(ctx.api, PLAN_ITEMS_API, 'request');
   // Which thread the card goes to is settled first: a refusal creates no plan.
   const thread = await cardThreadOf(ctx, cardThread, request);
-  const out = planOutput(await ctx.call('create_plan', { body: body as CreatePlanBody }));
+  const out = planOutput(await ctx.call('create_plan', { body }));
   const carded = await postCard(ctx, out.structured.handle, thread, request);
   if (carded === undefined) return out;
   if ('failed' in carded) {
@@ -329,8 +326,7 @@ async function postCard(
   if (!ctx.api.sessionToken) return undefined;
   const state = ctx.channel;
   const post = (thread: string | undefined) => {
-    // TODO(lane B openapi): post_plan_card's body has request once the contract is 1.15.0.
-    const body: PostPlanCardBodyWithRequest = {
+    const body: PostPlanCardBody = {
       handle,
       id: uuidV5(`plan:${handle}`),
       ...(thread === undefined ? {} : { thread_id: thread }),
@@ -1254,8 +1250,7 @@ export const proposeNewItemsTool = defineTool({
   title: 'Propose new items',
   description: `Proposes creating 1 to ${CREATE_ITEMS_MAX} items of one project at once (stories, tasks or bugs with subtasks), each with its type, parent, description and fields by name, as in create_item. ${PREVIEW_NOTE}
 - Each item has a ref (a1, a2); a later item's parent may be {"ref": "a1"} or an existing key, in the project's hierarchy.`,
-  // TODO(lane B openapi): planScopesOf('create_items') once the contract has it.
-  scopes: [...PART2_PLAN_SCOPES.create_items],
+  scopes: planScopesOf('create_items'),
   annotations: proposeAnnotations('Propose new items'),
   inputSchema: z.object({
     ...CARD_THREAD,
@@ -1265,7 +1260,7 @@ export const proposeNewItemsTool = defineTool({
   }),
   outputSchema: PlanOut,
   run(args, ctx) {
-    requireApi(ctx.api, PART2_API, 'propose_new_items');
+    requireApi(ctx.api, PLAN_ITEMS_API, 'propose_new_items');
     const items = newItems(args.items);
     return propose(
       ctx,
@@ -1273,7 +1268,7 @@ export const proposeNewItemsTool = defineTool({
       {
         action: 'create_items',
         args: { project: args.project, items },
-      } as unknown as Part2PlanBody,
+      } as unknown as CreatePlanBody,
       args.request,
     );
   },
@@ -1283,7 +1278,7 @@ const LinkKindInput = z.enum(['blocks', 'blocked_by', 'relates', 'duplicates', '
 
 const ItemChangesInput = z.object({
   item: ItemRefInput,
-  type: NameRef('A new type.').optional(),
+  type: NameRef('A new type, at the same level (an epic stays an epic).').optional(),
   status: NameRef("A status of the item's workflow.").optional(),
   priority: PriorityInput.optional(),
   assignee: UserRefInput.nullable().optional().describe('null unassigns.'),
@@ -1312,8 +1307,7 @@ export const proposeItemChangesTool = defineTool({
   description: `Proposes changes to 1 to ${EDIT_ITEMS_MAX} items of one project, each its own: type, status, priority, assignee, estimate, labels, custom fields, a description edit and links (at most ${LINKS_PER_ITEM_MAX} each, within the project). ${PREVIEW_NOTE}
 - Only the fields given change, and only they are checked when applied.
 - description "append" adds text and never overwrites; "replace" only while description_version is the one read. Append unless the person asked to replace.`,
-  // TODO(lane B openapi): planScopesOf('edit_items') once the contract has it.
-  scopes: [...PART2_PLAN_SCOPES.edit_items],
+  scopes: planScopesOf('edit_items'),
   annotations: proposeAnnotations('Propose changes to items'),
   inputSchema: z.object({
     ...CARD_THREAD,
@@ -1322,7 +1316,7 @@ export const proposeItemChangesTool = defineTool({
   }),
   outputSchema: PlanOut,
   run(args, ctx) {
-    requireApi(ctx.api, PART2_API, 'propose_item_changes');
+    requireApi(ctx.api, PLAN_ITEMS_API, 'propose_item_changes');
     const seen = new Set<string>();
     const items = args.items.map((i) => {
       const key = itemRef(i.item).toUpperCase();
@@ -1350,7 +1344,7 @@ export const proposeItemChangesTool = defineTool({
     return propose(
       ctx,
       args.card_thread,
-      { action: 'edit_items', args: { items } } as unknown as Part2PlanBody,
+      { action: 'edit_items', args: { items } } as unknown as CreatePlanBody,
       args.request,
     );
   },
@@ -1403,8 +1397,7 @@ export const applyPlanTool = defineTool({
   async run(args, ctx) {
     let r;
     try {
-      // TODO(lane B openapi): ctx.call('apply_plan') once its result has the 1.15.0 actions.
-      r = await applyPlan(ctx.api, args.handle, ctx.apiOptions);
+      r = await ctx.call('apply_plan', { path: { handle: args.handle } });
     } catch (err) {
       const kind =
         err instanceof ApiError ? (err.details as { kind?: unknown } | undefined)?.kind : undefined;

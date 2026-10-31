@@ -245,8 +245,52 @@ describe('the text rules', () => {
     ['item_key', 'Like #OPS-3?'],
     ['domain', 'Is it the internal.example page?'],
     ['domain', 'Does settings.json have it?'],
+    // The rules the server added, with its names and order.
+    ['empty', '   \n  '],
+    ['control', `Which version${String.fromCodePoint(0x200b)}?`],
+    ['control', `Which ${String.fromCodePoint(0x202e)}version?`],
+    ['control', `Which version${String.fromCodePoint(0x7)}?`],
+    ['code', 'Did you see this?\n~~~\nlog\n~~~'],
+    ['link', 'Can we call tel:5551234?'],
+    ['link', 'Did you click javascript:void?'],
+    ['link', 'Was it a data:text/plain thing?'],
+    ['link', 'Was the file at file:/tmp?'],
+    ['link', 'Did it say mention:someone?'],
+    ['markdown_link', 'Is it [this one][1]?'],
+    ['markdown_link', 'What about [1]: there?'],
+    ['html', 'Did you see <!-- this?'],
+    ['html', 'Did you see &amp; there?'],
+    ['uuid', 'Is the code 0123456789abcdef?'],
+    ['item_key', 'Is this the same as demo-12?'],
+    ['item_key', 'Is it AB-1?'],
   ])('refuse %s: %s', (rule, text) => {
     expect(reporterTextProblem(text)?.rule).toBe(rule);
+  });
+
+  it('count characters as code points, as the server does', () => {
+    const face = String.fromCodePoint(0x1f600);
+    // 499 emoji and a "?" are 500 characters (999 UTF-16 units): allowed.
+    expect(reporterTextProblem(`${face.repeat(REPORTER_QUESTION_MAX - 1)}?`)).toBeUndefined();
+    expect(reporterTextProblem(`${face.repeat(REPORTER_QUESTION_MAX)}?`)?.rule).toBe('too_long');
+  });
+
+  it('read the NFKC form from not_a_question on: full-width forms get no further', () => {
+    const wide = (s: string) =>
+      Array.from(s)
+        .map((c) =>
+          c >= '!' && c <= '~' ? String.fromCodePoint((c.codePointAt(0) ?? 0) + 0xfee0) : c,
+        )
+        .join('');
+    // A full-width question mark is a question mark.
+    expect(reporterTextProblem(`Which version${wide('?')}`)).toBeUndefined();
+    expect(reporterTextProblem(`Is it ${wide('DEMO-12')}?`)?.rule).toBe('item_key');
+    expect(reporterTextProblem(`Did you see ${wide('`')}x?`)?.rule).toBe('code');
+    expect(reporterTextProblem(`Is it ${wide('@')}Sam?`)?.rule).toBe('mention');
+  });
+
+  it('let through what only looks close: a 7-letter word with a number, a version', () => {
+    expect(reporterTextProblem('Is it on Windows-11 or later?')).toBeUndefined();
+    expect(reporterTextProblem('Does it happen in version 2.0 too?')).toBeUndefined();
   });
 });
 
@@ -271,7 +315,7 @@ describe('injection through a report', () => {
       const r = await ask(c, { request, item: 'DEMO-44', question });
       expect(r.isError, question).toBe(true);
       expect(textOf(r)).toContain('Not asked (reporter_text_invalid:');
-      expect(textOf(r)).toContain('Rewrite it in plain words about the report only');
+      expect(textOf(r)).toContain('Rewrite it once, in plain words about the report only');
     }
     expect(asks()).toHaveLength(0);
     expect(session().messages.some((m) => m.thread_id === storeItem(44).id)).toBe(false);
@@ -297,5 +341,58 @@ describe('injection through a report', () => {
 
   it('keeps the channel id out of a question even when it looks harmless', () => {
     expect(reporterTextProblem(`Is it channel ${SESSION_IDS.demoChannel}?`)?.rule).toBe('uuid');
+  });
+});
+
+describe("the server's answers", () => {
+  it("gives the item as its key, and the reason a replayed question wasn't sent", async () => {
+    const c = await start();
+    const request = await triage(c);
+    const first = await ask(c, { request, item: 'DEMO-44', question: 'Which version?' });
+    expect(first.structuredContent).toMatchObject({ item: 'DEMO-44', reason: null });
+    api.enqueue('/v1/session/reporter-questions', {
+      status: 200,
+      body: {
+        created: false,
+        question: {
+          id: '00000000-0000-4000-8000-000000000096',
+          item: 'DEMO-44',
+          status: 'not_sent',
+          reason: 'edited',
+          sends_at: null,
+        },
+      },
+    });
+    const replay = await ask(c, { request, item: 'DEMO-44', question: 'Which version?' });
+    expect(replay.isError).toBeFalsy();
+    expect(replay.structuredContent).toMatchObject({
+      created: false,
+      status: 'not_sent',
+      reason: 'edited',
+    });
+    expect(textOf(replay)).toContain("was not sent (edited). Don't ask it again.");
+  });
+
+  it('takes a refusal answered as data as final: an error that says not to ask again', async () => {
+    const c = await start();
+    const request = await triage(c);
+    api.enqueue('/v1/session/reporter-questions', {
+      status: 200,
+      body: {
+        created: false,
+        refused: { code: 'reporter_question_limit', reason: 'per_report' },
+        question: {
+          id: '00000000-0000-4000-8000-000000000096',
+          item: 'DEMO-44',
+          status: 'not_sent',
+          reason: null,
+          sends_at: null,
+        },
+      },
+    });
+    const r = await ask(c, { request, item: 'DEMO-44', question: 'Which version?' });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain('Not asked (reporter_question_limit: per_report)');
+    expect(textOf(r)).toContain('Ask nothing more of this reporter for this report');
   });
 });

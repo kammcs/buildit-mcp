@@ -384,7 +384,7 @@ describe('reply with a thread or item request', () => {
     });
     expect(fourth.isError).toBe(true);
     expect(textOf(fourth)).toContain('request_post_limit');
-    expect(textOf(fourth)).toContain('already posted 3 times');
+    expect(textOf(fourth)).toContain('(HTTP 429)');
     // A note to the person still goes to the direct message, without request.
     const note = await c.client.callTool({
       name: 'reply',

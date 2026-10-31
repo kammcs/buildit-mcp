@@ -4,7 +4,7 @@ All notable changes to buildit-mcp are listed here. The project follows [semanti
 
 ## [0.13.0] - Unreleased
 
-Built on agent API 1.15.0. Until its contract is copied in, the new operation, plan actions and fields are written by hand from the announced contract (`src/api/part2.ts`). The new tools and `request` on a card need a 1.15.0 server: on an older one they are refused before any call (`ask_reporter` isn't listed), and everything else works as in 0.12.0.
+Built on version 1.15.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). The new tools and `request` on a card need a 1.15.0 server: on an older one they are refused before any call (`ask_reporter` isn't listed), and everything else works as in 0.12.0.
 
 ### Work item requests
 
@@ -19,8 +19,8 @@ The work item kinds of [requests](README.md#requests-from-builditsocial), each a
 ### New tools
 
 - **`propose_new_items`** (toolset `planning`, `projects:write`): previews creating 1 to 25 items of one project at once (plan action `create_items`), each with a `ref` so a later item's parent can be `{"ref": "a1"}`; refs are checked before any call.
-- **`propose_item_changes`** (toolset `planning`, `projects:write`): previews changes to 1 to 20 items of one project, each its own (plan action `edit_items`): type, status, priority, assignee, estimate, labels, custom fields, a description `append` (never overwrites) or `replace` (only while `description_version` is current), and up to 10 links within the project. Only the fields it changes are checked when it is applied.
-- **`ask_reporter`** (channel mode, `ask_session_reporter`): one question to a feedback report's reporter for a triage request. The request's kind, its items and the question's form (a "?", at most 500 characters and 4 lines, no links, domains or file names, item keys, ids, mentions, emails, HTML or code) are checked before any call; buildIt.Social checks them again with the report, the switches and the caps (2 per report until a person on the team steps in, per org and per platform day), shows it in the item's thread first and sends it in its own words. Refusals come back in words.
+- **`propose_item_changes`** (toolset `planning`, `projects:write`): previews changes to 1 to 20 items of one project, each its own (plan action `edit_items`): type, status, priority, assignee, estimate, labels, custom fields, a description `append` (never overwrites) or `replace` (only while `description_version` is current), and up to 10 links within the project. Only the fields it changes are checked when it is applied. A `description_version` that already moved is refused when proposing (`conflict`), a plan whose links all exist already is refused (422 on `items`), and a type change keeps the item's level.
+- **`ask_reporter`** (channel mode, `ask_session_reporter`): one question to a feedback report's reporter for a triage request. The request's kind, its items and the question's form are checked before any call, with the server's rules, names and order (`empty`, `control`, `too_long` and `too_many_lines` on the text; then, in its NFKC form, `not_a_question`, `code`, `link`, `markdown_link`, `html`, `email`, `mention`, `uuid`, `item_key` and `domain`; at most 500 code points and 4 lines); buildIt.Social checks them again with the report, the switches and the caps (2 per report until a person on the team steps in, per org and per platform day), shows it in the item's thread first and sends it in its own words. Refusals come back in words and say not to ask again in another form; the answer gives the item's key, and a replayed question that wasn't sent says why (`reason`).
 - `apply_plan` and `plan_resolved` name the items created or changed and the links added.
 
 ### Posting by request

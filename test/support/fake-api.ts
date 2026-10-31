@@ -64,15 +64,6 @@ import {
 import { expandScopes } from '../../src/toolsets/toolsets.js';
 import { FilesRefusal } from './fake-files.js';
 import { FakeSessions, SESSION_IDS, SESSION_TOKENS, SessionRefusal } from './fake-sessions.js';
-import {
-  ASK_REPORTER_PATH,
-  AskReporterRequestSchema,
-  AskReporterResponseSchema,
-  PART2_REQUEST_SCHEMAS,
-  PART2_RESPONSE_SCHEMAS,
-  PART2_STATUS,
-  isPart2Code,
-} from './fake-part2.js';
 
 // ---------------------------------------------------------------------------
 // Identities and tokens
@@ -858,6 +849,9 @@ export const V111_OPS = new Set<OperationId>([
   'complete_session_upload',
 ]);
 
+/** What an API older than 1.15.0 doesn't serve (compat.v115 false). */
+const V115_OPS = new Set<OperationId>(['ask_session_reporter']);
+
 /** An item's Needs as the API stores them: trimmed, lower case, unique, sorted; at most 10. */
 function normalNeeds(raw: unknown): string[] {
   const tags = [
@@ -877,12 +871,6 @@ function defaultMeta(): Record<string, unknown> {
   return { api_version: '1.15.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
-/** The status of an error code, 1.15.0's included. */
-function statusOf(code: string): number {
-  if (isPart2Code(code)) return PART2_STATUS[code];
-  return (ERROR_STATUS as Record<string, number | undefined>)[code] ?? 500;
-}
-
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
 const OLDER_RELEASE_OPS = new Set<OperationId>([
   'update_release',
@@ -893,8 +881,7 @@ const OLDER_RELEASE_OPS = new Set<OperationId>([
 
 class FakeError extends Error {
   constructor(
-    // TODO(lane B openapi): ErrorCode alone once the contract has 1.15.0's codes.
-    readonly code: ErrorCode | keyof typeof PART2_STATUS,
+    readonly code: ErrorCode,
     readonly details: Record<string, unknown> = {},
     message?: string,
   ) {
@@ -1106,7 +1093,7 @@ export class FakeApi {
       );
     }
     this.enqueue(path, {
-      status: statusOf(code),
+      status: ERROR_STATUS[code],
       body,
       ...(options.headers ? { headers: options.headers } : {}),
     });
@@ -1235,12 +1222,6 @@ export class FakeApi {
       return;
     }
 
-    // TODO(lane B openapi): an ordinary route once the contract has ask_session_reporter.
-    if (method === 'POST' && path === ASK_REPORTER_PATH && this.compat.v115) {
-      this.askReporter(res, token ?? '', body);
-      return;
-    }
-
     const matches = ROUTES.map((r) => ({ r, m: r.pattern.exec(path) })).filter(
       (x): x is { r: Route; m: RegExpExecArray } => x.m !== null,
     );
@@ -1282,7 +1263,8 @@ export class FakeApi {
         (V12_OPS.has(route.id) && !this.compat.v12) ||
         (V14_OPS.has(route.id) && !this.compat.v14) ||
         (V19_OPS.has(route.id) && !this.compat.v19) ||
-        (V111_OPS.has(route.id) && !this.compat.v111);
+        (V111_OPS.has(route.id) && !this.compat.v111) ||
+        (V115_OPS.has(route.id) && !this.compat.v115);
       if (olderRoute) {
         this.send(res, {
           status: 404,
@@ -1299,10 +1281,7 @@ export class FakeApi {
       }
 
       const query = this.parseQuery(route.id, url.searchParams);
-      // TODO(lane B openapi): REQUEST_SCHEMAS alone once the contract is 1.15.0.
-      const requestSchema =
-        (this.compat.v115 ? PART2_REQUEST_SCHEMAS[route.id] : undefined) ??
-        REQUEST_SCHEMAS[route.id];
+      const requestSchema = REQUEST_SCHEMAS[route.id];
       let parsedBody: Record<string, unknown> = {};
       if (requestSchema !== null) {
         const checked = requestSchema.safeParse(body ?? {});
@@ -1317,7 +1296,7 @@ export class FakeApi {
             })),
           });
         }
-        parsedBody = checked.data as Record<string, unknown>;
+        parsedBody = checked.data;
       }
 
       const handled = this.examples.has(route.id)
@@ -1330,10 +1309,7 @@ export class FakeApi {
             body: parsedBody,
           });
 
-      const checked = (
-        (this.compat.v115 ? PART2_RESPONSE_SCHEMAS[route.id] : undefined) ??
-        RESPONSE_SCHEMAS[route.id]
-      ).safeParse(handled.body);
+      const checked = RESPONSE_SCHEMAS[route.id].safeParse(handled.body);
       if (!checked.success) {
         this.violations.push(
           `${route.id} response: ${JSON.stringify(checked.error.issues.slice(0, 3))}`,
@@ -1355,13 +1331,12 @@ export class FakeApi {
         ) as { error: { hint?: string } };
         if (!this.compat.hints) delete errBody.error.hint;
         const checkedError = ErrorSchema.safeParse(errBody);
-        // TODO(lane B openapi): 1.15.0's codes are in ErrorSchema once the contract has them.
-        if (!checkedError.success && !isPart2Code(err.code)) {
+        if (!checkedError.success) {
           this.violations.push(
             `${route.id} error ${err.code}: ${JSON.stringify(checkedError.error.issues.slice(0, 3))}`,
           );
         }
-        this.send(res, { status: statusOf(err.code), body: errBody });
+        this.send(res, { status: ERROR_STATUS[err.code], body: errBody });
         return;
       }
       this.violations.push(`${route.id} crashed: ${String(err)}`);
@@ -1703,7 +1678,7 @@ export class FakeApi {
       .filter((id) => this.compat.v14 || !V14_OPS.has(id))
       .filter((id) => this.compat.v19 || !V19_OPS.has(id))
       .filter((id) => this.compat.v111 || !V111_OPS.has(id))
-      .concat(this.compat.v115 ? ['ask_session_reporter' as OperationId] : [])
+      .filter((id) => this.compat.v115 || !V115_OPS.has(id))
       .sort();
   }
 
@@ -1893,6 +1868,8 @@ export class FakeApi {
         return this.sessionCheck(() => this.sessions.typing(call.token, call.body));
       case 'post_plan_card':
         return this.sessionCheck(() => this.postPlanCard(call));
+      case 'ask_session_reporter':
+        return this.sessionCheck(() => this.sessions.askReporter(call.token, call.body));
       case 'list_session_threads':
         return this.sessionCheck(() => this.sessions.threads(call.token));
       case 'post_session_approval':
@@ -2754,6 +2731,22 @@ export class FakeApi {
     const link: FakeLink = { id: nextId(), fromId, toId, kind };
     this.store.links.push(link);
     return { status: 201, body: { link: this.linkFrom(item, link), created: true } };
+  }
+
+  /** Whether "item kind target" exists already (as addLink stores it). */
+  private linkExists(item: FakeItem, kind: string, target: FakeItem): boolean {
+    const [fromId, toId, k] =
+      kind === 'blocked_by'
+        ? [target.id, item.id, 'blocks']
+        : kind === 'duplicated_by'
+          ? [target.id, item.id, 'duplicates']
+          : [item.id, target.id, kind];
+    return this.store.links.some(
+      (l) =>
+        l.kind === k &&
+        ((l.fromId === fromId && l.toId === toId) ||
+          (k === 'relates' && l.fromId === toId && l.toId === fromId)),
+    );
   }
 
   private removeLink({ identity, params }: Call): Handled {
@@ -4298,7 +4291,6 @@ export class FakeApi {
         };
         break;
       }
-      // TODO(lane B openapi): checked against the 1.15.0 contract once it is copied in.
       case 'create_items': {
         const p = this.project(args.project as string, identity);
         const items = args.items as {
@@ -4366,6 +4358,7 @@ export class FakeApi {
       case 'edit_items': {
         const changes = args.items as {
           item: string;
+          type?: string;
           priority?: string;
           estimate?: number | null;
           add_labels?: string[];
@@ -4373,6 +4366,7 @@ export class FakeApi {
           add_links?: { kind: string; target: string }[];
         }[];
         const effects: PlanEffect[] = [];
+        const warnings: string[] = [];
         let project: string | undefined;
         for (const c of changes) {
           const item = this.item(c.item, identity);
@@ -4398,11 +4392,41 @@ export class FakeApi {
             before.labels = item.labels;
             after.labels = [...new Set([...item.labels, ...c.add_labels])];
           }
+          if (c.type !== undefined) {
+            // A type change keeps the item's level (an epic stays an epic).
+            const type = this.type(p, c.type);
+            const level = p.types.find((t) => t.id === item.typeId)?.level;
+            if (level !== undefined && type.level !== level) {
+              throw new FakeError('validation', {
+                fields: [
+                  {
+                    path: 'args.items.type',
+                    message: `${key(item)} is a ${level} item; its new type must be one too.`,
+                  },
+                ],
+              });
+            }
+            before.type = p.types.find((t) => t.id === item.typeId)?.name ?? null;
+            after.type = type.name;
+          }
           if (c.description !== undefined) {
+            // The version read is checked now: a moved description is a conflict, not a plan.
+            if (c.description.description_version !== item.descriptionVersion) {
+              throw new FakeError(
+                'conflict',
+                {
+                  kind: 'description',
+                  current: { version: item.version, description_version: item.descriptionVersion },
+                },
+                `${key(item)}'s description changed since you read it.`,
+              );
+            }
             before.description = `version ${item.descriptionVersion}`;
             after.description = `+${c.description.text.split('\n').length} lines (${c.description.mode})`;
           }
-          effects.push(this.effect('update', 'item', key(item), item.id, before, after));
+          if (Object.keys(after).length > 0) {
+            effects.push(this.effect('update', 'item', key(item), item.id, before, after));
+          }
           for (const l of c.add_links ?? []) {
             const target = this.item(l.target, identity);
             if (target.project !== project) {
@@ -4410,22 +4434,34 @@ export class FakeApi {
                 fields: [{ path: 'args.items.add_links', message: 'One project per plan.' }],
               });
             }
-            // TODO(lane B openapi): PlanEffect has op and kind "link" once the contract is 1.15.0.
-            effects.push({
-              op: 'link',
-              kind: 'link',
-              target: `${key(item)} ${l.kind} ${key(target)}`,
-              id: null,
-              before: null,
-              after: null,
-            } as unknown as PlanEffect);
+            if (this.linkExists(item, l.kind, target)) {
+              warnings.push(`${key(item)} ${l.kind} ${key(target)} already: left as it is.`);
+              continue;
+            }
+            effects.push(
+              this.effect(
+                'link',
+                'link',
+                `${key(item)} ${l.kind} ${key(target)}`,
+                null,
+                null,
+                null,
+              ),
+            );
           }
+        }
+        if (effects.length === 0) {
+          throw new FakeError('validation', {
+            fields: [
+              { path: 'items', message: 'Nothing to change: every link asked for exists already.' },
+            ],
+          });
         }
         preview = {
           summary: `Changes ${changes.length} item(s) in ${project ?? ''}.`,
           effects,
           item_count: changes.length,
-          warnings: [],
+          warnings,
         };
         break;
       }
@@ -4450,44 +4486,6 @@ export class FakeApi {
       status: 201,
       body: { handle, action, preview, expires_at: new Date(expiresAt).toISOString() },
     };
-  }
-
-  /** POST /v1/session/reporter-questions (1.15.0), checked against the hand-written schemas. */
-  private askReporter(res: ServerResponse, token: string, body: unknown): void {
-    const send = (status: number, out: unknown) => {
-      this.send(res, { status, body: out });
-    };
-    try {
-      this.sessionCheck(() => {
-        this.sessions.checkToken(token);
-      });
-      const checked = AskReporterRequestSchema.safeParse(body ?? {});
-      if (!checked.success) {
-        this.violations.push(
-          `ask_session_reporter request: ${JSON.stringify(checked.error.issues.slice(0, 3))}`,
-        );
-        throw new FakeError('validation', {
-          fields: checked.error.issues
-            .slice(0, 20)
-            .map((i) => ({ path: i.path.join('.') || '(body)', message: i.message })),
-        });
-      }
-      const handled = this.sessionCheck(() =>
-        this.sessions.askReporter(token, checked.data as Record<string, unknown>),
-      );
-      const out = AskReporterResponseSchema.safeParse(handled.body);
-      if (!out.success) {
-        this.violations.push(`ask_session_reporter response: ${JSON.stringify(out.error.issues)}`);
-      }
-      send(handled.status, handled.body);
-    } catch (err) {
-      if (err instanceof FakeError) {
-        send(statusOf(err.code), errorBody(err.code, err.message, err.details));
-        return;
-      }
-      this.violations.push(`ask_session_reporter crashed: ${String(err)}`);
-      send(500, errorBody('internal', 'The fake crashed.'));
-    }
   }
 
   /** Plan cards refused before they are posted (tests). */
@@ -4763,8 +4761,8 @@ export class FakeApi {
             }
           }
           for (const l of addLinks ?? []) {
-            this.addLink({ identity, token, params: { key: k }, query: {}, body: l });
-            links += 1;
+            const added = this.addLink({ identity, token, params: { key: k }, query: {}, body: l });
+            if (added.status === 201) links += 1;
           }
           changed.push(item);
         }

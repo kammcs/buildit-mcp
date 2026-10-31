@@ -350,7 +350,6 @@ export class SessionRefusal extends Error {
       | 'request_not_found'
       | 'request_closed'
       | 'request_result_private'
-      // TODO(lane B openapi): agent API 1.15.0's codes, from the contract once it has them.
       | 'request_post_limit'
       | 'request_kind_mismatch'
       | 'not_a_report'
@@ -1893,7 +1892,7 @@ export class FakeSessions {
         throw new SessionRefusal('request_result_private', { request_id: request });
       }
       if ((r.posts.get(thread) ?? 0) >= 3) {
-        throw new SessionRefusal('request_post_limit', { request_id: request, limit: 3 });
+        throw new SessionRefusal('request_post_limit', { request_id: request });
       }
     }
   }
@@ -1912,7 +1911,6 @@ export class FakeSessions {
 
   // -------------------------------------------------------------------------
   // Questions to a feedback reporter (agent API 1.15.0)
-  // TODO(lane B openapi): checked against the contract once it has ask_session_reporter.
   // -------------------------------------------------------------------------
 
   /** The items that are open feedback reports, by id (tests add them). */
@@ -1962,11 +1960,11 @@ export class FakeSessions {
     const text = String(body.text);
     // The server's form rules, in short (the client checks them first, so a test scripts the rest).
     const rule = !/[?¿]/.test(text)
-      ? 'question_mark'
-      : text.length > 500
-        ? 'length'
+      ? 'not_a_question'
+      : Array.from(text).length > 500
+        ? 'too_long'
         : /:\/\/|www\.|@|`|[A-Z][A-Z0-9]{1,9}-\d/.test(text)
-          ? 'reference'
+          ? 'link'
           : undefined;
     if (rule !== undefined) throw new SessionRefusal('reporter_text_invalid', { rule });
     if ((this.askedSinceStepIn.get(item.id) ?? 0) >= 2) {
@@ -1986,8 +1984,9 @@ export class FakeSessions {
       created,
       question: {
         id,
-        item: { id: item.id, key: item.key },
+        item: item.key,
         status: 'pending',
+        reason: null,
         sends_at: '2026-10-07T15:02:00.000Z',
       },
     };

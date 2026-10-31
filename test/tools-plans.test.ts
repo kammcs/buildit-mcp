@@ -593,6 +593,41 @@ describe('planning: new items and item changes (agent API 1.15.0)', () => {
     expect(item('DEMO-42')!.description).not.toBe('A new spec.');
   });
 
+  it('refuses a description_version that moved before the preview with conflict', async () => {
+    const c = await client(TOKENS.full, { toolsets: ['items', 'planning'] });
+    const r = await c.call('propose_item_changes', {
+      items: [
+        {
+          item: 'DEMO-42',
+          description: { mode: 'append', text: '- [ ] More', description_version: 1 },
+        },
+      ],
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('conflict (HTTP 409)');
+    expect(r.text).toContain('description_version');
+    expect(api.store.plans).toHaveLength(0);
+  });
+
+  it('refuses a plan whose links all exist already (422 on items), and a type of another level', async () => {
+    const c = await client(TOKENS.full, { toolsets: ['items', 'planning'] });
+    const links = await c.call('propose_item_changes', {
+      items: [{ item: 'DEMO-42', add_links: [{ kind: 'blocks', target: 'DEMO-43' }] }],
+    });
+    expect(links.isError).toBe(true);
+    expect(links.text).toContain('validation (HTTP 422)');
+    expect(links.text).toContain('every link asked for exists already');
+    const level = await c.call('propose_item_changes', {
+      items: [{ item: 'DEMO-42', type: 'Epic' }],
+    });
+    expect(level.isError).toBe(true);
+    expect(level.text).toContain('its new type must be one too');
+    const same = await propose(c, 'propose_item_changes', {
+      items: [{ item: 'DEMO-42', type: 'Bug' }],
+    });
+    expect(same.text).toContain('type: Story → Bug');
+  });
+
   it('keeps a plan to one project', async () => {
     const c = await client(TOKENS.full, { toolsets: ['items', 'planning'] });
     const r = await c.call('propose_item_changes', {

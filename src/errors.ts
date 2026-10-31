@@ -17,7 +17,6 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 
 import { ApiError, LOCAL_ERROR_CODES } from './api/client.js';
 import { ERROR_HINTS } from './api/generated/operations.js';
-import { PART2_ERROR_HINTS } from './api/part2.js';
 import type { Error as ApiErrorBody } from './api/generated/strict.js';
 import { scrubString } from './log.js';
 import { neutralize, sanitizeLabel, wrapUntrusted } from './untrusted.js';
@@ -173,13 +172,7 @@ function inServerTerms(hint: string): string {
 
 /** The next step for an error: the API's hint, else the contract's, else this server's own. */
 export function hintFor(code: string, apiHint?: string): string | undefined {
-  return (
-    apiHint ??
-    (ERROR_HINTS as Record<string, string | undefined>)[code] ??
-    // TODO(lane B openapi): in ERROR_HINTS once the contract is 1.15.0.
-    (PART2_ERROR_HINTS as Record<string, string | undefined>)[code] ??
-    LOCAL_HINTS[code]
-  );
+  return apiHint ?? (ERROR_HINTS as Record<string, string | undefined>)[code] ?? LOCAL_HINTS[code];
 }
 
 /** Lower case letters and digits only, to tell whether one text already says another. */
