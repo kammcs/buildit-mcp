@@ -31,7 +31,7 @@ import { SessionRequestEventSchema, type SessionRequestEvent } from './requests.
 
 /**
  * An event of the session as this version reads it: the contract's, and a
- * request (`agent.request`, agent API 1.12.0).
+ * request (`agent.request`, agent API 1.13.0).
  */
 // TODO(lane B openapi): once the generated SessionEventSchema includes agent.request, this is
 // SessionEvent again.
@@ -132,7 +132,7 @@ export function ackSessionEvents(api: ApiClient, cursor: number, options: Option
 }
 
 /**
- * post_session_message's body, with `request` (agent API 1.12.0): the
+ * post_session_message's body, with `request` (agent API 1.13.0): the
  * request this post answers.
  */
 // TODO(lane B openapi): the generated body has `request`; use it as is.

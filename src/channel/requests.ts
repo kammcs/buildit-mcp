@@ -1,6 +1,6 @@
 /**
  * Requests from buildIt.Social: the `agent.request` event (agent API
- * 1.12.0) and the content of its channel notification.
+ * 1.13.0) and the content of its channel notification.
  *
  * A request is the owner's tap on a "... with my agent" button (a catch-up
  * on a channel, say), or a subscription they set up (the morning brief),
@@ -21,13 +21,13 @@ import { SessionEventUserSchema } from '../api/generated/schemas.js';
 import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
 
 /** The agent API version that sends requests. */
-export const REQUESTS_API = '1.12.0';
+export const REQUESTS_API = '1.13.0';
 
 /** The event type of a request. */
 export const REQUEST_EVENT_TYPE = 'agent.request';
 
 // TODO(lane B openapi): the schemas below are written by hand from the
-// contract's draft. Once openapi/openapi.json 1.12.0 is copied in and
+// contract's draft. Once openapi/openapi.json 1.13.0 is copied in and
 // `npm run generate` has run, use the generated SessionRequestEventSchema
 // (in SessionEventSchema's union) and SessionRequestData instead, and drop
 // these (and the parse fallback in api.ts's listSessionEvents).

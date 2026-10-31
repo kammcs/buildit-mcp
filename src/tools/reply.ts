@@ -9,7 +9,7 @@
  * message of the direct conversation. It is safe to retry: the
  * idempotency key is the new message's id.
  *
- * With `request` (agent API 1.12.0) the post is the result of a request
+ * With `request` (agent API 1.13.0) the post is the result of a request
  * from buildIt.Social (a <channel> tag with event="request"). Without
  * thread_id or item it starts a new message of the direct conversation,
  * never "the latest thread" (which may be an item's): a catch-up's result
@@ -196,7 +196,7 @@ async function replyThread(
 }
 
 /**
- * The body's `request`, on a server that takes it (agent API 1.12.0 and
+ * The body's `request`, on a server that takes it (agent API 1.13.0 and
  * newer, or one that hasn't said its version). An older server never sent
  * a request, so a post there is an ordinary one.
  */

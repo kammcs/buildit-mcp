@@ -1,5 +1,5 @@
 /**
- * Requests from buildIt.Social (agent API 1.12.0): the notification's
+ * Requests from buildIt.Social (agent API 1.13.0): the notification's
  * attributes and lead line for each context, hostile channel names, the
  * shapes that drop an event, the loop's owner, session and repeat checks,
  * reply's `request`, and the request worker's questions in the direct
@@ -387,7 +387,7 @@ afterAll(async () => {
 });
 beforeEach(() => {
   api.reset();
-  api.meta = { ...api.meta, api_version: '1.12.0' };
+  api.meta = { ...api.meta, api_version: '1.13.0' };
 });
 afterEach(async () => {
   await Promise.all(stops.splice(0).map((stop) => stop()));
@@ -594,8 +594,8 @@ describe('reply with request', () => {
     expect(textOf(r)).toContain('without thread_id or item, and with the same request');
   });
 
-  it('leaves request out against a server older than 1.12.0', async () => {
-    api.meta = { ...api.meta, api_version: '1.11.0' };
+  it('leaves request out against a server older than 1.13.0', async () => {
+    api.meta = { ...api.meta, api_version: '1.12.0' };
     const c = await start();
     api.sessions.postFrom(TOKEN, 'Hi');
     await notes(c, 1);

@@ -1013,7 +1013,7 @@ export class FakeApi {
     v14: true,
     v19: true,
     v111: true,
-    v112: true,
+    v113: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -1047,7 +1047,7 @@ export class FakeApi {
       v14: true,
       v19: true,
       v111: true,
-      v112: true,
+      v113: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1271,8 +1271,8 @@ export class FakeApi {
         throw new FakeError('projects_off');
       }
 
-      // TODO(lane B openapi): 1.12.0's fields, until the contract has them (then they parse as usual).
-      const pre = this.v112Fields(route.id, url.searchParams, body, token ?? '');
+      // TODO(lane B openapi): 1.13.0's fields, until the contract has them (then they parse as usual).
+      const pre = this.v113Fields(route.id, url.searchParams, body, token ?? '');
       if (pre.refused !== undefined) {
         this.send(res, pre.refused);
         return;
@@ -1345,21 +1345,21 @@ export class FakeApi {
   }
 
   /**
-   * Agent API 1.12.0's additions, read here until the contract has them
+   * Agent API 1.13.0's additions, read here until the contract has them
    * (TODO(lane B openapi): drop this, and let the generated schemas check
    * them): list_channel_messages' `active_since`, and post_session_message's
    * `request` (its refusals: request_not_found, request_closed,
-   * request_result_private). `compat.v112` false answers like 1.11.0: the
+   * request_result_private). `compat.v113` false answers like 1.12.0: the
    * fields are violations there, as an unknown field is.
    */
-  private v112Fields(
+  private v113Fields(
     id: OperationId,
     search: URLSearchParams,
     body: unknown,
     token: string,
   ): { body: unknown; query: Record<string, unknown>; refused?: ScriptedResponse } {
     const query: Record<string, unknown> = {};
-    if (!this.compat.v112) return { body, query };
+    if (!this.compat.v113) return { body, query };
     if (id === 'list_channel_messages' && search.has('active_since')) {
       const value = search.get('active_since') ?? '';
       search.delete('active_since');
@@ -3431,7 +3431,7 @@ export class FakeApi {
   private listChannelMessages({ identity, params, query }: Call): Handled {
     const c = this.channel(params.channel ?? '', identity);
     const since = typeof query.since === 'string' ? Date.parse(query.since) : undefined;
-    // 1.12.0: posted or replied to after the time.
+    // 1.13.0: posted or replied to after the time.
     const active =
       typeof query.active_since === 'string' ? Date.parse(query.active_since) : undefined;
     const lastActivity = (m: FakeMessage): number =>

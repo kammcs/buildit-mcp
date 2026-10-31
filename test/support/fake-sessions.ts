@@ -1713,7 +1713,7 @@ export class FakeSessions {
   }
 
   // -------------------------------------------------------------------------
-  // Requests (agent API 1.12.0)
+  // Requests (agent API 1.13.0)
   // TODO(lane B openapi): the event's shape is the contract's draft, written by hand.
   // -------------------------------------------------------------------------
 

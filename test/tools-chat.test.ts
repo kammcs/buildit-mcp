@@ -142,8 +142,8 @@ describe('read_channel', () => {
     expect(second.text).toContain('This is the last page.');
   });
 
-  it('reads what was posted or replied to after active_since, on a 1.12.0 server', async () => {
-    api.meta = { ...api.meta, api_version: '1.12.0' };
+  it('reads what was posted or replied to after active_since, on a 1.13.0 server', async () => {
+    api.meta = { ...api.meta, api_version: '1.13.0' };
     const c = await client();
     const r = await c.call('read_channel', {
       channel: CHANNELS.general,
@@ -159,7 +159,7 @@ describe('read_channel', () => {
   });
 
   it('reads active_since as since on an older server, and says so', async () => {
-    api.meta = { ...api.meta, api_version: '1.11.0' };
+    api.meta = { ...api.meta, api_version: '1.12.0' };
     const c = await client();
     const r = await c.call('read_channel', {
       channel: CHANNELS.general,
@@ -167,7 +167,7 @@ describe('read_channel', () => {
     });
     expect((r.structured.messages as { id: string }[]).map((m) => m.id)).toEqual([MESSAGES.other]);
     expect(api.requests.at(-1)?.query).toBe('?since=2026-10-06T09%3A15%3A00Z');
-    expect(r.structured.note).toContain('older than agent API 1.12.0');
+    expect(r.structured.note).toContain('older than agent API 1.13.0');
     expect(r.text).toContain('replies in older threads are not');
   });
 

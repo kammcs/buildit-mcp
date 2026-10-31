@@ -213,11 +213,11 @@ export const listChannelsTool = defineTool({
 // ---------------------------------------------------------------------------
 
 /** The agent API version that takes list_channel_messages' active_since. */
-export const ACTIVE_SINCE_API = '1.12.0';
+export const ACTIVE_SINCE_API = '1.13.0';
 
 /** What read_channel says when it read with since instead of active_since. */
 const ACTIVE_SINCE_FALLBACK =
-  'This buildIt.Social server is older than agent API 1.12.0, so active_since was read as since: only messages posted after that time are listed, and replies in older threads are not. To catch replies, read_thread the threads you know of whose last_reply_at is after that time.';
+  'This buildIt.Social server is older than agent API 1.13.0, so active_since was read as since: only messages posted after that time are listed, and replies in older threads are not. To catch replies, read_thread the threads you know of whose last_reply_at is after that time.';
 
 /**
  * Whether the server takes active_since: from /v1/meta (read once when this
@@ -257,7 +257,7 @@ export const readChannelTool = defineTool({
       .datetime({ offset: true })
       .optional()
       .describe(
-        'Only messages posted or replied to after this time, RFC 3339 (agent API 1.12.0; an older server reads it as since, and says so).',
+        'Only messages posted or replied to after this time, RFC 3339 (agent API 1.13.0; an older server reads it as since, and says so).',
       ),
     cursor: CursorInput.optional(),
     limit: limitInput(100, 25),
@@ -277,7 +277,7 @@ export const readChannelTool = defineTool({
       path: { channel: args.channel },
       query: {
         ...(since ? { since } : {}),
-        // TODO(lane B openapi): active_since is in the generated query from 1.12.0; drop the cast.
+        // TODO(lane B openapi): active_since is in the generated query from 1.13.0; drop the cast.
         ...((active === true ? { active_since: args.active_since } : {}) as Record<string, never>),
         ...(args.cursor ? { cursor: args.cursor } : {}),
         ...(args.limit ? { limit: args.limit } : {}),
