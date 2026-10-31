@@ -59,6 +59,13 @@ const NEW_PLAN_NOTE =
   "In this server, that means calling the same propose_* tool again. Then show the person the new preview and wait for their yes before apply_plan: their yes to the old plan doesn't carry over.";
 
 const TOOL_NOTES: Record<string, (details: Record<string, unknown>) => string | undefined> = {
+  // reply's `request` (agent API 1.13.0).
+  request_result_private: () =>
+    "This request's result is private: a catch-up goes only to your direct message with the person. Send it again with reply, without thread_id or item, and with the same request.",
+  request_not_found: () =>
+    "This request isn't this session's: use the request_id of the <channel> tag (event=request) you are answering.",
+  request_closed: () =>
+    'This request expired or was dropped: nothing more is posted for it. Tell the person only if they are waiting for it, in your direct message (reply with dm: true, without request).',
   token_invalid: () =>
     'In this server the token comes from BUILDIT_TOKEN (or the Authorization header in HTTP mode).',
   // The details list the token's scopes; without them, whoami does.

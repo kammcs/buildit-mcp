@@ -57,6 +57,7 @@ import {
   sniffImage,
 } from '../files/types.js';
 import { uuidV5 } from '../tools/ask.js';
+import type { PostSessionMessageBody } from './api.js';
 
 /** The most files a reply takes (a message's set). */
 export const REPLY_MAX_FILES = 10;
@@ -445,7 +446,7 @@ async function uploadOne(
  */
 export async function shareFiles(
   files: readonly PreparedFile[],
-  post: Omit<OperationIO['post_session_message']['body'], 'id' | 'files' | 'thread_id'>,
+  post: Omit<PostSessionMessageBody, 'id' | 'files' | 'thread_id'>,
   o: ShareOptions,
 ): Promise<{ response: PostSessionMessageResponse; ids: string[] }> {
   const ids: string[] = [];

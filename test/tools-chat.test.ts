@@ -142,6 +142,35 @@ describe('read_channel', () => {
     expect(second.text).toContain('This is the last page.');
   });
 
+  it('reads what was posted or replied to after active_since, on a 1.13.0 server', async () => {
+    api.meta = { ...api.meta, api_version: '1.13.0' };
+    const c = await client();
+    const r = await c.call('read_channel', {
+      channel: CHANNELS.general,
+      active_since: '2026-10-06T09:15:00Z',
+    });
+    // The root was posted before, but replied to after.
+    expect((r.structured.messages as { id: string }[]).map((m) => m.id)).toEqual([
+      MESSAGES.other,
+      MESSAGES.root,
+    ]);
+    expect(r.structured).not.toHaveProperty('note');
+    expect(api.requests.at(-1)?.query).toBe('?active_since=2026-10-06T09%3A15%3A00Z');
+  });
+
+  it('reads active_since as since on an older server, and says so', async () => {
+    api.meta = { ...api.meta, api_version: '1.12.0' };
+    const c = await client();
+    const r = await c.call('read_channel', {
+      channel: CHANNELS.general,
+      active_since: '2026-10-06T09:15:00Z',
+    });
+    expect((r.structured.messages as { id: string }[]).map((m) => m.id)).toEqual([MESSAGES.other]);
+    expect(api.requests.at(-1)?.query).toBe('?since=2026-10-06T09%3A15%3A00Z');
+    expect(r.structured.note).toContain('older than agent API 1.13.0');
+    expect(r.text).toContain('replies in older threads are not');
+  });
+
   it("says when an app (a bot of the org) sent a message, and wraps the app's name", async () => {
     api.store.messages.push({
       id: uid(9050),

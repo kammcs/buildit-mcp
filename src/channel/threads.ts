@@ -49,6 +49,20 @@ export function isItemThread(state: ChannelState, threadId: string | undefined):
   return false;
 }
 
+/**
+ * The direct message's latest thread, when there is one and it is not an
+ * item's (undefined: a new message of the direct message). Never an item's
+ * thread: what `dm: true` posts is private to the person.
+ */
+export function dmThread(state: ChannelState): string | undefined {
+  const t = state.lastDmThread;
+  return t !== undefined && !isItemThread(state, t) ? t : undefined;
+}
+
+/** The refusal of `dm: true` with a thread or an item named. */
+export const DM_AND_THREAD =
+  'Give dm: true, or thread_id or item, not both: dm: true posts in your direct message with the person.';
+
 /** The refusal when several threads are active and none was named. */
 export function threadRequiredMessage(state: ChannelState, tool: string, how: string): string {
   const listed = state

@@ -839,7 +839,8 @@ export function createApprovalHookTools(state: ChannelState): ToolDefinition[] {
       }
       if (state.folder === undefined) return;
       const entry = workerEntry(state.folder, agentId);
-      if (entry === undefined) return;
+      // A request worker writes only in the direct message: never "is writing" in an item's thread.
+      if (entry === undefined || entry.request !== undefined) return;
       const thread =
         entry.thread_id !== undefined && isUuid(entry.thread_id)
           ? entry.thread_id

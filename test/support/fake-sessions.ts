@@ -346,7 +346,10 @@ export class SessionRefusal extends Error {
       | 'not_parent_session'
       | 'handoff_exists'
       | 'handoff_closed'
-      | 'no_target',
+      | 'no_target'
+      | 'request_not_found'
+      | 'request_closed'
+      | 'request_result_private',
     readonly details: Record<string, unknown> = {},
   ) {
     super(code);
@@ -517,6 +520,17 @@ export class FakeSessions {
 
   post(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
     const s = this.live(token);
+    const request = typeof body.request === 'string' ? body.request : undefined;
+    if (request !== undefined) this.checkRequestPost(token, request, body);
+    const posted = this.postMessage(s, body);
+    if (request !== undefined) this.noteRequestPost(token, request);
+    return posted;
+  }
+
+  private postMessage(
+    s: FakeSession,
+    body: Record<string, unknown>,
+  ): { status: number; body: unknown } {
     const id = String(body.id);
     const fileIds = Array.isArray(body.files) ? (body.files as string[]) : undefined;
     if (fileIds !== undefined) return this.postWithFiles(s, id, body, fileIds);
@@ -1710,6 +1724,124 @@ export class FakeSessions {
       },
     } as SessionEvent);
     return messageId;
+  }
+
+  // -------------------------------------------------------------------------
+  // Requests (agent API 1.13.0)
+  // -------------------------------------------------------------------------
+
+  /** The requests sent to sessions, by id: their session's token, result place and state. */
+  readonly requests = new Map<
+    string,
+    { token: string; place: string; status: 'delivered' | 'answered' | 'closed' }
+  >();
+  /** Every post with `request`, in order. */
+  readonly requestPosts: { token: string; request: string }[] = [];
+
+  /**
+   * Sends a request to the session as an agent.request event (tests). The
+   * data's parts can be replaced or left out with `data`; `event` replaces
+   * envelope fields (another session's id, say). Returns the ids.
+   */
+  pushRequest(
+    token: string,
+    options: {
+      kind?: string;
+      source?: 'button' | 'subscription';
+      requestId?: string;
+      context?: Record<string, unknown>;
+      project?: { id: string; key: string } | null;
+      place?: string;
+      locale?: string;
+      timeZone?: string;
+      requester?: { id: string; name: string; is_guest?: boolean };
+      handedFrom?: string;
+      data?: Record<string, unknown>;
+      event?: Record<string, unknown>;
+    } = {},
+  ): { eventId: string; requestId: string } {
+    const s = this.sessions.get(token);
+    if (!s) throw new Error('no session for this token');
+    const identity = this.identity(token);
+    const requestId = options.requestId ?? randomUUID();
+    const eventId = randomUUID();
+    const place = options.place ?? 'dm';
+    const requester = options.requester ?? { id: s.ownerId, name: s.ownerName };
+    const data = {
+      request: {
+        id: requestId,
+        kind: options.kind ?? 'catch_up',
+        source: options.source ?? 'button',
+        subscription_id: options.source === 'subscription' ? randomUUID() : null,
+        created_at: '2026-10-07T14:00:00.000Z',
+        expires_at: '2026-10-14T14:00:00.000Z',
+      },
+      requester: {
+        id: requester.id,
+        name: requester.name,
+        is_guest: requester.is_guest ?? false,
+        locale: options.locale ?? 'en',
+      },
+      locale: options.locale ?? 'en',
+      time_zone: options.timeZone ?? 'America/Toronto',
+      project:
+        options.project === undefined
+          ? { id: SESSION_IDS.demoProject, key: 'DEMO' }
+          : options.project,
+      context: options.context ?? {
+        type: 'channel',
+        channel: { id: SESSION_IDS.demoChannel, name: 'general' },
+        from: '2026-10-06T21:40:00.000Z',
+        to: '2026-10-07T14:00:00.000Z',
+      },
+      result: { place },
+      handed:
+        options.handedFrom === undefined
+          ? null
+          : { from_session: { id: randomUUID(), label: options.handedFrom } },
+      ...options.data,
+    };
+    s.events.push({
+      v: 1,
+      id: eventId,
+      type: 'agent.request',
+      created_at: this.host.now(),
+      org: { id: identity.org.id },
+      app: { id: SESSION_IDS.agent, installation_id: SESSION_IDS.installation },
+      attempt: 1,
+      session: { id: s.id, label: s.label },
+      data,
+      ...options.event,
+    } as unknown as SessionEvent);
+    if (!this.requests.has(requestId)) {
+      this.requests.set(requestId, { token, place, status: 'delivered' });
+    }
+    return { eventId, requestId };
+  }
+
+  /**
+   * A post's `request`, checked as the server does: another session's (or an
+   * unknown) request is request_not_found, an expired, dropped or waiting one
+   * request_closed, and a direct-message result elsewhere
+   * request_result_private, each with {request_id}.
+   */
+  private checkRequestPost(token: string, request: string, body: Record<string, unknown>): void {
+    const r = this.requests.get(request.toLowerCase());
+    if (r === undefined || r.token !== token) {
+      throw new SessionRefusal('request_not_found', { request_id: request });
+    }
+    if (r.status === 'closed') throw new SessionRefusal('request_closed', { request_id: request });
+    const thread = typeof body.thread_id === 'string' ? body.thread_id : null;
+    if (r.place === 'dm' && thread !== null && this.itemIds.has(thread)) {
+      throw new SessionRefusal('request_result_private', { request_id: request });
+    }
+  }
+
+  /** A post with `request` that passed: the request is answered. */
+  private noteRequestPost(token: string, request: string): void {
+    this.requestPosts.push({ token, request });
+    const r = this.requests.get(request.toLowerCase());
+    if (r !== undefined) r.status = 'answered';
   }
 
   /** The session of a token (tests). */

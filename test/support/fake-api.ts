@@ -865,7 +865,7 @@ function normalNeeds(raw: unknown): string[] {
 
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.11.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.13.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -3361,9 +3361,20 @@ export class FakeApi {
   private listChannelMessages({ identity, params, query }: Call): Handled {
     const c = this.channel(params.channel ?? '', identity);
     const since = typeof query.since === 'string' ? Date.parse(query.since) : undefined;
+    // 1.13.0: posted or replied to after the time.
+    const active =
+      typeof query.active_since === 'string' ? Date.parse(query.active_since) : undefined;
+    const lastActivity = (m: FakeMessage): number =>
+      Math.max(
+        Date.parse(m.createdAt),
+        ...this.store.messages
+          .filter((r) => r.parentId === m.id && !r.deleted)
+          .map((r) => Date.parse(r.createdAt)),
+      );
     const messages = this.store.messages
       .filter((m) => m.channelId === c.id && m.parentId === null)
       .filter((m) => since === undefined || Date.parse(m.createdAt) > since)
+      .filter((m) => active === undefined || lastActivity(m) > active)
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
       .map((m) => this.messageOut(m));
     return { status: 200, body: this.page(messages, query) };

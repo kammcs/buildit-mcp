@@ -23,7 +23,6 @@ import {
   type ConnectStartResponse,
   type PostSessionMessageResponse,
   type SessionEvent,
-  type SessionEventsResponse,
   type SessionResponse,
 } from '../api/generated/schemas.js';
 import type { OperationIO } from '../api/generated/strict.js';
@@ -89,7 +88,7 @@ export async function listSessionEvents(
   api: ApiClient,
   query: OperationIO['list_session_events']['query'],
   options: Options = {},
-): Promise<SessionEventsResponse & { skipped: number }> {
+): Promise<{ events: SessionEvent[]; cursor: number; more: boolean; skipped: number }> {
   const op = OPERATIONS.list_session_events;
   if (api.served?.operations !== undefined && !api.served.operations.has('list_session_events')) {
     // callOperation's answer for an operation the deployment doesn't serve.
@@ -117,10 +116,13 @@ export function ackSessionEvents(api: ApiClient, cursor: number, options: Option
   return callOperation(api, 'ack_session_events', { body: { cursor } }, options);
 }
 
+/** POST /v1/session/messages body (with `request` from agent API 1.13.0: the request it answers). */
+export type PostSessionMessageBody = OperationIO['post_session_message']['body'];
+
 /** POST /v1/session/messages, in the agent's own direct message with its owner. */
 export function postSessionMessage(
   api: ApiClient,
-  body: OperationIO['post_session_message']['body'],
+  body: PostSessionMessageBody,
   options: Options = {},
 ): Promise<PostSessionMessageResponse> {
   return callOperation(api, 'post_session_message', { body }, options);
