@@ -110,6 +110,11 @@ export async function resolveThread(
 function placeWords(known: KnownRequest): string {
   if (known.place === 'thread')
     return `the thread it was made in (thread_id ${known.thread ?? '?'})`;
+  if (known.place === 'meeting_thread') {
+    return known.project === null
+      ? `the meeting's thread (thread_id ${known.thread ?? '?'}) for the summary, and your direct message with the person for the Apply card (the meeting has no project)`
+      : `the meeting's thread (thread_id ${known.thread ?? '?'}), or your direct message with the person`;
+  }
   const items = (known.items ?? []).map((i) => i.key);
   return items.length === 1
     ? `the thread of ${items[0] ?? '?'}`
@@ -120,6 +125,14 @@ function placeWords(known: KnownRequest): string {
 export function outsidePlace(known: KnownRequest): string {
   return `Not posted (request_result_private): this request's result goes only to ${placeWords(known)}. Post it there with the same request, or leave thread_id, item and card_thread out to use that place.`;
 }
+
+/**
+ * The refusal of an Apply card in a meeting's thread when the meeting has
+ * no project, before any call (the server's plan_outside_thread, reason
+ * no_project).
+ */
+export const NO_PROJECT_CARD =
+  'Not posted (plan_outside_thread, no_project): this meeting has no project, so its thread takes no Apply card. Ask the person in your direct message which project (ask with dm: true), then propose again for that project only, with the same request and dm: true (or card_thread left out): the card goes in your direct message.';
 
 /**
  * The thread a post for a request goes to (reply, a propose_* card,
@@ -135,9 +148,11 @@ export function requestThread(
   state: ChannelState,
   request: string,
   given: { thread_id?: string | undefined; item?: string | undefined },
-): { known: KnownRequest; threadId: string } | undefined {
+  what: 'post' | 'card' = 'post',
+): { known: KnownRequest; threadId: string | undefined } | undefined {
   const known = state.requests.get(request.toLowerCase());
   if (known === undefined || known.place === 'dm') return undefined;
+  if (known.place === 'meeting_thread') return meetingThread(state, known, given, what);
   if (known.place === 'thread') {
     const thread = known.thread;
     if (thread === undefined) return undefined;
@@ -177,4 +192,41 @@ export function requestThread(
     );
   }
   return { known, threadId: chosen.id };
+}
+
+/**
+ * A meeting's notes (place meeting_thread): the summary goes in the
+ * meeting's thread (the default for a post); the Apply card there only when
+ * the meeting has a project, else in the direct message (the default for a
+ * card then: undefined, or its latest thread). Notes for the person go to
+ * the direct message too (`dm: true`, handled by the callers). A thread
+ * named outside those (the meeting's thread, the direct message's latest)
+ * is refused before any call.
+ */
+function meetingThread(
+  state: ChannelState,
+  known: KnownRequest,
+  given: { thread_id?: string | undefined; item?: string | undefined },
+  what: 'post' | 'card',
+): { known: KnownRequest; threadId: string | undefined } | undefined {
+  const thread = known.thread;
+  if (thread === undefined) return undefined;
+  if (given.item !== undefined) throw new ToolInputError(outsidePlace(known));
+  const named = given.thread_id;
+  const noCard = what === 'card' && known.project === null;
+  if (named === undefined) {
+    return { known, threadId: noCard ? dmThread(state) : thread };
+  }
+  if (named.toLowerCase() === thread.toLowerCase()) {
+    if (noCard) throw new ToolInputError(NO_PROJECT_CARD);
+    return { known, threadId: thread };
+  }
+  // Another thread: only the direct message's latest (dm: true says it
+  // plainly). Any other thread is refused here: a meeting's result never
+  // goes to a thread this session can't tell is the direct message's.
+  const dm = dmThread(state);
+  if (dm !== undefined && named.toLowerCase() === dm.toLowerCase()) {
+    return { known, threadId: dm };
+  }
+  throw new ToolInputError(outsidePlace(known));
 }

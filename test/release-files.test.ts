@@ -193,6 +193,7 @@ describe('the Claude Code plugin', () => {
       'buildit-thread-to-items',
       'buildit-triage',
       'buildit-item-helper',
+      'buildit-meeting-notes',
       'ask_reporter',
       'locale',
     ]) {
@@ -206,6 +207,7 @@ describe('the Claude Code plugin', () => {
     expect(skills).toEqual([
       'buildit-catch-up',
       'buildit-item-helper',
+      'buildit-meeting-notes',
       'buildit-requests',
       'buildit-thread-to-items',
       'buildit-triage',
@@ -263,6 +265,7 @@ describe('the Claude Code plugin', () => {
         'skills/buildit-thread-to-items/SKILL.md',
         'skills/buildit-triage/SKILL.md',
         'skills/buildit-item-helper/SKILL.md',
+        'skills/buildit-meeting-notes/SKILL.md',
       ]) {
         expect(readFileSync(join(out, 'buildit', file), 'utf8')).toBe(
           readFileSync(new URL(`../plugin/${file}`, import.meta.url), 'utf8'),

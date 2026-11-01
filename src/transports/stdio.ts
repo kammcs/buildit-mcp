@@ -113,6 +113,12 @@ export interface StdioOptions {
    * passes it next to the lock files; none: no journal).
    */
   approvalJournal?: string;
+  /**
+   * Channel mode: the file that keeps the meeting's notes requests this
+   * session was sent (their scope), so a restarted server still checks what
+   * they read (index.ts passes it next to the lock files; none: no journal).
+   */
+  requestJournal?: string;
   /** For tests: the typing indicator's timing. */
   typing?: { everyMs?: number; idleMs?: number };
 }
@@ -453,6 +459,9 @@ export function startStdio(
       logger: logger.child({ component: 'approvals' }),
       journal: options.approvalJournal,
     });
+    state.requestJournal = options.requestJournal;
+    const known = state.loadRequestJournal();
+    if (known > 0) logger.info("meeting's notes requests read from the journal", { count: known });
   }
   const extraTools = channel
     ? channelTools(

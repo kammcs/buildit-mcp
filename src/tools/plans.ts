@@ -32,7 +32,13 @@ import type { CreatePlanResponse, PlanEffect } from '../api/generated/schemas.js
 import type { CreatePlanBody, PostPlanCardBody } from '../api/generated/strict.js';
 import { ApiError } from '../api/client.js';
 import { postPlanCard } from '../channel/api.js';
-import { isUuid, requestThread, resolveThread } from '../channel/threads.js';
+import {
+  dmThread,
+  isUuid,
+  outsidePlace,
+  requestThread,
+  resolveThread,
+} from '../channel/threads.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolContext, type ToolOutput } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
@@ -249,6 +255,14 @@ export const CARD_IN_DM_NOTE =
 export const REQUEST_CARD_NOTE =
   "The card is the request's result, in its place: the request is answered. Don't post the result again; once the outcome arrives, a one-line note in that thread (reply with request) is enough, or nothing.";
 
+/**
+ * What a meeting's card refused for its thread says (plan_outside_thread,
+ * reason no_project): the meeting has no project, so the card goes to the
+ * direct message, once the person has said which project.
+ */
+const NO_PROJECT_REFUSED =
+  'This meeting has no project, so its thread takes no Apply card, and none was posted. Ask the person in your direct message which project (ask with dm: true), then propose again for that project only, with the same request and dm: true: the card goes in your direct message.';
+
 /** What a refused request card says: it never moves to the direct message. */
 const REQUEST_CARD_REFUSED =
   "A request's card goes only to the request's place, so it wasn't posted anywhere else, and the plan can't be applied without its card. Fix what the error says (a plan about another project can't go in this thread; split it, or leave that part out), then propose again; or tell the person in your direct message (reply with dm: true, without request).";
@@ -278,10 +292,11 @@ async function propose(
   cardThread: string | undefined,
   body: CreatePlanBody,
   request?: string,
+  dm?: boolean,
 ): Promise<ToolOutput<PlanOut>> {
   if (request !== undefined) requireApi(ctx.api, PLAN_ITEMS_API, 'request');
   // Which thread the card goes to is settled first: a refusal creates no plan.
-  const thread = await cardThreadOf(ctx, cardThread, request);
+  const thread = await cardThreadOf(ctx, cardThread, request, dm);
   const out = planOutput(await ctx.call('create_plan', { body }));
   const carded = await postCard(ctx, out.structured.handle, thread, request);
   if (carded === undefined) return out;
@@ -343,7 +358,14 @@ async function postCard(
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'error';
       ctx.logger.info('plan card not posted', { code });
-      if (err instanceof ApiError) throw err.withNote(REQUEST_CARD_REFUSED);
+      if (err instanceof ApiError) {
+        const reason = (err.details as { reason?: unknown } | undefined)?.reason;
+        throw err.withNote(
+          err.code === 'plan_outside_thread' && reason === 'no_project'
+            ? NO_PROJECT_REFUSED
+            : REQUEST_CARD_REFUSED,
+        );
+      }
       throw err;
     }
   }
@@ -378,12 +400,26 @@ async function cardThreadOf(
   ctx: ToolContext,
   given: string | undefined,
   request?: string,
+  dm?: boolean,
 ): Promise<string | undefined> {
   const state = ctx.channel;
   if (!ctx.api.sessionToken || state === undefined) return undefined;
+  if (dm === true) {
+    if (given !== undefined) {
+      throw new ToolInputError(
+        'Give dm: true or card_thread, not both: dm: true posts the card in your direct message with the person.',
+      );
+    }
+    const known = request === undefined ? undefined : state.requests.get(request.toLowerCase());
+    // A thread's or an item's request card goes only to its place, never the direct message.
+    if (known !== undefined && known.place !== 'dm' && known.place !== 'meeting_thread') {
+      throw new ToolInputError(outsidePlace(known));
+    }
+    return dmThread(state);
+  }
   const named = given === undefined ? {} : isUuid(given) ? { thread_id: given } : { item: given };
   if (request !== undefined) {
-    const placed = requestThread(state, request, named);
+    const placed = requestThread(state, request, named, 'card');
     if (placed !== undefined) return placed.threadId;
     // Not known here (a restart forgets requests): the card needs its place named.
     if (given === undefined && !state.requests.has(request.toLowerCase())) {
@@ -1184,7 +1220,13 @@ const REQUEST_INPUT = {
     .uuid()
     .optional()
     .describe(
-      "A request_id, when this card is its result: it goes only to that request's thread or item thread.",
+      "A request_id, when this card is its result: it goes only to that request's thread or item thread; a meeting's notes (result=\"meeting_thread\"): the meeting's thread when the meeting has a project, else your direct message.",
+    ),
+  dm: z
+    .boolean()
+    .optional()
+    .describe(
+      "Channel mode: true posts the card in your direct message with the person (its latest thread), not with card_thread. With request, only for a meeting's notes whose meeting has no project.",
     ),
 };
 
@@ -1270,6 +1312,7 @@ export const proposeNewItemsTool = defineTool({
         args: { project: args.project, items },
       } as unknown as CreatePlanBody,
       args.request,
+      args.dm,
     );
   },
 });
@@ -1346,6 +1389,7 @@ export const proposeItemChangesTool = defineTool({
       args.card_thread,
       { action: 'edit_items', args: { items } } as unknown as CreatePlanBody,
       args.request,
+      args.dm,
     );
   },
 });

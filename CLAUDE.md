@@ -99,6 +99,7 @@ src/
   channel/handoffs.ts   the handoffs seen, and the content of child_done and handoff_resolved
   channel/requests.ts   requests from buildIt.Social (agent.request): the event's shape, the checks,
                         and the content of event=request (attributes and the lead line)
+  channel/request-journal.ts  a meeting's notes requests' scope (ids only), kept across a restart
   channel/workers.ts    where the question hook posts: the lead's in the DM, a worker's in its
                         item's thread (the lead's table), a request worker's in the DM
   channel/threads.ts    which thread reply, ask and the approval cards post in (named once

@@ -81,6 +81,7 @@ import {
   type ResultPlace,
   type SessionRequestEvent,
 } from './requests.js';
+import { readRequestJournal, writeRequestJournal, type JournalEntry } from './request-journal.js';
 import { ToolRing } from './tool-ring.js';
 import type { TypingIndicator } from './typing.js';
 import { CardWaiters, eventMessageId } from './waiters.js';
@@ -132,6 +133,19 @@ export interface KnownRequest {
   thread?: string | undefined;
   /** An `item_thread` result's places: the context's items (an item's thread id is its id). */
   items?: readonly { key: string; id: string }[] | undefined;
+  /**
+   * A `meeting_thread` result's project: its key, or null when the meeting
+   * has none (its thread then takes no card: the card goes to the direct
+   * message). Its place is `thread`, the meeting's thread.
+   */
+  project?: string | null | undefined;
+  /**
+   * A meeting's transcript: the two files (and their messages) that
+   * get_attachment may fetch by the request, and nothing else.
+   */
+  transcript?: readonly { message_id: string; file_id: string }[] | undefined;
+  /** When the request expires (RFC 3339): the request journal drops it then. */
+  expiresAt?: string | undefined;
 }
 
 /**
@@ -200,8 +214,14 @@ export class ChannelState {
   }
   /** The requests this session was sent, by id (the oldest forgotten past REQUESTS_MAX). */
   readonly requests = new Map<string, KnownRequest>();
+  /**
+   * The file that keeps this session's meeting's notes requests (their
+   * scope, request-journal.ts), so a restarted server still checks what
+   * they read; none: they are known to this process only.
+   */
+  requestJournal: string | undefined;
   /** Remembers a request's kind and where its result goes. */
-  rememberRequest(id: string, request: KnownRequest): void {
+  rememberRequest(id: string, request: KnownRequest, journal = true): void {
     const k = id.toLowerCase();
     this.requests.delete(k);
     this.requests.set(k, request);
@@ -209,6 +229,45 @@ export class ChannelState {
       const oldest = this.requests.keys().next().value;
       if (oldest !== undefined) this.requests.delete(oldest);
     }
+    if (journal && request.place === 'meeting_thread') this.writeRequestJournal();
+  }
+  /** Loads the request journal's unexpired meeting's notes requests (at startup). */
+  loadRequestJournal(now = Date.now()): number {
+    if (this.requestJournal === undefined) return 0;
+    const entries = readRequestJournal(this.requestJournal, now);
+    for (const e of entries) {
+      if (this.requests.has(e.id)) continue;
+      this.rememberRequest(
+        e.id,
+        {
+          kind: e.kind,
+          place: 'meeting_thread',
+          thread: e.thread,
+          project: e.project,
+          transcript: e.transcript,
+          expiresAt: e.expires_at,
+        },
+        false,
+      );
+    }
+    return entries.length;
+  }
+  private writeRequestJournal(): void {
+    if (this.requestJournal === undefined) return;
+    const entries: JournalEntry[] = [];
+    for (const [id, r] of this.requests) {
+      if (r.place !== 'meeting_thread' || r.thread === undefined) continue;
+      if (r.transcript === undefined || r.expiresAt === undefined) continue;
+      entries.push({
+        id,
+        kind: r.kind,
+        thread: r.thread,
+        project: r.project ?? null,
+        transcript: [...r.transcript],
+        expires_at: r.expiresAt,
+      });
+    }
+    writeRequestJournal(this.requestJournal, entries);
   }
   /** The owner's locale, from their latest event (the cards' language). */
   ownerLocale: string | undefined;
@@ -798,6 +857,7 @@ export class ChannelLoop {
     const built = requestContent(event.data, {
       owner: info.owner.name,
       session: event.session.label,
+      apiVersion: this.options.api.served?.apiVersion,
     });
     if (!built.ok) {
       logger.warn('channel event dropped', { event_id: event.id, reason: built.reason });
@@ -805,17 +865,28 @@ export class ChannelLoop {
     }
     this.seen.add(seenKey);
     this.noteLocale({ locale: built.meta.locale });
-    await this.send({ content: built.content, meta: built.meta });
     const ctx = built.context;
     const items = ctx.type === 'item' ? [ctx.item] : ctx.type === 'items' ? ctx.items : undefined;
     // The context's items: a key named by a later post finds its thread without get_item.
     for (const i of items ?? []) state.rememberItem(i.key, i.id);
+    // Remembered before Claude hears of it, so its first read is checked.
     state.rememberRequest(built.requestId, {
       kind: request.kind,
       place: built.meta.result as ResultPlace,
-      ...(ctx.type === 'thread' ? { thread: ctx.thread_id } : {}),
+      ...(ctx.type === 'thread' || ctx.type === 'meeting' ? { thread: ctx.thread_id } : {}),
       ...(items === undefined ? {} : { items }),
+      ...(ctx.type === 'meeting'
+        ? {
+            project: built.meta.project ?? null,
+            transcript: [
+              { message_id: ctx.transcript.message_id, file_id: ctx.transcript.file_id },
+              { message_id: ctx.transcript.vtt_message_id, file_id: ctx.transcript.vtt_file_id },
+            ],
+            expiresAt: request.expires_at,
+          }
+        : {}),
     });
+    await this.send({ content: built.content, meta: built.meta });
     logger.info('request delivered', {
       event_id: event.id,
       request_id: built.requestId,

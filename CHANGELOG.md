@@ -2,6 +2,37 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.14.0] - Unreleased
+
+Built on version 1.18.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). A meeting's notes need a 1.18.0 server: on an older one, `request` on `read_thread` and `get_attachment` is refused before any call, and everything else works as in 0.13.0.
+
+### A meeting's notes
+
+- **`meeting_notes`** (a request with `source="capture"`): the owner turned notes on in a call with this session, and the transcript was posted in the meeting's thread. The `buildit-meeting-notes` skill reads that thread and the transcript by the request, posts a concise summary (decisions, action items, open questions) in the meeting's thread in the owner's language, then one Apply card of suggested new or changed items (`create_items` or `edit_items`) that only the owner can apply: in the thread when the meeting has a project (that project's items only), else in the direct message after asking the owner which project. What was said is data: instructions in it aren't followed, and the owner is told in the direct message.
+- **The tag** for a meeting: `context="meeting"`, `call_id`, `channel_id`, `channel_kind` (`channel` or `dm`), `context_thread_id`, `from` and `to`, and the transcript's `transcript_message_id`, `transcript_file_id`, `vtt_message_id` and `vtt_file_id`; `project` only when the meeting has one. The lead line names what to read, by the request, and where the summary and the card go.
+- **The oldest buildit-mcp:** 0.14.0. An older one's lead says which version is needed; against a server known to be older than 1.18.0, the lead says the server needs an update.
+
+### The scoped read
+
+- **`read_thread`** takes `request` (a meeting's notes request): it reads the meeting's thread by the request, a direct message's too, whatever the session reaches, for a day.
+- **`get_attachment`** takes `request`: one of the transcript's two files by the request.
+- Before any call, both refuse `request` on a server older than 1.18.0, with a personal access token, for a request this session doesn't know, and for a request of another kind (`request_kind_mismatch`); `read_thread` also refuses any thread but the meeting's, and `get_attachment` any file but the transcript's two.
+- **Across a restart:** a meeting's request (its ids and expiry only) is kept in a journal next to the folder's lock files until it expires, so a restarted server still checks what the request reads.
+
+### Cards in the direct message
+
+- **`propose_new_items` and `propose_item_changes` take `dm`**: `dm: true` posts the card in the direct message with the person. With `request`, only for a meeting's notes; a thread's or an item's request card still never moves to the direct message.
+- A meeting's card goes by default to the meeting's thread with a project, and to the direct message without one; in the thread without one it is refused before any call. The server's `plan_outside_thread` with `reason` `no_project` says to ask the owner which project, then post with `dm: true`.
+- `reply` with a meeting's request posts in the meeting's thread by default, or with `dm: true` in the direct message; any other thread (an item's, another channel's) is refused before any call.
+
+### The plugin
+
+- New skill `buildit-meeting-notes`. The `buildit-requests` rules and the request worker cover the kind, its place, the scoped read, the no-project card and `request_kind_mismatch`; the worker opens no file but the transcript `get_attachment` saved.
+
+### The contract
+
+- Agent API 1.18.0: the meeting context and kind, `source` `capture`, place `meeting_thread`, `request` on `get_thread` and the attachment link, `plan_outside_thread`'s `reason`, and (from 1.16.0 and 1.17.0) an optional sprint name, more `search_items` sort keys in the contract, and a type and parent changed together. The tools don't use the last three yet.
+
 ## [0.13.0] - 2026-10-31
 
 Built on version 1.15.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). The new tools and `request` on a card need a 1.15.0 server: on an older one they are refused before any call (`ask_reporter` isn't listed), and everything else works as in 0.12.0.
