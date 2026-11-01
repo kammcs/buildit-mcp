@@ -453,16 +453,19 @@ describe('the work item kinds', () => {
 describe('the oldest buildit-mcp per kind', () => {
   const ITEM = { id: '00000000-0000-4000-8000-000000007112', key: 'DEMO-12' };
 
-  it('is 0.11.0 for a catch-up and 0.13.0 for the work item kinds', () => {
+  it('is 0.11.0 for a catch-up, 0.13.0 for the work item kinds and 0.14.0 for meeting notes', () => {
     expect(REQUEST_KINDS.catch_up?.minClient).toBe('0.11.0');
+    expect(REQUEST_KINDS.meeting_notes?.minClient).toBe('0.14.0');
     for (const [kind, info] of Object.entries(REQUEST_KINDS)) {
-      if (kind !== 'catch_up') expect(info.minClient, kind).toBe(ITEM_KINDS_CLIENT);
+      if (kind !== 'catch_up' && kind !== 'meeting_notes') {
+        expect(info.minClient, kind).toBe(ITEM_KINDS_CLIENT);
+      }
     }
     expect(ITEM_KINDS_CLIENT).toBe('0.13.0');
     // This version handles every kind it lists.
     expect(compareVersions(SERVER_VERSION, ITEM_KINDS_CLIENT)).toBeGreaterThanOrEqual(0);
     for (const kind of Object.keys(REQUEST_KINDS)) expect(handlesKind(kind), kind).toBe(true);
-    expect(handlesKind('meeting_notes')).toBe(false);
+    expect(handlesKind('meeting_notes', '0.13.0')).toBe(false);
     expect(handlesKind('constructor')).toBe(false);
   });
 

@@ -317,6 +317,8 @@ export class AttachmentStore {
       fileId?: string | undefined;
       variant?: 'original' | 'thumbnail';
       auto: boolean;
+      /** A meeting's notes request: the transcript's file by the request (agent API 1.18.0). */
+      request?: string | undefined;
       /** The size the event gave, to reuse a saved copy without asking. */
       size?: number | undefined;
       maxBytes?: number;
@@ -338,6 +340,7 @@ export class AttachmentStore {
           ...(request.fileId === undefined ? {} : { file_id: request.fileId }),
           ...(variant === 'original' ? {} : { variant }),
           ...(request.auto ? { auto: true } : {}),
+          ...(request.request === undefined ? {} : { request: request.request }),
         },
       },
       { ...request.apiOptions, ...(request.signal ? { signal: request.signal } : {}) },

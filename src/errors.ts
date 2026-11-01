@@ -61,9 +61,17 @@ const NEW_PLAN_NOTE =
 const TOOL_NOTES: Record<string, (details: Record<string, unknown>) => string | undefined> = {
   // reply's `request` (agent API 1.13.0).
   request_result_private: () =>
-    'This request\'s result goes only to its own place: a catch-up\'s (result="dm") only to your direct message with the person: send it again without thread_id or item, and with the same request; a thread\'s or an item\'s (result="thread" or "item_thread") only to the request\'s thread or one of its items\' threads, so send it again with request and no thread named, or with one of its items.',
+    'This request\'s result goes only to its own place: a catch-up\'s (result="dm") only to your direct message with the person: send it again without thread_id or item, and with the same request; a thread\'s or an item\'s (result="thread" or "item_thread") only to the request\'s thread or one of its items\' threads, so send it again with request and no thread named, or with one of its items; a meeting\'s notes (result="meeting_thread") only to the meeting\'s thread (request and no thread named) or your direct message (dm: true).',
   request_not_found: () =>
     "This request isn't this session's: use the request_id of the <channel> tag (event=request) you are answering.",
+  // read_thread's and get_attachment's request (agent API 1.18.0); ask_reporter says its own.
+  request_kind_mismatch: () =>
+    "Only a meeting's notes request (kind meeting_notes) reads a thread or a file by its request. Leave request out: read_thread and get_attachment then read what this session reaches.",
+  // A meeting's card in a thread without a project (agent API 1.18.0): the propose_* tools say it too.
+  plan_outside_thread: (d) =>
+    d.reason === 'no_project'
+      ? 'This meeting has no project, so its thread takes no Apply card. Ask the person in your direct message which project (ask with dm: true), then propose again for that project only, with request and dm: true.'
+      : undefined,
   request_closed: () =>
     'This request expired or was dropped: nothing more is posted for it. Tell the person only if they are waiting for it, in your direct message (reply with dm: true, without request).',
   token_invalid: () =>

@@ -108,7 +108,7 @@ describe('whoami', () => {
       server: {
         name: 'buildit-mcp',
         version: SERVER_VERSION,
-        api_version: '1.15.0',
+        api_version: '1.18.0',
         update_required: false,
         not_served: [],
       },

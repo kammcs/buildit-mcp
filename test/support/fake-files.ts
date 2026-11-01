@@ -159,8 +159,16 @@ export class FakeFiles {
     return files.map((f) => f.file);
   }
 
-  /** POST /v1/session/attachments/link */
-  link(token: string, body: Record<string, unknown>, nowMs: number): unknown {
+  /**
+   * POST /v1/session/attachments/link. `byRequest`: the messages a meeting's
+   * notes request reads by itself (1.18.0), whoever's they are.
+   */
+  link(
+    token: string,
+    body: Record<string, unknown>,
+    nowMs: number,
+    byRequest?: readonly string[],
+  ): unknown {
     this.links.push(body);
     const messageId = String(body.message_id);
     const m = this.messages.get(messageId);
@@ -169,7 +177,12 @@ export class FakeFiles {
         message_id: messageId,
         file_id: typeof body.file_id === 'string' ? body.file_id : null,
       });
-    if (m === undefined || m.sessionToken !== token) throw notFound();
+    if (m === undefined) throw notFound();
+    if (byRequest !== undefined) {
+      if (!byRequest.includes(messageId.toLowerCase())) throw notFound();
+    } else if (m.sessionToken !== token) {
+      throw notFound();
+    }
     let stored: StoredFile | undefined;
     if (typeof body.file_id === 'string') {
       stored = m.files.find((f) => f.file.id === body.file_id);

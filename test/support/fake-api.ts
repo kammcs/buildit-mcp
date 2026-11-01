@@ -868,7 +868,7 @@ function normalNeeds(raw: unknown): string[] {
 
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.15.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.18.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -1006,7 +1006,9 @@ export class FakeApi {
    * org.test (1.1.0); without list_pins and list_emoji (1.2.0); without
    * read_channel's item threads and list_comments' since (v114 false: 1.13.0);
    * without create_items, edit_items, post_plan_card's request and
-   * ask_session_reporter (v115 false: 1.14.0).
+   * ask_session_reporter (v115 false: 1.14.0); without reading by a
+   * meeting's notes request, which get_thread and the attachment link then
+   * ignore (v118 false: 1.15.0).
    */
   compat = {
     hints: true,
@@ -1021,6 +1023,7 @@ export class FakeApi {
     v111: true,
     v114: true,
     v115: true,
+    v118: true,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -1056,6 +1059,7 @@ export class FakeApi {
       v111: true,
       v114: true,
       v115: true,
+      v118: true,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1897,9 +1901,18 @@ export class FakeApi {
       case 'create_session_attachment_link':
         return this.sessionCheck(() => {
           this.sessions.live(call.token);
+          // 1.18.0: a meeting's notes request fetches its transcript's two messages by itself.
+          const request =
+            this.compat.v118 && typeof call.body.request === 'string'
+              ? call.body.request
+              : undefined;
+          const byRequest =
+            request === undefined
+              ? undefined
+              : this.sessions.meetingRequest(call.token, request).transcript;
           return {
             status: 200,
-            body: this.sessions.files.link(call.token, call.body, this.clock),
+            body: this.sessions.files.link(call.token, call.body, this.clock, byRequest),
           };
         });
       case 'create_session_upload':
@@ -3476,7 +3489,30 @@ export class FakeApi {
       });
   }
 
-  private getThread({ identity, params, query }: Call): Handled {
+  private getThread({ identity, params, query, token }: Call): Handled {
+    // 1.18.0: a meeting's notes request reads its meeting's thread, whatever the reach.
+    if (this.compat.v118 && typeof query.request === 'string') {
+      const request = query.request;
+      const meeting = this.sessionCheck(() => {
+        this.sessions.live(token);
+        return this.sessions.meetingRequest(token, request);
+      });
+      const asked = this.store.messages.find((m) => m.id === lower(params.id ?? ''));
+      const rootId = asked === undefined ? undefined : (asked.parentId ?? asked.id);
+      const root = this.store.messages.find((m) => m.id === rootId);
+      if (root === undefined || root.id !== meeting.thread) {
+        throw new FakeError('not_found', { kind: 'message', ref: params.id ?? '' });
+      }
+      const replies = this.store.messages
+        .filter((m) => m.parentId === root.id)
+        .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+        .map((m) => this.messageOut(m));
+      const page = this.page(replies, query);
+      return {
+        status: 200,
+        body: { root: this.messageOut(root), replies: page.items, next_cursor: page.next_cursor },
+      };
+    }
     const root = this.store.messages.find((m) => m.id === lower(params.id ?? ''));
     if (!root || root.parentId !== null) {
       throw new FakeError('not_found', { kind: 'message', ref: params.id ?? '' });
@@ -4521,6 +4557,21 @@ export class FakeApi {
     // A plan that reaches outside the item's project, carded in the item's thread.
     if (this.plansOutsideThread && typeof body.thread_id === 'string') {
       throw new FakeError('plan_outside_thread', { thread_id: body.thread_id, key: 'OPS' });
+    }
+    // A meeting's card goes in its thread only when the meeting has a project (1.18.0).
+    if (request !== undefined) {
+      const known = this.sessions.requests.get(request.toLowerCase());
+      if (
+        known?.place === 'meeting_thread' &&
+        known.project === null &&
+        typeof body.thread_id === 'string' &&
+        known.threads.includes(body.thread_id.toLowerCase())
+      ) {
+        throw new FakeError('plan_outside_thread', {
+          thread_id: body.thread_id,
+          reason: 'no_project',
+        });
+      }
     }
     // A request's card goes only to the request's place (1.15.0), and lasts 24 hours.
     if (request !== undefined) {

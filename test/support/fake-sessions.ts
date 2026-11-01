@@ -561,6 +561,7 @@ export class FakeSessions {
     // A thread's or an item's request result goes to its place with no binding (1.15.0).
     const placed =
       typeof body.request === 'string' &&
+      threadId !== null &&
       (this.requests.get(body.request.toLowerCase())?.place ?? 'dm') !== 'dm';
     // An item's thread: only one this session works in.
     const inItem = threadId !== null && this.itemIds.has(threadId);
@@ -1765,6 +1766,9 @@ export class FakeSessions {
       posts: Map<string, number>;
       /** The context's items. */
       items: { id: string; key: string }[];
+      /** A meeting's notes (1.18.0): the transcript's two messages, and the project's key or null. */
+      transcript?: string[];
+      project?: string | null;
     }
   >();
   /** Every post with `request`, in order. */
@@ -1779,7 +1783,7 @@ export class FakeSessions {
     token: string,
     options: {
       kind?: string;
-      source?: 'button' | 'subscription';
+      source?: 'button' | 'subscription' | 'capture';
       requestId?: string;
       context?: Record<string, unknown>;
       project?: { id: string; key: string } | null;
@@ -1856,7 +1860,17 @@ export class FakeSessions {
           : [];
       const items =
         ctx.type === 'item' ? listed([ctx.item]) : ctx.type === 'items' ? listed(ctx.items) : [];
-      const threads = ctx.type === 'thread' ? [String(ctx.thread_id)] : items.map((i) => i.id);
+      const threads =
+        ctx.type === 'thread' || ctx.type === 'meeting'
+          ? [String(ctx.thread_id)]
+          : items.map((i) => i.id);
+      const transcript =
+        ctx.type === 'meeting'
+          ? (() => {
+              const t = (ctx as { transcript?: Record<string, unknown> }).transcript ?? {};
+              return [String(t.message_id).toLowerCase(), String(t.vtt_message_id).toLowerCase()];
+            })()
+          : undefined;
       this.requests.set(requestId, {
         token,
         kind: options.kind ?? 'catch_up',
@@ -1865,6 +1879,9 @@ export class FakeSessions {
         threads: threads.map((t) => t.toLowerCase()),
         posts: new Map(),
         items,
+        ...(transcript === undefined
+          ? {}
+          : { transcript, project: (data.project as { key?: string } | null)?.key ?? null }),
       });
     }
     return { eventId, requestId };
@@ -1886,6 +1903,19 @@ export class FakeSessions {
     if (r.place === 'dm' && thread !== null && this.itemIds.has(thread)) {
       throw new SessionRefusal('request_result_private', { request_id: request });
     }
+    // 1.18.0: a meeting's notes post in the meeting's thread (at most 3 times) or the direct message.
+    if (r.place === 'meeting_thread') {
+      if (thread === null || !r.threads.includes(thread)) {
+        if (thread !== null && this.itemIds.has(thread)) {
+          throw new SessionRefusal('request_result_private', { request_id: request });
+        }
+        return;
+      }
+      if ((r.posts.get(thread) ?? 0) >= 3) {
+        throw new SessionRefusal('request_post_limit', { request_id: request });
+      }
+      return;
+    }
     // 1.15.0: a thread's or an item's result goes only to its place, at most 3 times there.
     if (r.place !== 'dm') {
       if (thread === null || !r.threads.includes(thread)) {
@@ -1895,6 +1925,31 @@ export class FakeSessions {
         throw new SessionRefusal('request_post_limit', { request_id: request });
       }
     }
+  }
+
+  /**
+   * A read by request (get_thread's or the attachment link's `request`,
+   * 1.18.0), checked as the server does: another session's (or an unknown)
+   * request is request_not_found, another kind's request_kind_mismatch, a
+   * closed one request_closed. Returns the request.
+   */
+  meetingRequest(
+    token: string,
+    request: string,
+  ): { thread: string; transcript: string[]; project: string | null } {
+    const r = this.requests.get(request.toLowerCase());
+    if (r === undefined || r.token !== token) {
+      throw new SessionRefusal('request_not_found', { request_id: request });
+    }
+    if (r.kind !== 'meeting_notes') {
+      throw new SessionRefusal('request_kind_mismatch', { request_id: request });
+    }
+    if (r.status === 'closed') throw new SessionRefusal('request_closed', { request_id: request });
+    return {
+      thread: r.threads[0] ?? '',
+      transcript: r.transcript ?? [],
+      project: r.project ?? null,
+    };
   }
 
   /** A post with `request` that passed: the request is answered. */

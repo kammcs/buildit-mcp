@@ -132,6 +132,14 @@ export interface KnownRequest {
   thread?: string | undefined;
   /** An `item_thread` result's places: the context's items (an item's thread id is its id). */
   items?: readonly { key: string; id: string }[] | undefined;
+  /**
+   * A `meeting_thread` result's project: its key, or null when the meeting
+   * has none (its thread then takes no card: the card goes to the direct
+   * message). Its place is `thread`, the meeting's thread.
+   */
+  project?: string | null | undefined;
+  /** A meeting's transcript: the two messages get_attachment may fetch by the request. */
+  transcript?: readonly string[] | undefined;
 }
 
 /**
@@ -798,6 +806,7 @@ export class ChannelLoop {
     const built = requestContent(event.data, {
       owner: info.owner.name,
       session: event.session.label,
+      apiVersion: this.options.api.served?.apiVersion,
     });
     if (!built.ok) {
       logger.warn('channel event dropped', { event_id: event.id, reason: built.reason });
@@ -813,8 +822,14 @@ export class ChannelLoop {
     state.rememberRequest(built.requestId, {
       kind: request.kind,
       place: built.meta.result as ResultPlace,
-      ...(ctx.type === 'thread' ? { thread: ctx.thread_id } : {}),
+      ...(ctx.type === 'thread' || ctx.type === 'meeting' ? { thread: ctx.thread_id } : {}),
       ...(items === undefined ? {} : { items }),
+      ...(ctx.type === 'meeting'
+        ? {
+            project: built.meta.project ?? null,
+            transcript: [ctx.transcript.message_id, ctx.transcript.vtt_message_id],
+          }
+        : {}),
     });
     logger.info('request delivered', {
       event_id: event.id,
