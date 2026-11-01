@@ -15,6 +15,7 @@
 import { z } from 'zod';
 
 import type { Channel, Message } from '../api/generated/schemas.js';
+import type { KnownRequest } from '../channel/loop.js';
 import { MEETING_NOTES_API } from '../channel/requests.js';
 import { ToolInputError } from '../errors.js';
 import { defineTool, type ToolContext } from '../toolsets/registry.js';
@@ -376,11 +377,15 @@ export const readChannelTool = defineTool({
 const READS_BY_REQUEST = 'meeting_notes';
 
 /**
- * read_thread's `request`, checked before any call: a 1.18.0 server, a
- * session's token (channel mode), and, when this session knows the request,
- * a meeting's notes.
+ * A read by `request` (read_thread, get_attachment), checked before any
+ * call: a 1.18.0 server, a session's token (channel mode), and a meeting's
+ * notes request this session knows (it was sent here; the request journal
+ * keeps it across a restart). The caller then checks that what it reads is
+ * the request's own: its thread, or its transcript's two files. A request
+ * this session doesn't know is refused, so nothing is read by a request
+ * whose scope can't be checked here (the server checks it too).
  */
-export function checkReadRequest(ctx: ToolContext, request: string, tool: string): void {
+export function checkReadRequest(ctx: ToolContext, request: string, tool: string): KnownRequest {
   requireApi(ctx.api, MEETING_NOTES_API, 'request');
   if (!ctx.api.sessionToken) {
     throw new ToolInputError(
@@ -388,11 +393,17 @@ export function checkReadRequest(ctx: ToolContext, request: string, tool: string
     );
   }
   const known = ctx.channel?.requests.get(request.toLowerCase());
-  if (known !== undefined && known.kind !== READS_BY_REQUEST) {
+  if (known === undefined) {
+    throw new ToolInputError(
+      `Not read: this session doesn't know the request ${request}, so nothing is read by it. Use the request_id of the <channel> tag (event="request", kind="meeting_notes") you are answering. If that is the one, this server no longer knows it: tell the person in your direct message (reply with dm: true, without request) that the meeting's notes couldn't be read.`,
+    );
+  }
+  if (known.kind !== READS_BY_REQUEST) {
     throw new ToolInputError(
       `Not read (request_kind_mismatch): only a meeting's notes request reads by its request, and this one is ${known.kind}. Leave request out: ${tool} reads what this session reaches.`,
     );
   }
+  return known;
 }
 
 export const readThreadTool = defineTool({
@@ -425,7 +436,14 @@ export const readThreadTool = defineTool({
     next_cursor: z.string().nullable(),
   }),
   async run(args, ctx) {
-    if (args.request !== undefined) checkReadRequest(ctx, args.request, 'read_thread');
+    if (args.request !== undefined) {
+      const known = checkReadRequest(ctx, args.request, 'read_thread');
+      if (known.thread === undefined || known.thread.toLowerCase() !== args.message.toLowerCase()) {
+        throw new ToolInputError(
+          `Not read: by its request, a meeting's notes reads only the meeting's thread (message ${known.thread ?? '?'}, the tag's context_thread_id). Leave request out to read a thread this session reaches.`,
+        );
+      }
+    }
     const r = await ctx.call('get_thread', {
       path: { id: args.message },
       query: {

@@ -16,13 +16,14 @@ Built on version 1.18.0 of the agent API's contract (`openapi.json` copied from 
 
 - **`read_thread`** takes `request` (a meeting's notes request): it reads the meeting's thread by the request, a direct message's too, whatever the session reaches, for a day.
 - **`get_attachment`** takes `request`: one of the transcript's two files by the request.
-- Before any call, both refuse `request` on a server older than 1.18.0, with a personal access token, and for a known request of another kind (`request_kind_mismatch`); `get_attachment` also refuses any message but the transcript's two.
+- Before any call, both refuse `request` on a server older than 1.18.0, with a personal access token, for a request this session doesn't know, and for a request of another kind (`request_kind_mismatch`); `read_thread` also refuses any thread but the meeting's, and `get_attachment` any file but the transcript's two.
+- **Across a restart:** a meeting's request (its ids and expiry only) is kept in a journal next to the folder's lock files until it expires, so a restarted server still checks what the request reads.
 
 ### Cards in the direct message
 
 - **`propose_new_items` and `propose_item_changes` take `dm`**: `dm: true` posts the card in the direct message with the person. With `request`, only for a meeting's notes; a thread's or an item's request card still never moves to the direct message.
 - A meeting's card goes by default to the meeting's thread with a project, and to the direct message without one; in the thread without one it is refused before any call. The server's `plan_outside_thread` with `reason` `no_project` says to ask the owner which project, then post with `dm: true`.
-- `reply` with a meeting's request posts in the meeting's thread by default, or with `dm: true` in the direct message; an item's thread is refused.
+- `reply` with a meeting's request posts in the meeting's thread by default, or with `dm: true` in the direct message; any other thread (an item's, another channel's) is refused before any call.
 
 ### The plugin
 

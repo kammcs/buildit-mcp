@@ -110,24 +110,28 @@ export function createGetAttachmentTool(state: ChannelState): ToolDefinition {
         );
       }
       const owner = sanitizeLabel(state.session?.owner.name ?? 'the person', 64);
+      // By request: only the transcript's two files, each with its own message.
+      let fileId = args.file_id;
       if (args.request !== undefined) {
-        checkReadRequest(ctx, args.request, 'get_attachment');
-        const known = state.requests.get(args.request.toLowerCase());
-        const transcript = known?.transcript;
+        const known = checkReadRequest(ctx, args.request, 'get_attachment');
+        const file = (known.transcript ?? []).find(
+          (t) => t.message_id.toLowerCase() === args.message_id.toLowerCase(),
+        );
         if (
-          transcript !== undefined &&
-          !transcript.some((m) => m.toLowerCase() === args.message_id.toLowerCase())
+          file === undefined ||
+          (args.file_id !== undefined && args.file_id.toLowerCase() !== file.file_id.toLowerCase())
         ) {
           throw new ToolInputError(
-            "Not fetched: by its request, a meeting's notes reads only its transcript's two messages (the tag's transcript_message_id and vtt_message_id). Leave request out for a file of a thread this session works in.",
+            "Not fetched: by its request, a meeting's notes reads only its transcript's two files (the tag's transcript_message_id with transcript_file_id, or vtt_message_id with vtt_file_id). Leave request out for a file of a thread this session works in.",
           );
         }
+        fileId = file.file_id;
       }
       const variant = args.variant ?? 'original';
       let r: Awaited<ReturnType<typeof store.fetch>>;
       try {
         r = await store.fetch(args.message_id, {
-          fileId: args.file_id,
+          fileId,
           variant,
           auto: false,
           ...(args.request === undefined ? {} : { request: args.request }),

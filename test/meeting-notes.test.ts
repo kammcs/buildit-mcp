@@ -6,11 +6,11 @@
  * meeting's thread, the Apply card in the thread or (no project) the direct
  * message, and the refusals in words.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CallToolResult } from '@modelcontextprotocol/client';
 
@@ -448,7 +448,8 @@ describe('the scoped read', () => {
     assertDefused(textOf(r));
     expect(injectionIsInsideBlocks(textOf(r))).toBe(true);
 
-    // Another thread, by the same request: not found.
+    // Another thread, by the same request: refused before any call.
+    const reads = threadReads().length;
     const other = await c.client.callTool({
       name: 'read_thread',
       arguments: {
@@ -457,7 +458,8 @@ describe('the scoped read', () => {
       },
     });
     expect(other.isError).toBe(true);
-    expect(textOf(other)).toContain('not_found');
+    expect(textOf(other)).toContain("reads only the meeting's thread");
+    expect(threadReads()).toHaveLength(reads);
   });
 
   it("fetches the transcript by the request, as data, and only the transcript's two messages", async () => {
@@ -504,15 +506,27 @@ describe('the scoped read', () => {
     });
     expect(vtt.isError, textOf(vtt)).toBeFalsy();
 
-    // Any other message by the request: refused before any call.
+    // Any other message, or another file of a transcript's message, by the
+    // request: refused before any call.
     const links = api.sessions.files.links.length;
-    const other = await c.client.callTool({
-      name: 'get_attachment',
-      arguments: { message_id: thread, request },
-    });
-    expect(other.isError).toBe(true);
-    expect(textOf(other)).toContain("only its transcript's two messages");
+    for (const args of [
+      { message_id: thread, request },
+      { message_id: transcript.message_id, file_id: transcript.vtt_file_id, request },
+      { message_id: transcript.vtt_message_id, file_id: thread, request },
+    ]) {
+      const other = await c.client.callTool({ name: 'get_attachment', arguments: args });
+      expect(other.isError).toBe(true);
+      expect(textOf(other)).toContain("only its transcript's two files");
+    }
     expect(api.sessions.files.links).toHaveLength(links);
+
+    // Without file_id, the request's own file is the one fetched.
+    const bare = await c.client.callTool({
+      name: 'get_attachment',
+      arguments: { message_id: transcript.message_id, request },
+    });
+    expect(bare.isError, textOf(bare)).toBeFalsy();
+    expect((bare.structuredContent as { name: string }).name).toBe('transcript.md');
   });
 
   it("refuses another kind's request before any call, and maps the server's refusals", async () => {
@@ -536,13 +550,32 @@ describe('the scoped read', () => {
     expect(textOf(r)).toContain('request_kind_mismatch');
     expect(threadReads()).toHaveLength(before);
 
-    // A request this session doesn't know (a restart): the server answers.
+    // A request this session doesn't know (another session's, or one a
+    // restart forgot without a journal): refused before any call, for the
+    // thread and the files alike.
+    const links = api.sessions.files.links.length;
+    for (const [name, args] of [
+      ['read_thread', { message: thread, request: REQUEST }],
+      [
+        'get_attachment',
+        { message_id: TRANSCRIPT.message_id, file_id: TRANSCRIPT.file_id, request: REQUEST },
+      ],
+    ] as const) {
+      const unknown = await c.client.callTool({ name, arguments: args });
+      expect(unknown.isError).toBe(true);
+      expect(textOf(unknown)).toContain("this session doesn't know the request");
+    }
+    expect(threadReads()).toHaveLength(before);
+    expect(api.sessions.files.links).toHaveLength(links);
+
+    // A known meeting's request: the server's refusals in words.
+    const meeting = await meetingRequest(c, thread, { already: 1 });
     api.enqueueError(`/v1/messages/${thread}/thread`, 'request_kind_mismatch', {
-      request_id: REQUEST,
+      request_id: meeting,
     });
     const server = await c.client.callTool({
       name: 'read_thread',
-      arguments: { message: thread, request: REQUEST },
+      arguments: { message: thread, request: meeting },
     });
     expect(server.isError).toBe(true);
     expect(textOf(server)).toContain('request_kind_mismatch');
@@ -550,12 +583,75 @@ describe('the scoped read', () => {
       "Only a meeting's notes request (kind meeting_notes) reads a thread or a file by its request.",
     );
 
-    api.enqueueError(`/v1/messages/${thread}/thread`, 'request_closed', { request_id: REQUEST });
+    api.enqueueError(`/v1/messages/${thread}/thread`, 'request_closed', { request_id: meeting });
     const closed = await c.client.callTool({
       name: 'read_thread',
-      arguments: { message: thread, request: REQUEST },
+      arguments: { message: thread, request: meeting },
     });
     expect(textOf(closed)).toContain('request_closed');
+  });
+
+  it("keeps a request's scope across a restart (the journal), and only its scope", async () => {
+    // The fake's requests expire on 2026-10-14: the journal keeps them until then.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-08T12:00:00Z') });
+    stops.push(() => {
+      vi.useRealTimers();
+      return Promise.resolve();
+    });
+    const journal = join(folder, 'locks', 'session.requests.json');
+    const startWith = async () => {
+      api.sessions.open(TOKEN, 'laptop');
+      api.identities[TOKEN]!.token.scopes = [
+        'projects:read',
+        'projects:write',
+        'chat:read',
+        'files:read',
+      ];
+      const c = await startChannel(api, stops, {
+        config: channelConfig(api, { BUILDIT_TOOLSETS: 'all', BUILDIT_FOLDER: folder }),
+        stdio: { ask: { msPerSecond: 10 }, typing: { everyMs: 60_000 }, requestJournal: journal },
+      });
+      await waitFor(() => session().heartbeats.includes('online'));
+      return c;
+    };
+    const first = await startWith();
+    const thread = dmThread();
+    const transcript = transcriptFiles(thread);
+    const request = await meetingRequest(first, thread, { transcript });
+    // The journal holds ids only: no names, no text.
+    const saved = readFileSync(journal, 'utf8');
+    expect(saved).toContain(request);
+    expect(saved).not.toContain('design');
+    expect(saved).not.toContain('Alex');
+    await first.close();
+
+    // A new server in the folder: the event was acknowledged, so it isn't sent again.
+    const second = await startWith();
+    const r = await second.client.callTool({
+      name: 'read_thread',
+      arguments: { message: thread, request },
+    });
+    expect(r.isError, textOf(r)).toBeFalsy();
+    const before = threadReads().length;
+    const elsewhere = api.store.messages.find((m) => m.body.startsWith('Release'))!.id;
+    const other = await second.client.callTool({
+      name: 'read_thread',
+      arguments: { message: elsewhere, request },
+    });
+    expect(other.isError).toBe(true);
+    expect(threadReads()).toHaveLength(before);
+    const links = api.sessions.files.links.length;
+    const file = await second.client.callTool({
+      name: 'get_attachment',
+      arguments: { message_id: thread, request },
+    });
+    expect(file.isError).toBe(true);
+    expect(api.sessions.files.links).toHaveLength(links);
+    const ok = await second.client.callTool({
+      name: 'get_attachment',
+      arguments: { message_id: transcript.message_id, file_id: transcript.file_id, request },
+    });
+    expect(ok.isError, textOf(ok)).toBeFalsy();
   });
 
   it('refuses request on an older server, before any call', async () => {
@@ -614,6 +710,25 @@ describe('posting the notes', () => {
     });
     expect(item.isError).toBe(true);
     expect(textOf(item)).toContain('request_result_private');
+
+    // Nor is any other thread: refused before any call, the post and the card.
+    const sent = posts().length;
+    const elsewhere = api.store.messages.find((m) => m.body.startsWith('Release'))!.id;
+    const other = await c.client.callTool({
+      name: 'reply',
+      arguments: { text: 'x', request, thread_id: elsewhere },
+    });
+    expect(other.isError).toBe(true);
+    expect(textOf(other)).toContain('request_result_private');
+    expect(posts()).toHaveLength(sent);
+    const cards = cardPosts().length;
+    const card = await c.client.callTool({
+      name: 'propose_new_items',
+      arguments: { ...NEW_ITEMS, request, card_thread: elsewhere },
+    });
+    expect(card.isError).toBe(true);
+    expect(textOf(card)).toContain('request_result_private');
+    expect(cardPosts()).toHaveLength(cards);
   });
 
   it("with a project, posts the card in the meeting's thread", async () => {

@@ -200,9 +200,8 @@ export function requestThread(
  * the meeting has a project, else in the direct message (the default for a
  * card then: undefined, or its latest thread). Notes for the person go to
  * the direct message too (`dm: true`, handled by the callers). A thread
- * named outside those is refused: an item's thread here, the server for
- * anything else it can't tell (a direct message's thread is one of the
- * places).
+ * named outside those (the meeting's thread, the direct message's latest)
+ * is refused before any call.
  */
 function meetingThread(
   state: ChannelState,
@@ -222,7 +221,12 @@ function meetingThread(
     if (noCard) throw new ToolInputError(NO_PROJECT_CARD);
     return { known, threadId: thread };
   }
-  if (isItemThread(state, named)) throw new ToolInputError(outsidePlace(known));
-  // Another thread: one of the direct message's, or refused by the server.
-  return { known, threadId: named };
+  // Another thread: only the direct message's latest (dm: true says it
+  // plainly). Any other thread is refused here: a meeting's result never
+  // goes to a thread this session can't tell is the direct message's.
+  const dm = dmThread(state);
+  if (dm !== undefined && named.toLowerCase() === dm.toLowerCase()) {
+    return { known, threadId: dm };
+  }
+  throw new ToolInputError(outsidePlace(known));
 }

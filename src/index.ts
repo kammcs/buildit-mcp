@@ -163,12 +163,16 @@ async function main(): Promise<void> {
     const handle = startStdio(config, logger, {
       channelOwner,
       ...(channelLock === undefined ? {} : { channelLock }),
-      // The folder's open tool approvals, next to its lock files.
+      // The folder's open tool approvals and meeting's notes requests, next to its lock files.
       ...(config.channel !== undefined && channelOwner
         ? {
             approvalJournal: join(
               defaultLockDir(),
               `${sessionKey(config.channel.folder, config.apiUrl)}.approvals.json`,
+            ),
+            requestJournal: join(
+              defaultLockDir(),
+              `${sessionKey(config.channel.folder, config.apiUrl)}.requests.json`,
             ),
           }
         : {}),
