@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [0.14.0] - Unreleased
+## [0.14.0] - 2026-11-01
 
 Built on version 1.18.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). A meeting's notes need a 1.18.0 server: on an older one, `request` on `read_thread` and `get_attachment` is refused before any call, and everything else works as in 0.13.0.
 
