@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [0.14.1] - Unreleased
+## [0.14.1] - 2026-11-01
 
 ### Fixed
 
