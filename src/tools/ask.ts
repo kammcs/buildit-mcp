@@ -34,7 +34,15 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { ApiError } from '../api/client.js';
-import { answerSessionResponse, closeSessionCard, postSessionMessage } from '../channel/api.js';
+import type { SessionEvent } from '../api/generated/schemas.js';
+import {
+  answerSessionResponse,
+  closeSessionCard,
+  postSessionMessage,
+  readSessionCard,
+  servesSessionCardRead,
+  type SessionCardState,
+} from '../channel/api.js';
 import { NOT_THE_CHANNEL } from '../channel/lock.js';
 import type { ChannelState } from '../channel/loop.js';
 import {
@@ -517,13 +525,21 @@ export function decodeAnswer(questions: readonly Question[], answer: unknown): D
 // Results
 // ---------------------------------------------------------------------------
 
-export type NoAnswer = 'timeout' | 'dismissed' | 'session_ended' | 'closed';
+/**
+ * Why there is no answer. `unconfirmed`: the wait ended without an answer
+ * reaching this session, and the server couldn't confirm that nobody
+ * answered (an answer may have been given and not come through).
+ */
+export type NoAnswer = 'timeout' | 'dismissed' | 'session_ended' | 'closed' | 'unconfirmed';
 
 /** Why there is no answer, as Claude reads it. */
 export function noAnswerText(reason: NoAnswer, minutes: number): string {
+  const within = `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
   switch (reason) {
     case 'timeout':
-      return `Nobody answered this question in buildIt.Social within ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}, so the card was closed. Don't ask it again now: make a safe assumption and say which one you made, or stop and tell the person what you need.`;
+      return `Nobody answered this question in buildIt.Social within ${within}, so the card was closed. Don't ask it again now: make a safe assumption and say which one you made, or stop and tell the person what you need.`;
+    case 'unconfirmed':
+      return `No answer to this question reached this session within ${within}, so the card was closed. This session couldn't confirm that nobody answered: the person may have answered in buildIt.Social and the answer not come through. Tell them with reply, in the same thread, that their answer didn't reach you, and ask them to answer there in a message; meanwhile make a safe assumption and say which one you made, or stop and say what you need.`;
     case 'dismissed':
       return "The person dismissed this question in buildIt.Social without answering. Don't ask it again now: make a safe assumption and say which one you made, or stop and say what you need.";
     case 'session_ended':
@@ -604,10 +620,24 @@ export interface AskOptions {
   msPerSecond?: number;
   /** The clock (tests). */
   now?: () => number;
+  /** How often the wait reads its card on the server, in seconds of waiting (default CHECK_EVERY_S). */
+  checkEveryS?: number;
+  /** How long, in ms, an answer already on its way may still arrive after the deadline (default GRACE_MS). */
+  graceMs?: number;
 }
 
 /** The tool's own wait when it names none. */
 export const TOOL_DEFAULT_WAIT_S = 600;
+/**
+ * How often a waiting ask reads its card on the server (where the server
+ * serves that read), for an answer whose card.response never arrived.
+ */
+export const CHECK_EVERY_S = 60;
+/**
+ * After the deadline closes the card, how long the wait still takes an
+ * answer that was on its way (until the card's card.closed arrives).
+ */
+export const GRACE_MS = 15_000;
 /** How often a long wait reports progress. */
 const PROGRESS_EVERY_S = 30;
 
@@ -677,7 +707,7 @@ export const AskInputSchema = z.object({
 
 const AskOutputSchema = z.object({
   status: z.enum(['answered', 'no_answer', 'not_asked']),
-  reason: z.enum(['timeout', 'dismissed', 'session_ended', 'closed']).optional(),
+  reason: z.enum(['timeout', 'dismissed', 'session_ended', 'closed', 'unconfirmed']).optional(),
   answers: z
     .record(z.string(), z.string())
     .describe('Question → the answer, wrapped as untrusted content.'),
@@ -874,6 +904,8 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
           locale,
           deadline: started + waitS * scale,
           now,
+          checkEveryMs: (options.checkEveryS ?? CHECK_EVERY_S) * scale,
+          graceMs: options.graceMs ?? GRACE_MS,
         });
         const minutes = Math.max(1, Math.round(waitS / 60));
         return result(outcome, {
@@ -965,6 +997,10 @@ interface WaitInit {
   locale: Locale;
   deadline: number;
   now: () => number;
+  /** How often (ms on the wait's clock) the card is read on the server, where it can be. */
+  checkEveryMs: number;
+  /** How long (ms) an answer on its way may still arrive after the deadline. */
+  graceMs: number;
 }
 
 /** Why the card closed before its answer, as the result says it. */
@@ -977,15 +1013,186 @@ function closedReason(closedBy: unknown): NoAnswer {
   return 'closed';
 }
 
+/** An answer to the card (from its card.response event, or read back from the server). */
+interface CardAnswer {
+  id: string;
+  revision: number;
+  answer: unknown;
+}
+
+/**
+ * Takes one answer: refuses it (with a note) when it leaves a question
+ * unanswered, else accepts it, which closes the card, and returns the
+ * answers. Undefined: keep waiting (refused, or changed meanwhile).
+ * `closed`: the wait already closed the card, so an answer given before the
+ * close stands although it can no longer be accepted.
+ */
+async function takeAnswer(
+  init: WaitInit,
+  response: CardAnswer,
+  closed = false,
+): Promise<Outcome | undefined> {
+  const { ctx, memory, id, questions, locale } = init;
+  // Every question needs a choice or Other text.
+  const decoded = decodeAnswer(questions, response.answer);
+  if (decoded.kind === 'reject') {
+    if (!closed) await reject(ctx, response.id, response.revision, decoded.note, locale);
+    return undefined;
+  }
+  try {
+    // Accepting closes the card in the same step.
+    await answerSessionResponse(
+      ctx.api,
+      response.id,
+      { status: 'accepted', revision: response.revision },
+      ctx.apiOptions,
+    );
+  } catch (err) {
+    const remembered = memory.answersOf(id);
+    if (remembered !== undefined) return { status: 'answered', answers: remembered };
+    if (isRefusal(err, 'response_changed') || (!closed && isRefusal(err, 'card_closed'))) {
+      return undefined;
+    }
+    // The person answered; the answer stands even if it couldn't be marked.
+    ctx.logger.info('ask answer not marked accepted', { code: codeOf(err) });
+    if (!closed) await closeCard(ctx, id);
+  }
+  memory.rememberAnswers(id, decoded.answers);
+  return { status: 'answered', answers: decoded.answers };
+}
+
+/** An answer in a card.response event, if it has one's shape. */
+function eventAnswer(event: SessionEvent): CardAnswer | undefined {
+  const response = asRecord((event.data as Record<string, unknown>).response);
+  const responseId = response?.id;
+  const revision = response?.revision;
+  if (typeof responseId !== 'string' || typeof revision !== 'number') return undefined;
+  return { id: responseId, revision, answer: response?.answer };
+}
+
+/** What a read of the card on the server found. */
+type ReadBack =
+  | { kind: 'outcome'; outcome: Outcome }
+  /** Read: no answer to take, and the card is open. */
+  | { kind: 'none' }
+  /** Not read: the server doesn't serve the read, or it failed. */
+  | { kind: 'unknown' };
+
+/**
+ * Reads the card on the server (get_session_card, where it is served), for
+ * an answer whose card.response never reached this session: the owner's
+ * latest answer is taken as an event's would be (one accepted by another
+ * call for the same card: its answers); a card closed meanwhile ends the
+ * wait. `closed`: the wait closed the card itself (finish).
+ */
+async function readBack(init: WaitInit, closed = false): Promise<ReadBack> {
+  const { ctx, memory, id, questions } = init;
+  if (!servesSessionCardRead(ctx.api)) return { kind: 'unknown' };
+  let state: SessionCardState;
+  try {
+    state = await readSessionCard(ctx.api, id, {
+      ...(ctx.apiOptions.tool === undefined ? {} : { tool: ctx.apiOptions.tool }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    ctx.logger.info('ask card not read back', { code: codeOf(err) });
+    return { kind: 'unknown' };
+  }
+  const latest = [...state.responses].sort((a, b) => a.revision - b.revision).pop();
+  if (latest?.status === 'accepted') {
+    // Accepted by another call for the same card (the hook can run twice).
+    const decoded = decodeAnswer(questions, latest.answer);
+    if (decoded.kind === 'answers') {
+      memory.rememberAnswers(id, decoded.answers);
+      ctx.logger.info('ask answer read back', { message_id: id, status: latest.status });
+      return { kind: 'outcome', outcome: { status: 'answered', answers: decoded.answers } };
+    }
+  }
+  if (latest?.status === 'recorded') {
+    const outcome = await takeAnswer(
+      init,
+      { id: latest.id, revision: latest.revision, answer: latest.answer },
+      closed,
+    );
+    if (outcome !== undefined) {
+      ctx.logger.info('ask answer read back', { message_id: id, status: latest.status });
+      return { kind: 'outcome', outcome };
+    }
+  }
+  const closedAt = state.card?.closed_at;
+  if (!closed && typeof closedAt === 'string' && closedAt !== '') {
+    return {
+      kind: 'outcome',
+      outcome: { status: 'no_answer', reason: closedReason(state.card?.closed_by ?? 'app') },
+    };
+  }
+  return { kind: 'none' };
+}
+
+/**
+ * The wait is over: the card is read on the server one last time (where it
+ * can be), then closed; an answer already on its way still counts until
+ * the card's card.closed arrives (at most graceMs). Without an answer, the
+ * result is `timeout` only when the server confirms nobody answered (its
+ * read found none, or card.closed counts no respondents); else
+ * `unconfirmed`, never a timeout that may hide an answer.
+ */
+async function finish(init: WaitInit): Promise<Outcome> {
+  const { ctx, inbox, id } = init;
+  const before = await readBack(init);
+  if (before.kind === 'outcome') return before.outcome;
+  await closeCard(ctx, id);
+  let respondents: number | undefined;
+  const end = Date.now() + init.graceMs;
+  for (;;) {
+    const next = await inbox.next(end);
+    if (typeof next === 'string') break;
+    const { event, done } = next;
+    try {
+      if (eventMessageId(event) !== id) continue;
+      if (event.type === 'card.closed') {
+        const count = (event.data as Record<string, unknown>).respondents;
+        respondents = typeof count === 'number' ? count : undefined;
+        break;
+      }
+      if (event.type !== 'card.response') continue;
+      const response = eventAnswer(event);
+      if (response === undefined) continue;
+      const outcome = await takeAnswer(init, response, true);
+      if (outcome !== undefined) return outcome;
+    } finally {
+      done();
+    }
+  }
+  if (respondents !== undefined && respondents > 0) {
+    // Someone answered, and the answer didn't come: read it, where that can be done.
+    const after = await readBack(init, true);
+    if (after.kind === 'outcome') return after.outcome;
+  }
+  const confirmed = respondents === 0 || (before.kind === 'none' && respondents === undefined);
+  if (!confirmed) {
+    ctx.logger.warn('ask ended without confirming that nobody answered', {
+      message_id: id,
+      read: before.kind,
+      respondents: respondents ?? null,
+    });
+  }
+  return { status: 'no_answer', reason: confirmed ? 'timeout' : 'unconfirmed' };
+}
+
 /**
  * Takes the card's events until it has an answer for every question, it
- * closes before that, or the wait ends (then it is closed). A card answered
- * before (the hook can run twice for one call, the second time after the
- * first accepted the answer) returns the answers remembered for it; one that
- * closed before without an answer ends the ask the same way.
+ * closes before that, or the wait ends (then it is closed: see finish).
+ * Where the server serves it, the card is also read every checkEveryMs, so
+ * an answer whose card.response never arrived is taken all the same. A
+ * card answered before (the hook can run twice for one call, the second
+ * time after the first accepted the answer) returns the answers remembered
+ * for it; one that closed before without an answer ends the ask the same
+ * way. Claude Code moving the call to the background changes nothing here:
+ * it sends no cancel, and the call goes on waiting; a cancel closes the card.
  */
 async function waitForAnswer(init: WaitInit): Promise<Outcome> {
-  const { ctx, inbox, memory, id, questions, locale } = init;
+  const { ctx, inbox, memory, id } = init;
   const answered = (answers: Record<string, string>): Outcome => ({ status: 'answered', answers });
   const known = memory.answersOf(id);
   if (known !== undefined) return answered(known);
@@ -993,11 +1200,16 @@ async function waitForAnswer(init: WaitInit): Promise<Outcome> {
   if (closedBefore !== undefined) {
     return { status: 'no_answer', reason: closedReason(closedBefore) };
   }
+  const reads = servesSessionCardRead(ctx.api);
+  let nextCheck = reads ? init.now() + init.checkEveryMs : Number.POSITIVE_INFINITY;
   for (;;) {
-    const next = await inbox.next(init.deadline, ctx.signal, init.now);
+    const next = await inbox.next(Math.min(init.deadline, nextCheck), ctx.signal, init.now);
     if (next === 'timeout') {
-      await closeCard(ctx, id);
-      return { status: 'no_answer', reason: 'timeout' };
+      if (init.now() >= init.deadline) return finish(init);
+      nextCheck = init.now() + init.checkEveryMs;
+      const found = await readBack(init);
+      if (found.kind === 'outcome') return found.outcome;
+      continue;
     }
     if (next === 'aborted') {
       await closeCard(ctx, id);
@@ -1019,36 +1231,10 @@ async function waitForAnswer(init: WaitInit): Promise<Outcome> {
         };
       }
       if (event.type !== 'card.response') continue;
-      const response = asRecord((event.data as Record<string, unknown>).response);
-      const responseId = response?.id;
-      const revision = response?.revision;
-      if (typeof responseId !== 'string' || typeof revision !== 'number') continue;
-      // Every question needs a choice or Other text.
-      const decoded = decodeAnswer(questions, response?.answer);
-      if (decoded.kind === 'reject') {
-        await reject(ctx, responseId, revision, decoded.note, locale);
-        continue;
-      }
-      try {
-        // Accepting closes the card in the same step.
-        await answerSessionResponse(
-          ctx.api,
-          responseId,
-          { status: 'accepted', revision },
-          ctx.apiOptions,
-        );
-      } catch (err) {
-        if (isRefusal(err, 'response_changed', 'card_closed')) {
-          const remembered = memory.answersOf(id);
-          if (remembered !== undefined) return answered(remembered);
-          continue;
-        }
-        // The person answered; the answer stands even if it couldn't be marked.
-        ctx.logger.info('ask answer not marked accepted', { code: codeOf(err) });
-        await closeCard(ctx, id);
-      }
-      memory.rememberAnswers(id, decoded.answers);
-      return answered(decoded.answers);
+      const response = eventAnswer(event);
+      if (response === undefined) continue;
+      const outcome = await takeAnswer(init, response);
+      if (outcome !== undefined) return outcome;
     } finally {
       done();
     }

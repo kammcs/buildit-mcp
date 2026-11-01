@@ -35,6 +35,7 @@ import {
   type ErrorCode,
   type OperationId,
 } from '../../src/api/generated/operations.js';
+import { GET_SESSION_CARD } from '../../src/channel/api.js';
 import {
   ErrorSchema,
   QUERY_SCHEMAS,
@@ -1008,7 +1009,8 @@ export class FakeApi {
    * without create_items, edit_items, post_plan_card's request and
    * ask_session_reporter (v115 false: 1.14.0); without reading by a
    * meeting's notes request, which get_thread and the attachment link then
-   * ignore (v118 false: 1.15.0).
+   * ignore (v118 false: 1.15.0). With sessionCardRead (a server that has
+   * it, proposed in 0.14.1): get_session_card, listed in /v1/meta.
    */
   compat = {
     hints: true,
@@ -1024,6 +1026,7 @@ export class FakeApi {
     v114: true,
     v115: true,
     v118: true,
+    sessionCardRead: false,
   };
 
   private readonly initialIdentities: Record<string, FakeIdentity>;
@@ -1060,6 +1063,7 @@ export class FakeApi {
       v114: true,
       v115: true,
       v118: true,
+      sessionCardRead: false,
     };
     this.requests.length = 0;
     this.violations.length = 0;
@@ -1223,6 +1227,26 @@ export class FakeApi {
         status: 401,
         body: errorBody('token_invalid', 'The token is missing, malformed or unknown.'),
       });
+      return;
+    }
+
+    const cardRead = /^\/v1\/session\/messages\/([^/]+)\/card$/.exec(path);
+    if (method === 'GET' && cardRead !== null && this.compat.sessionCardRead) {
+      // get_session_card (proposed in 0.14.1; not in the contract yet).
+      try {
+        const id = decodeURIComponent(cardRead[1] ?? '');
+        const handled = this.sessionCheck(() => {
+          this.sessions.checkToken(token ?? '');
+          return this.sessions.readCard(token ?? '', id);
+        });
+        this.send(res, handled);
+      } catch (err) {
+        if (!(err instanceof FakeError)) throw err;
+        this.send(res, {
+          status: ERROR_STATUS[err.code],
+          body: errorBody(err.code, err.message, err.details),
+        });
+      }
       return;
     }
 
@@ -1675,7 +1699,9 @@ export class FakeApi {
 
   /** The operations this fake serves now, sorted, as /v1/meta lists them. */
   private servedOperations(): string[] {
-    return (Object.keys(OPERATIONS) as OperationId[])
+    // get_session_card isn't in the contract yet: listed as the server would list it.
+    const extra = (this.compat.sessionCardRead ? [GET_SESSION_CARD] : []) as OperationId[];
+    return [...(Object.keys(OPERATIONS) as OperationId[]), ...extra]
       .filter((id) => this.compat.releaseOps || !OLDER_RELEASE_OPS.has(id))
       .filter((id) => this.compat.membersRoute || id !== 'list_project_members')
       .filter((id) => this.compat.v12 || !V12_OPS.has(id))

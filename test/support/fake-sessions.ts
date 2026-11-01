@@ -895,6 +895,30 @@ export class FakeSessions {
    */
   sharedResults = false;
 
+  /**
+   * Which card events the server loses before the session polls them, as a
+   * server that drops them would (tests). The card's state still changes.
+   */
+  loseCardEvents: (type: 'card.response' | 'card.closed', messageId: string) => boolean = () =>
+    false;
+
+  /** GET /v1/session/messages/{id}/card (proposed in 0.14.1): the card, and its answers. */
+  readCard(token: string, id: string): { status: number; body: unknown } {
+    const s = this.live(token);
+    this.own(s, id);
+    const card = s.cards.get(id);
+    if (!card) {
+      throw new SessionRefusal('validation', { fields: [{ path: 'id', message: 'No card.' }] });
+    }
+    return {
+      status: 200,
+      body: {
+        card: { closed_at: card.closedAt, closed_by: card.closedBy },
+        responses: card.responses.map((r) => ({ ...r, message_id: id })),
+      },
+    };
+  }
+
   private checkCard(card: Record<string, unknown>): void {
     // Cards are built with the real clock (the fake clock only times plans).
     const path = questionCardProblem(card, Date.now(), { sharedResults: this.sharedResults });
@@ -2056,6 +2080,10 @@ export class FakeSessions {
 
   /** The event envelope of the session. */
   private event(s: FakeSession, type: SessionEvent['type'], data: Record<string, unknown>): void {
+    if (type === 'card.response' || type === 'card.closed') {
+      const messageId = (data.message as { id?: unknown } | undefined)?.id;
+      if (typeof messageId === 'string' && this.loseCardEvents(type, messageId)) return;
+    }
     const identity = this.identity(s.token);
     s.events.push({
       v: 1,
