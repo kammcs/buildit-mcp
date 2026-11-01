@@ -2,6 +2,15 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [0.14.1] - Unreleased
+
+### Fixed
+
+- **`ask` no longer reports a timeout that may hide an answer.** An answer whose `card.response` event never reached the session (a server that drops it) left the card "recorded", and the wait ended with `no_answer`, `timeout`, as if nobody had answered. Now, at the deadline, the result says `timeout` only when buildIt.Social confirms nobody answered: the card's `card.closed` counts no respondents, or the card read back (below) has no answer. Otherwise the reason is the new **`unconfirmed`**, and Claude is told the person may have answered and to tell them with `reply`.
+- **Reading the card back.** Where the server serves `get_session_card` (`GET /v1/session/messages/{id}/card`, listed in `/v1/meta`), a waiting `ask` reads its card every 60 s and once more at the deadline, and takes the owner's answer from it as from the event: accepted (which closes the card), or refused with a note when a question is left out. A card the read finds closed ends the wait as its `card.closed` would. On a server without it, nothing is read.
+- **An answer on its way at the deadline** still counts: after the deadline closes the card, the wait takes an answer that arrives before the card's `card.closed` (at most 15 s).
+- Claude Code moving a long `ask` to the background sends no cancel, and the call goes on waiting; tests now cover an answer in the first seconds, one long after, two cards waiting at once, an answer recorded while the channel loop is in the middle of a poll, a cancel, and the read back.
+
 ## [0.14.0] - 2026-11-01
 
 Built on version 1.18.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). A meeting's notes need a 1.18.0 server: on an older one, `request` on `read_thread` and `get_attachment` is refused before any call, and everything else works as in 0.13.0.

@@ -167,6 +167,57 @@ export function answerSessionResponse(
   return callOperation(api, 'answer_session_response', { path: { id: responseId }, body }, options);
 }
 
+/**
+ * The operation that reads one of the session's own question cards: whether
+ * it is closed (and how), and the owner's answers to it. Not in the
+ * contract yet (proposed in 0.14.1): called only when /v1/meta lists it.
+ */
+export const GET_SESSION_CARD: string = 'get_session_card';
+
+/** GET /v1/session/messages/{id}/card, read tolerantly. */
+const SessionCardStateSchema = z.looseObject({
+  card: z
+    .looseObject({
+      closed_at: z.string().nullable().optional(),
+      closed_by: z.string().nullable().optional(),
+    })
+    .optional(),
+  responses: z.array(
+    z.looseObject({
+      id: z.string(),
+      revision: z.number(),
+      status: z.string(),
+      answer: z.unknown(),
+      updated_at: z.string().optional(),
+    }),
+  ),
+});
+export type SessionCardState = z.infer<typeof SessionCardStateSchema>;
+
+/** Whether the deployment serves get_session_card (as its /v1/meta says). */
+export function servesSessionCardRead(api: ApiClient): boolean {
+  return api.served?.operations?.has(GET_SESSION_CARD) === true;
+}
+
+/**
+ * GET /v1/session/messages/{id}/card: the session's own question card as
+ * the server has it now (its closing, and the owner's answers), for an
+ * answer whose card.response event never arrived.
+ */
+export function readSessionCard(
+  api: ApiClient,
+  messageId: string,
+  options: Options = {},
+): Promise<SessionCardState> {
+  const template = '/v1/session/messages/{id}/card';
+  return api.requestParsed(
+    'GET',
+    template.replace('{id}', encodeURIComponent(messageId)),
+    SessionCardStateSchema,
+    { ...options, operation: GET_SESSION_CARD, pathTemplate: template },
+  );
+}
+
 /** POST /v1/session/plan-cards: posts a plan's preview as a card the owner applies or cancels. */
 export function postPlanCard(
   api: ApiClient,

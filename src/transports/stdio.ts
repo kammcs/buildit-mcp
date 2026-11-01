@@ -104,7 +104,7 @@ export interface StdioOptions {
   /** The wait before the first poll after taking the folder over (default PREEMPT_WAIT_MS). */
   preemptWaitMs?: number;
   /** For tests: ask's timing. */
-  ask?: Pick<AskOptions, 'msPerSecond' | 'now'>;
+  ask?: Pick<AskOptions, 'msPerSecond' | 'now' | 'checkEveryS' | 'graceMs'>;
   /** For tests: approve's timing. */
   approve?: Pick<ApproveOptions, 'msPerSecond' | 'now'>;
   /**
