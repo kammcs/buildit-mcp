@@ -71,7 +71,7 @@ const AgentInput = z
 
 /** Why a session can't assign its own agent, and what it may do instead. */
 export const AGENT_SELF_ASSIGN_NOTE =
-  "A Claude Code session can't assign items to its own agent: only the person can, in buildIt.Social. You may hand an item back with agent: null.";
+  "A Claude Code session can't assign items to its own agent: only the person can, in buildIt.Social. To ask for items, use propose_assignment (an Assign card that only the person's tap applies). You may hand an item back with agent: null.";
 const AGENT_ASSIGNEE_NOTE =
   'You can assign only your own personal agent, in a project whose channel you are in: "mine" or its name.';
 

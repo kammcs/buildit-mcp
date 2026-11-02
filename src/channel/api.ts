@@ -7,7 +7,8 @@
  * and its tool approvals (`post_session_approval`, `get_session_approval`,
  * `close_session_approval`), its capability tags (`set_session_capabilities`) and
  * its handoffs (`propose_session_handoff`, `get_session_handoff`,
- * `close_session_handoff`, `decline_session_handoff`).
+ * `close_session_handoff`, `decline_session_handoff`) and its assignment
+ * requests (`propose_session_assignment`, `close_session_assignment`).
  *
  * Each goes through callOperation, like the tools' calls: request ids,
  * timeouts, the error envelope, the one 429 retry, and tolerant parsing with
@@ -318,4 +319,23 @@ export function declineSessionHandoff(
   options: Options = {},
 ) {
   return callOperation(api, 'decline_session_handoff', { path: { id }, body: { reason } }, options);
+}
+
+/**
+ * POST /v1/session/assignment-requests: asks the owner to assign this
+ * session's agent 1 to 25 items, as an Assign card (idempotent by `id`: the
+ * same id again answers the first request, created false). Only the owner's
+ * tap on the card assigns.
+ */
+export function proposeSessionAssignment(
+  api: ApiClient,
+  body: OperationIO['propose_session_assignment']['body'],
+  options: Options = {},
+) {
+  return callOperation(api, 'propose_session_assignment', { body }, options);
+}
+
+/** POST /v1/session/assignment-requests/{id}/close: withdraws the session's own request while its card is open. */
+export function closeSessionAssignment(api: ApiClient, id: string, options: Options = {}) {
+  return callOperation(api, 'close_session_assignment', { path: { id }, body: {} }, options);
 }

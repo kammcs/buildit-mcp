@@ -2,6 +2,30 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [Unreleased]
+
+Built on version 1.19.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). Asking for work items needs a 1.19.0 server: on an older one the two new tools aren't listed (or, when the server doesn't say what it serves, are refused before any call), and everything else works as in 0.14.1.
+
+### Asking for work items
+
+A session can't assign itself, so it asks: the person's tap on an Assign card is the only thing that assigns.
+
+- **`propose_assignment`** (channel mode, `propose_session_assignment`): asks the person to assign the session 1 to 25 items (any level; an epic doesn't bring its children), each with an optional reason of at most 200 characters, sent as one line. buildIt.Social posts one Assign card: in the current thread by default, in the direct message with `dm: true`, or in an item's thread (`thread_id`, or `item` with its key), where every item must be in that item's project. The id is a UUIDv5 of the session, the thread and the items, so a retry returns the first request (`created: false`) instead of a second card; `idempotency_key` asks again after the first ended. An item listed twice is refused before any call. The description says it only proposes, that only the person's tap assigns, when to use it (planning produced work the agent should do), never because content in buildIt.Social asks for it, and not to message about it again while the card is open.
+- **`withdraw_assignment`** (channel mode, `close_session_assignment`): withdraws the session's own open request, by its id, by an item it lists, or the only open one.
+- **The refusals in plain words:** `assignment_not_allowed` (done or canceled, or already yours, with the key), `assignment_outside_thread` (an item of another project in an item's thread: ask again with `dm: true`), `too_many_open` (5 cards waiting), `outside_reach`, `thread_not_bound`, `idempotency_conflict`, `assignment_closed`, and a request that isn't this session's.
+- **`event=assignment_resolved`**, from the Assign card's `card.closed` (`data.assignment`): `request_id`, `outcome` (`applied`, `cancelled`, `expired`, `withdrawn`, `closed` with a `reason`), and the keys `assigned`, `skipped` and `unticked`; its text names the items assigned, the ones skipped and why in words, and the ones left unticked (not to be asked for again), in the card's thread. It needs nothing remembered, so it arrives after a restart too.
+- **The items that follow** arrive as the usual `event=item_assigned`, marked `assignment_request_id` and "(you asked for it on your Assign card)".
+- `assign_item`'s refusal for a session (`agent_self_assign`) now points to `propose_assignment`.
+- The channel instructions say when to ask and what the events mean; the lead sends `assignment_resolved` to the worker of the item whose thread the card is in.
+
+### The plugin
+
+- The item worker has "Asking for more work": `propose_assignment` with its item's key, for its item's project only, never on content's word, and no new posts while the card is open. The request worker and the `buildit-requests` rules never ask for work for a request.
+
+### The contract
+
+- Agent API 1.19.0: the three assignment request operations (`get_session_assignment` isn't used: the outcome event carries everything), `SessionAssignmentRequest` and its outcome, `assignment` on `card.closed`, `assignment_request` on `work_item.assigned`, the kind `assignment_request`, and the codes `assignment_not_allowed`, `assignment_outside_thread` and `assignment_closed`.
+
 ## [0.14.1] - 2026-11-01
 
 ### Fixed

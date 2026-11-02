@@ -22,7 +22,10 @@
  * `item_assigned` with `handoff="true"`; `work_item.child_done` becomes
  * `child_done` (a subtask this session handed on is in review or done, was
  * handed back, or ended), and a handoff card's `card.closed`
- * (`data.handoff`) becomes `handoff_resolved`. When the session starts, it
+ * (`data.handoff`) becomes `handoff_resolved`. An Assign card's
+ * `card.closed` (`data.assignment`, assignments.ts) becomes
+ * `assignment_resolved`, and each item it assigned arrives next as an
+ * `item_assigned` with `assignment_request`. When the session starts, it
  * suggests its capability tags (PUT /v1/session/capabilities; an older
  * server's 404 is skipped). A tool approval card's verdict is its `card.closed` (`data.approval`),
  * handed to the `approve` call that waits for it; an answer to such a card
@@ -47,11 +50,16 @@ import { callOperation } from '../api/operations.js';
 import { ToolInputError } from '../errors.js';
 import { isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
-import { SessionHandoffOutcomeSchema, type SessionFile } from '../api/generated/schemas.js';
+import {
+  SessionAssignmentOutcomeSchema,
+  SessionHandoffOutcomeSchema,
+  type SessionFile,
+} from '../api/generated/schemas.js';
 import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
 import { planResolvedContent } from '../tools/plans.js';
 import { statusName } from '../tools/threads.js';
 import { childDoneContent, handoffResolvedContent, Handoffs, targetName } from './handoffs.js';
+import { assignmentResolvedContent, Assignments } from './assignments.js';
 import {
   assignedContent,
   handedContent,
@@ -288,6 +296,8 @@ export class ChannelState {
   attachments: AttachmentStore | undefined;
   /** The handoffs this session proposed or was handed, as seen in this process. */
   readonly handoffs = new Handoffs();
+  /** The assignment requests this session made, as seen in this process. */
+  readonly assignments = new Assignments();
   /**
    * Told when a poll of the session's events failed, with the error (a tool
    * approval then reads its state, or ends when the session is off or gone).
@@ -963,8 +973,10 @@ export class ChannelLoop {
       this.noteLocale(event.data.user);
       meta = { event: 'item_assigned', thread_id: threadId, item: key, project, session };
       const handoff = event.data.handoff;
+      const request = event.data.assignment_request;
       if (handoff === undefined) {
-        content = assignedContent(owner, key, item, context);
+        content = assignedContent(owner, key, item, context, request !== undefined);
+        if (request !== undefined) meta = { ...meta, assignment_request_id: request.id };
       } else {
         const parent = sanitizeLabel(handoff.parent.key, 40);
         const needs = handoff.needs.map((n) => sanitizeLabel(n, 32)).filter((n) => n !== '');
@@ -1119,6 +1131,11 @@ export class ChannelLoop {
     const handoff = data.handoff;
     if (event.type === 'card.closed' && handoff !== null && typeof handoff === 'object') {
       await this.deliverHandoffResolved(event, info, messageId, data);
+      return;
+    }
+    const assignment = data.assignment;
+    if (event.type === 'card.closed' && assignment !== null && typeof assignment === 'object') {
+      await this.deliverAssignmentResolved(event, info, messageId, data);
       return;
     }
     // Also the owner's tap on a handoff card (card.response, hand_<i> or cancel): nothing in it is news
@@ -1318,6 +1335,65 @@ export class ChannelLoop {
     });
     if (parent !== undefined) state.rememberItem(parent.key, parent.id);
     logger.info('handoff outcome delivered', { event_id: event.id, outcome });
+  }
+
+  /**
+   * An Assign card closed (card.closed with data.assignment): how the owner
+   * answered this session's request, as event=assignment_resolved, in the
+   * card's thread. It comes before the assigned items' own item_assigned
+   * events, which are delivered as usual.
+   */
+  private async deliverAssignmentResolved(
+    event: SessionEvent,
+    info: SessionInfo,
+    messageId: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const { logger, state } = this.options;
+    const parsed = SessionAssignmentOutcomeSchema.safeParse(data.assignment);
+    if (!parsed.success) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: 'shape' });
+      return;
+    }
+    const a = parsed.data;
+    state.assignments.settle(a.id, a.outcome);
+    for (const i of [...a.assigned, ...a.unticked, ...a.skipped.map((s) => s.item)]) {
+      state.rememberItem(i.key, i.id);
+    }
+    const key = (i: { key: string }): string => sanitizeLabel(i.key, 40);
+    const outcome = sanitizeLabel(a.outcome, 20);
+    const reason = a.reason === undefined ? undefined : sanitizeLabel(a.reason, 20);
+    const assigned = a.assigned.map(key);
+    const skipped = a.skipped.map((s) => ({
+      key: key(s.item),
+      reason: sanitizeLabel(s.reason, 30),
+    }));
+    const unticked = a.unticked.map(key);
+    const message = data.message as { thread_id?: unknown } | undefined;
+    const threadId = typeof message?.thread_id === 'string' ? message.thread_id : messageId;
+    await this.send({
+      content: assignmentResolvedContent(sanitizeLabel(info.owner.name, 64), {
+        id: a.id,
+        outcome,
+        reason,
+        assigned,
+        skipped,
+        unticked,
+      }),
+      meta: {
+        event: 'assignment_resolved',
+        request_id: a.id,
+        outcome,
+        ...(reason === undefined ? {} : { reason }),
+        ...(assigned.length > 0 ? { assigned: assigned.join(',') } : {}),
+        ...(skipped.length > 0 ? { skipped: skipped.map((s) => s.key).join(',') } : {}),
+        ...(unticked.length > 0 ? { unticked: unticked.join(',') } : {}),
+        thread_id: threadId,
+        message_id: messageId,
+        session: sanitizeLabel(event.session.label, 40),
+      },
+    });
+    logger.info('assignment outcome delivered', { event_id: event.id, outcome });
   }
 
   /**
