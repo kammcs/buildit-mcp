@@ -2,6 +2,14 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## Unreleased
+
+Built on version 1.20.0 of the agent API's contract (`openapi.json` copied from the API and regenerated; it also carries 1.19.0's additions, which no tool uses yet). An older server leaves the new block out, and everything works as in 0.14.1.
+
+### Added
+
+- **`get_item` shows a request form's request.** An item someone sent through a project's request form carries `request`: the form's title and the requester's name, each wrapped as untrusted content (`source="request"`; in the text, one block), and `public_status`, the status the requester sees (`sent`, `accepted`, `in_progress`, `waiting_on_you`, `done`, `fixed`, `wont_do`, `duplicate` or `closed`; a newer one passes through). A deleted form and a requester who is gone read as such. A fixed line tells the agent its comments never reach the requester, even one starting with `@requester`: only a person's `@requester` comment does (the server refuses an agent's). The tool's description mentions the block; the `buildit://items/{key}` resource shows it too.
+
 ## [0.14.1] - 2026-11-01
 
 ### Fixed

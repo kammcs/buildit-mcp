@@ -46,6 +46,7 @@ import {
   type DescribeProjectResponse,
   type Development,
   type Feedback,
+  type FormRequest,
   type HistoryEvent,
   type ItemDetail,
   type ItemSearchResult,
@@ -389,6 +390,8 @@ export interface FakeStore {
   development: Record<string, Development>;
   /** Feedback-app reports by item id; an item without an entry wasn't filed through it. */
   feedback: Record<string, Feedback>;
+  /** Request-form requests by item id; an item without an entry wasn't sent through a form. */
+  requests: Record<string, FormRequest>;
 }
 
 let idCounter = 1000;
@@ -787,6 +790,7 @@ export function seedStore(): FakeStore {
     ],
     plans: [],
     feedback: {},
+    requests: {},
     development: {
       [story.id]: {
         pull_requests: [
@@ -2313,6 +2317,9 @@ export class FakeApi {
         ...(query.include_history === 'true' ? { history } : {}),
         ...(this.store.feedback[item.id]
           ? { feedback: structuredClone(this.store.feedback[item.id]) }
+          : {}),
+        ...(this.store.requests[item.id]
+          ? { request: structuredClone(this.store.requests[item.id]) }
           : {}),
         ...(query.include_development === 'true'
           ? {

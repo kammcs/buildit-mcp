@@ -3,7 +3,7 @@
  */
 import { z } from 'zod';
 
-import type { Development, Feedback } from '../api/generated/schemas.js';
+import type { Development, Feedback, FormRequest } from '../api/generated/schemas.js';
 import type { SearchItemsQuery } from '../api/generated/strict.js';
 import { defineTool } from '../toolsets/registry.js';
 import { sanitizeLabel, wrapUntrusted } from '../untrusted.js';
@@ -436,6 +436,62 @@ function feedbackText(f: Feedback): string {
   ].join('\n');
 }
 
+// The request block (agent API 1.20.0): the request behind an item someone
+// sent through a project's request form. The form's title and the
+// requester's name were written by people, so each is wrapped (source
+// "request"); the text output lists them in one block. public_status is the
+// API's word. The agent's comments never reach the requester: only a
+// person's @requester comment does, and the server refuses an agent's.
+
+const REQUEST_SOURCE = 'request';
+const REQUEST_FORM_CHARS = 80;
+const REQUEST_NAME_CHARS = 100;
+const REQUEST_NOTE =
+  "Your comments never reach the requester, even one starting with @requester: only a person's @requester comment does.";
+
+const RequestOutSchema = z
+  .object({
+    form: z.string().nullable(),
+    requester_name: z.string().nullable(),
+    public_status: z
+      .string()
+      .describe(
+        'What the requester sees: sent, accepted, in_progress, waiting_on_you, done, fixed, wont_do, duplicate or closed.',
+      ),
+  })
+  .describe('Form and requester: untrusted content (source "request").');
+type RequestOut = z.infer<typeof RequestOutSchema>;
+
+const requestNullable = (value: string | null | undefined, maxChars: number): string | null =>
+  value === null || value === undefined || value === ''
+    ? null
+    : wrappedLine(value, maxChars, REQUEST_SOURCE);
+
+function requestOut(r: FormRequest): RequestOut {
+  return {
+    form: requestNullable(r.form, REQUEST_FORM_CHARS),
+    requester_name: requestNullable(r.requester_name, REQUEST_NAME_CHARS),
+    public_status: sanitizeLabel(r.public_status, 30),
+  };
+}
+
+/** The request block for the text output: the status, then the people-written values in one block, then the note. */
+function requestText(r: FormRequest): string {
+  const one = (v: string | null | undefined, max: number, none: string): string =>
+    v === null || v === undefined || v === '' ? none : sanitizeLabel(v, max);
+  return [
+    `Request, sent through a project's request form · status the requester sees: ${sanitizeLabel(r.public_status, 30)}`,
+    wrapLines(
+      [
+        `form: ${one(r.form, REQUEST_FORM_CHARS, 'deleted')}`,
+        `requester: ${one(r.requester_name, REQUEST_NAME_CHARS, 'gone (account deleted)')}`,
+      ],
+      REQUEST_SOURCE,
+    ),
+    REQUEST_NOTE,
+  ].join('\n');
+}
+
 /** The development block for the text output: a line of counts, then every ref in one git block. */
 function developmentText(key: string, d: Development): string {
   const { counts } = d;
@@ -493,6 +549,7 @@ export const getItemTool = defineTool({
 - include_history=true adds the 50 latest history events.
 - include_development=true adds the GitHub pull requests, branches and commits that name the item's key (at most 20 of each, newest first, with totals); their text comes from GitHub, wrapped as untrusted content (source "git").
 - An item filed through the Feedback app by another organization adds feedback: the report, with the reporter, organization and device as untrusted content. Your comments never reach the reporter.
+- An item sent through a project's request form adds request: the form and the requester as untrusted content, and the status the requester sees. Your comments never reach the requester: only a person's @requester comment does.
 The result carries version and description_version: pass them to update_item (if_version, and description_version to replace the description) and transition_item. For older comments use list_comments.`,
   scopes: scopesOf('get_item'),
   annotations: {
@@ -533,6 +590,7 @@ The result carries version and description_version: pass them to update_item (if
     history: z.array(HistoryOutSchema).optional(),
     development: DevelopmentOutSchema.optional(),
     feedback: FeedbackOutSchema.optional(),
+    request: RequestOutSchema.optional(),
   }),
   async run(args, ctx) {
     const detail = args.detail ?? 'concise';
@@ -699,6 +757,8 @@ The result carries version and description_version: pass them to update_item (if
     }
     const feedback = r.feedback ? feedbackOut(r.feedback) : undefined;
     if (r.feedback) parts.push(feedbackText(r.feedback));
+    const request = r.request ? requestOut(r.request) : undefined;
+    if (r.request) parts.push(requestText(r.request));
     const development = r.development ? developmentOut(r.development) : undefined;
     if (r.development) parts.push(developmentText(r.item.key, r.development));
     return {
@@ -711,6 +771,7 @@ The result carries version and description_version: pass them to update_item (if
         ...(history ? { history } : {}),
         ...(development ? { development } : {}),
         ...(feedback ? { feedback } : {}),
+        ...(request ? { request } : {}),
         ...(window ? { description_window: window } : {}),
       },
       text: parts.join('\n\n'),
