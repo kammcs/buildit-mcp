@@ -415,6 +415,8 @@ async function cardThreadOf(
     if (known !== undefined && known.place !== 'dm' && known.place !== 'meeting_thread') {
       throw new ToolInputError(outsidePlace(known));
     }
+    // An absent owner's meeting: the card is a new message of the direct conversation.
+    if (known?.missed === 'dm') return undefined;
     return dmThread(state);
   }
   const named = given === undefined ? {} : isUuid(given) ? { thread_id: given } : { item: given };
@@ -1220,13 +1222,13 @@ const REQUEST_INPUT = {
     .uuid()
     .optional()
     .describe(
-      "A request_id, when this card is its result: it goes only to that request's thread or item thread; a meeting's notes (result=\"meeting_thread\"): the meeting's thread when the meeting has a project, else your direct message.",
+      'A request_id, when this card is its result: it goes only to that request\'s thread or item thread; a meeting\'s notes (result="meeting_thread"): the meeting\'s thread when the meeting has a project, else your direct message; your direct message when the person wasn\'t in the call (missed_summary="dm").',
     ),
   dm: z
     .boolean()
     .optional()
     .describe(
-      "Channel mode: true posts the card in your direct message with the person (its latest thread), not with card_thread. With request, only for a meeting's notes whose meeting has no project.",
+      'Channel mode: true posts the card in your direct message with the person (its latest thread), not with card_thread. With request, only for a meeting\'s notes whose meeting has no project, or whose call the person missed (missed_summary="dm": a new message there).',
     ),
 };
 

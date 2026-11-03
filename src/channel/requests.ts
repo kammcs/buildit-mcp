@@ -31,6 +31,14 @@ export const REQUESTS_API = '1.13.0';
  */
 export const MEETING_NOTES_API = '1.18.0';
 
+/**
+ * Where an absent owner's "what you missed" summary goes (a meeting's
+ * notes, `missed_summary.place`). v1 may add places: one this version
+ * doesn't know means the normal notes only.
+ */
+export type MissedPlace = 'dm';
+const MISSED_PLACES: ReadonlySet<string> = new Set(['dm']);
+
 /** The event type of a request. */
 export const REQUEST_EVENT_TYPE = 'agent.request';
 
@@ -247,6 +255,25 @@ function transcriptRef(v: unknown): MeetingTranscript | undefined {
   };
 }
 
+/**
+ * An absent owner's "what you missed" summary: where it goes, checked.
+ * Undefined unless the owner was away (`absent` true) and the place is one
+ * this version knows; a conversation id that isn't one makes it unknown too.
+ */
+function missedRef(
+  absent: boolean,
+  v: unknown,
+): { place: MissedPlace; conversation_id: string | null } | undefined {
+  if (!absent) return undefined;
+  const r = asRecord(v);
+  if (r === undefined || typeof r.place !== 'string' || !MISSED_PLACES.has(r.place)) {
+    return undefined;
+  }
+  const id = r.conversation_id;
+  if (id !== undefined && id !== null && !isUuid(id)) return undefined;
+  return { place: r.place as MissedPlace, conversation_id: id ?? null };
+}
+
 // ---------------------------------------------------------------------------
 // The context
 // ---------------------------------------------------------------------------
@@ -273,6 +300,17 @@ export type RequestContext =
       from: string;
       to: string;
       transcript: MeetingTranscript;
+      /**
+       * The owner sent this session to a call they couldn't make (a proxy
+       * capture). False when the server leaves it out (older servers) or
+       * sends anything but true.
+       */
+      absent: boolean;
+      /**
+       * Where the "what you missed" summary and the Apply card go: only
+       * when absent and the place is known; else the normal notes only.
+       */
+      missed: { place: MissedPlace; conversation_id: string | null } | undefined;
     };
 
 /**
@@ -320,7 +358,8 @@ export function readContext(
       return { type: 'brief', from: raw.from, to: raw.to, project: own, channel };
     }
     case 'meeting': {
-      // {call_id, channel {id, name|null, dm}, thread_id, started_at, ended_at, transcript}.
+      // {call_id, channel {id, name|null, dm}, thread_id, started_at, ended_at, transcript,
+      // absent?, missed_summary? {place, conversation_id}}.
       const rawChannel = asRecord(raw.channel);
       const channel = channelRef(rawChannel);
       if (channel === undefined || typeof rawChannel?.dm !== 'boolean') return undefined;
@@ -331,6 +370,8 @@ export function readContext(
       if (!isTime(raw.started_at) || !isTime(raw.ended_at)) return undefined;
       if (Date.parse(raw.started_at) > Date.parse(raw.ended_at)) return undefined;
       const dm = rawChannel.dm;
+      // Older servers leave absent out: the owner took the notes, as before.
+      const absent = raw.absent === true;
       return {
         type: 'meeting',
         call_id: raw.call_id,
@@ -339,6 +380,8 @@ export function readContext(
         from: raw.started_at,
         to: raw.ended_at,
         transcript,
+        absent,
+        missed: missedRef(absent, raw.missed_summary),
       };
     }
     default:
@@ -428,6 +471,15 @@ function placeLine(
         return `Post the result only where the request was made, with request="${id}". ${askLine(owner)}`;
       }
       const summary = `Post the summary in the meeting's thread: reply with request="${id}" (it goes there by itself, thread_id "${ctx.thread_id}").`;
+      if (ctx.missed !== undefined) {
+        // An absent owner: the normal notes in the thread, then "what you missed" and the card in the DM.
+        const missed = `${owner} wasn't in the call: then also post a private "what you missed" summary for ${owner} in your direct message (reply with request="${id}" and dm: true; it starts a new message there), written for someone who wasn't there: the decisions, anything that needs ${owner} (questions for them, mentions of them) and their action items, short.`;
+        const dmCard =
+          project === undefined
+            ? `This meeting has no project: ask ${owner} in your direct message which project (ask with dm: true), then post the Apply card in your direct message, for that project only: propose_new_items or propose_item_changes with request="${id}" and dm: true. Never in the meeting's thread.`
+            : `Then one Apply card for project ${project.key} only, in your direct message, not the meeting's thread: propose_new_items or propose_item_changes with request="${id}" and dm: true. Work for another project goes to ${owner} in your direct message too, by item key alone.`;
+        return `${summary} ${missed} ${dmCard} ${askLine(owner)}`;
+      }
       const card =
         project === undefined
           ? `This meeting has no project, so its thread takes no card: ask ${owner} in your direct message which project (ask with dm: true), then post the Apply card there, for that project only: propose_new_items or propose_item_changes with request="${id}" and dm: true.`
@@ -487,6 +539,8 @@ function contextMeta(ctx: RequestContext): Record<string, string> {
         transcript_file_id: ctx.transcript.file_id,
         vtt_message_id: ctx.transcript.vtt_message_id,
         vtt_file_id: ctx.transcript.vtt_file_id,
+        ...(ctx.absent ? { absent: 'true' } : {}),
+        ...(ctx.missed === undefined ? {} : { missed_summary: ctx.missed.place }),
       };
   }
 }
@@ -572,7 +626,9 @@ export function requestContent(data: SessionRequestData, info: RequestInfo): Req
         ? `Your morning brief for ${owner}, set in buildIt.Social: ${kind.name} on ${aboutLine(ctx, zone)}.`
         : `A subscription ${owner} set in buildIt.Social asks for ${kind.name} on ${aboutLine(ctx, zone)}.`
       : source === 'capture'
-        ? `${owner} took notes in a call with this session, and its transcript is ready: ${kind.name} on ${aboutLine(ctx, zone)}.`
+        ? ctx.type === 'meeting' && ctx.absent
+          ? `${owner} sent this session to a call they couldn't make, and its transcript is ready: ${kind.name} on ${aboutLine(ctx, zone)}.${ctx.missed === undefined ? ' This version of buildit-mcp doesn\'t know where their "what you missed" summary goes, so post only the normal notes.' : ''}`
+          : `${owner} took notes in a call with this session, and its transcript is ready: ${kind.name} on ${aboutLine(ctx, zone)}.`
         : `${owner} asked for ${kind.name} on ${aboutLine(ctx, zone)}.`;
   const version = info.version ?? SERVER_VERSION;
   // A note about a kind this version can't handle goes to the direct message; only a

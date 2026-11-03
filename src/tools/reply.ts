@@ -76,7 +76,7 @@ const RequestInput = z
   .uuid()
   .optional()
   .describe(
-    'The request_id of a <channel> tag with event="request", when this post is its result. result="dm" (a catch-up) goes only to your direct message: leave thread_id and item out. result="thread" or "item_thread" goes only to that request\'s own thread or item thread (the default; with several items, name one). result="meeting_thread" (a meeting\'s notes) goes to the meeting\'s thread (the default), or with dm: true to your direct message.',
+    'The request_id of a <channel> tag with event="request", when this post is its result. result="dm" (a catch-up) goes only to your direct message: leave thread_id and item out. result="thread" or "item_thread" goes only to that request\'s own thread or item thread (the default; with several items, name one). result="meeting_thread" (a meeting\'s notes) goes to the meeting\'s thread (the default), or with dm: true to your direct message (with missed_summary="dm", the "what you missed" summary: a new message there).',
   );
 
 /**
@@ -207,6 +207,13 @@ async function replyThread(
   if (args.dm === true) {
     if (args.thread_id !== undefined || args.item !== undefined) {
       throw new ToolInputError(DM_AND_THREAD);
+    }
+    // An absent owner's "what you missed" summary: a new message of the direct conversation.
+    if (
+      args.request !== undefined &&
+      state.requests.get(args.request.toLowerCase())?.missed === 'dm'
+    ) {
+      return undefined;
     }
     return dmThread(state);
   }

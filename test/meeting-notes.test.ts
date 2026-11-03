@@ -23,7 +23,7 @@ import {
   requestContent,
   type SessionRequestData,
 } from '../src/channel/requests.js';
-import { NO_PROJECT_CARD } from '../src/channel/threads.js';
+import { MISSED_CARD, NO_PROJECT_CARD } from '../src/channel/threads.js';
 import { uuidV5 } from '../src/tools/ask.js';
 import { compareVersions, SERVER_VERSION } from '../src/version.js';
 import {
@@ -240,6 +240,120 @@ describe("a meeting's notes", () => {
   });
 });
 
+const DM_CONVERSATION = '00000000-0000-4000-8000-0000000d0020';
+/** An absent owner's context: absent true and where "what you missed" goes. */
+const absentContext = (over: Record<string, unknown> = {}) =>
+  meetingContext({
+    absent: true,
+    missed_summary: { place: 'dm', conversation_id: DM_CONVERSATION },
+    ...over,
+  });
+
+describe('an absent owner (missed_summary)', () => {
+  it("is the contract's shape, with or without the direct message's id", () => {
+    expect(SessionRequestDataSchema.safeParse(data({ context: absentContext() })).success).toBe(
+      true,
+    );
+    const noConversation = absentContext({
+      missed_summary: { place: 'dm', conversation_id: null },
+    });
+    expect(SessionRequestDataSchema.safeParse(data({ context: noConversation })).success).toBe(
+      true,
+    );
+  });
+
+  it('says so in the attributes, and the lead puts "what you missed" and the card in the DM', () => {
+    const r = built(data({ context: absentContext() }));
+    expect(r.meta).toMatchObject({
+      absent: 'true',
+      missed_summary: 'dm',
+      result: 'meeting_thread',
+    });
+    expect(r.context).toMatchObject({
+      type: 'meeting',
+      absent: true,
+      missed: { place: 'dm', conversation_id: DM_CONVERSATION },
+    });
+    const lead = outsideBlocks(r.content);
+    expect(lead).toContain("Alex sent this session to a call they couldn't make");
+    expect(lead).not.toContain('took notes in a call');
+    // The normal notes still go in the meeting's thread.
+    expect(lead).toContain(
+      `Post the summary in the meeting's thread: reply with request="${REQUEST}"`,
+    );
+    // "What you missed", privately, in the DM.
+    expect(lead).toContain(
+      `private "what you missed" summary for Alex in your direct message (reply with request="${REQUEST}" and dm: true`,
+    );
+    expect(lead).toContain('the decisions, anything that needs Alex');
+    expect(lead).toContain('their action items');
+    // The card in the DM, never the meeting's thread.
+    expect(lead).toContain(
+      `Then one Apply card for project DEMO only, in your direct message, not the meeting's thread: propose_new_items or propose_item_changes with request="${REQUEST}" and dm: true.`,
+    );
+    expect(lead).not.toContain("it goes in the meeting's thread by itself");
+    // The conversation's id is the server's business: dm: true finds the DM.
+    expect(r.content).not.toContain(DM_CONVERSATION);
+  });
+
+  it('without a project, asks which project, then the card in the DM', () => {
+    const r = built(
+      data({
+        project: null,
+        context: absentContext({ channel: { id: MEETING_CHANNEL, name: null, dm: true } }),
+      }),
+    );
+    const lead = outsideBlocks(r.content);
+    expect(lead).toContain('"what you missed"');
+    expect(lead).toContain('ask Alex in your direct message which project (ask with dm: true)');
+    expect(lead).toContain("Never in the meeting's thread.");
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['absent false', { absent: false }],
+    [
+      'absent false, with a missed_summary anyway',
+      { absent: false, missed_summary: { place: 'dm', conversation_id: null } },
+    ],
+    ['absent left out (an older server)', {}],
+    [
+      'absent not a boolean',
+      { absent: 'true', missed_summary: { place: 'dm', conversation_id: null } },
+    ],
+  ])('behaves as before with %s', (_what, over) => {
+    const r = built(data({ context: meetingContext(over) }));
+    const before = built(data());
+    expect(r.meta).toEqual(before.meta);
+    expect(r.content.replace(/id="[^"]+"/g, '')).toBe(before.content.replace(/id="[^"]+"/g, ''));
+    expect(r.context).toMatchObject({ absent: false, missed: undefined });
+  });
+
+  it.each<[string, unknown]>([
+    ['a place it does not know', { place: 'email', conversation_id: null }],
+    ['no place', { conversation_id: null }],
+    ['a conversation id that is not one', { place: 'dm', conversation_id: 'dm-1' }],
+    ['no missed_summary', undefined],
+    ['a missed_summary that is not an object', 'dm'],
+  ])('with %s, posts only the normal notes', (_what, missed) => {
+    const r = built(
+      data({
+        context: meetingContext({
+          absent: true,
+          ...(missed === undefined ? {} : { missed_summary: missed }),
+        }),
+      }),
+    );
+    expect(r.meta.absent).toBe('true');
+    expect(r.meta.missed_summary).toBeUndefined();
+    const lead = outsideBlocks(r.content);
+    expect(lead).toContain("sent this session to a call they couldn't make");
+    expect(lead).toContain('so post only the normal notes');
+    expect(lead).not.toContain('what you missed" summary for');
+    expect(lead).toContain('Then one Apply card for project DEMO only');
+    expect(lead).toContain("it goes in the meeting's thread by itself");
+  });
+});
+
 describe('the oldest buildit-mcp and agent API', () => {
   it('is buildit-mcp 0.14.0, which this version is', () => {
     expect(MEETING_NOTES_CLIENT).toBe('0.14.0');
@@ -382,7 +496,12 @@ function transcriptFiles(thread: string): typeof TRANSCRIPT {
 async function meetingRequest(
   c: ChannelClient,
   thread: string,
-  options: { project?: null; transcript?: typeof TRANSCRIPT; already?: number } = {},
+  options: {
+    project?: null;
+    transcript?: typeof TRANSCRIPT;
+    already?: number;
+    absent?: boolean;
+  } = {},
 ): Promise<string> {
   const { requestId } = api.sessions.pushRequest(TOKEN, {
     kind: 'meeting_notes',
@@ -390,6 +509,9 @@ async function meetingRequest(
     context: meetingContext({
       thread_id: thread,
       transcript: options.transcript ?? TRANSCRIPT,
+      ...(options.absent === true
+        ? { absent: true, missed_summary: { place: 'dm', conversation_id: DM_CONVERSATION } }
+        : {}),
       ...(options.project === null
         ? { channel: { id: MEETING_CHANNEL, name: null, dm: true } }
         : {}),
@@ -835,5 +957,79 @@ describe('posting the notes', () => {
     });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain('request_result_private');
+  });
+});
+
+describe('an absent owner, end to end', () => {
+  it('passes absent and missed_summary on in the notification', async () => {
+    const c = await start();
+    const thread = dmThread();
+    await meetingRequest(c, thread, { absent: true });
+    const [note] = await notes(c, 1);
+    expect(note?.params?.meta).toMatchObject({
+      kind: 'meeting_notes',
+      absent: 'true',
+      missed_summary: 'dm',
+      result: 'meeting_thread',
+    });
+    expect(note?.params?.content).toContain('"what you missed"');
+  });
+
+  it('puts the notes in the thread, "what you missed" and the card in the DM as new messages', async () => {
+    const c = await start();
+    const thread = dmThread();
+    const request = await meetingRequest(c, thread, { absent: true });
+
+    // The normal notes: the meeting's thread, by default.
+    const summary = await c.client.callTool({
+      name: 'reply',
+      arguments: { text: 'Résumé : on livre vendredi.', request },
+    });
+    expect(summary.isError, textOf(summary)).toBeFalsy();
+    expect(posts().at(-1)).toMatchObject({ thread_id: thread, request });
+
+    // "What you missed": the direct message, a new message (no thread_id), with the request.
+    const missed = await c.client.callTool({
+      name: 'reply',
+      arguments: { text: 'Ce que vous avez manqué : on livre vendredi.', request, dm: true },
+    });
+    expect(missed.isError, textOf(missed)).toBeFalsy();
+    expect(posts().at(-1)).toMatchObject({ request });
+    expect(posts().at(-1)?.thread_id).toBeUndefined();
+
+    // The card in the meeting's thread: refused before any call.
+    const cards = cardPosts().length;
+    const inThread = await c.client.callTool({
+      name: 'propose_new_items',
+      arguments: { ...NEW_ITEMS, request, card_thread: thread },
+    });
+    expect(inThread.isError).toBe(true);
+    expect(textOf(inThread)).toContain(MISSED_CARD);
+    expect(cardPosts()).toHaveLength(cards);
+
+    // By default and with dm: true: the direct message, without thread_id.
+    for (const extra of [{}, { dm: true }]) {
+      const r = await c.client.callTool({
+        name: 'propose_new_items',
+        arguments: { ...NEW_ITEMS, request, ...extra },
+      });
+      expect(r.isError, textOf(r)).toBeFalsy();
+      expect(cardPosts().at(-1)).toMatchObject({ request });
+      expect(cardPosts().at(-1)?.thread_id).toBeUndefined();
+    }
+  });
+
+  it('an owner who was there: the card in the thread, as before', async () => {
+    const c = await start();
+    const thread = dmThread();
+    const request = await meetingRequest(c, thread, { absent: false });
+    const [note] = await notes(c, 1);
+    expect(note?.params?.meta?.absent).toBeUndefined();
+    const r = await c.client.callTool({
+      name: 'propose_new_items',
+      arguments: { ...NEW_ITEMS, request },
+    });
+    expect(r.isError, textOf(r)).toBeFalsy();
+    expect(cardPosts().at(-1)).toMatchObject({ thread_id: thread, request });
   });
 });

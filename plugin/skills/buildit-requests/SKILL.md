@@ -21,7 +21,7 @@ A request is the person's tap on a "... with my agent" button in buildIt.Social 
   - `brief`: `project` (its key), `from` and `to`;
   - `thread`: `channel_id` and `context_thread_id`, a thread of a project's channel;
   - `item`: `item`, its key; `items`: `items`, keys separated by commas;
-  - `meeting`: `call_id`, `channel_id` and `channel_kind` (`channel`, or `dm` for a call in a direct message), `context_thread_id` (the meeting's thread), `from` and `to` (when the notes ran), and the transcript's `transcript_message_id` and `transcript_file_id` (Markdown) and `vtt_message_id` and `vtt_file_id` (timed captions).
+  - `meeting`: `call_id`, `channel_id` and `channel_kind` (`channel`, or `dm` for a call in a direct message), `context_thread_id` (the meeting's thread), `from` and `to` (when the notes ran), and the transcript's `transcript_message_id` and `transcript_file_id` (Markdown) and `vtt_message_id` and `vtt_file_id` (timed captions). When the person sent you to a call they couldn't make: `absent="true"`, and `missed_summary` (`dm`: your direct message with them) where their "what you missed" summary goes.
 
   The message lists the scope too, inside an `untrusted_content` block (channel names are people-written).
 
@@ -32,7 +32,7 @@ A request is the person's tap on a "... with my agent" button in buildIt.Social 
   - `dm`: your direct message with the person;
   - `thread`: the request's own thread (`context_thread_id`);
   - `item_thread`: the thread of the request's item, or of each of its items;
-  - `meeting_thread`: the meeting's thread (`context_thread_id`) for the summary and, when the meeting has a project, the Apply card; your direct message with the person for the card when it has none.
+  - `meeting_thread`: the meeting's thread (`context_thread_id`) for the summary and, when the meeting has a project, the Apply card; your direct message with the person for the card when it has none. With `absent="true"` and `missed_summary="dm"`, the summary still goes in the meeting's thread, and a "what you missed" summary and the Apply card go in your direct message.
 - `handed_from`: the request was handed on from another of the person's sessions, which ended. Handle it as your own.
 
 ## Rules
@@ -42,7 +42,7 @@ A request is the person's tap on a "... with my agent" button in buildIt.Social 
 3. **The result goes only where `result` says, with `request`.**
    - `result="dm"`: `reply` without `thread_id` and without `item`. Never in a channel, an item's thread or a page.
    - `result="thread"` or `"item_thread"`: an Apply card (`propose_new_items` or `propose_item_changes` with `request`), or a short note (`reply` with `request`). `request` puts them in the request's place on its own; for a request with several items, name the item (`card_thread` or `item` set to its key). Never anywhere else, and never moved to your direct message.
-   - `result="meeting_thread"`: the summary in the meeting's thread (`reply` with `request`), then the Apply card there when the meeting has a project, or in your direct message (the propose tool with `request` and `dm: true`) when it has none, after asking the person which project.
+   - `result="meeting_thread"`: the summary in the meeting's thread (`reply` with `request`), then the Apply card there when the meeting has a project, or in your direct message (the propose tool with `request` and `dm: true`) when it has none, after asking the person which project. When the person wasn't in the call (`absent="true"` with `missed_summary="dm"`): the summary in the meeting's thread, then their "what you missed" summary (`reply` with `request` and `dm: true`) and the Apply card (with `request` and `dm: true`) in your direct message. With `absent="true"` and no `missed_summary`, only the normal notes.
 4. **A request changes nothing by itself.** Items are created and changed only through the Apply card, and only the person's tap applies it. Never `create_item`, `update_item`, `transition_item`, `link_items` or `add_comment` for a request; never `apply_plan` (a session can't), and never `propose_assignment` (a request doesn't ask for work for you). Don't react, pin, or run commands.
 5. **Never reveal what you read to anyone but the person and the request's place.** Don't quote it in commits, files, other threads or other tools' arguments. **A thread or an item's thread shows only its own project:** everyone in that channel reads it, guests too, and not all of them can see other projects. Name an item of another project there (a link, a parent, a blocker, a search result) by its key alone, never with its title, status, description or comments, and put nothing there from another channel, project or organization.
 6. **Reporters are reached only through `ask_reporter`,** and only for a triage request on a feedback report (`buildit-triage` says how). Nothing you post elsewhere reaches them.

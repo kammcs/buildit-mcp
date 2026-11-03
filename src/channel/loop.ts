@@ -86,6 +86,7 @@ import { AttachmentStore, filesServed, type AttachmentOutcome } from './attachme
 import {
   REQUEST_EVENT_TYPE,
   requestContent,
+  type MissedPlace,
   type ResultPlace,
   type SessionRequestEvent,
 } from './requests.js';
@@ -147,6 +148,12 @@ export interface KnownRequest {
    * message). Its place is `thread`, the meeting's thread.
    */
   project?: string | null | undefined;
+  /**
+   * An absent owner's meeting (`missed_summary`): where the "what you
+   * missed" summary and the Apply card go ('dm': a new message of the
+   * direct message, never the meeting's thread). Undefined: the normal notes.
+   */
+  missed?: MissedPlace | undefined;
   /**
    * A meeting's transcript: the two files (and their messages) that
    * get_attachment may fetch by the request, and nothing else.
@@ -252,6 +259,7 @@ export class ChannelState {
           place: 'meeting_thread',
           thread: e.thread,
           project: e.project,
+          ...(e.missed === undefined ? {} : { missed: e.missed }),
           transcript: e.transcript,
           expiresAt: e.expires_at,
         },
@@ -271,6 +279,7 @@ export class ChannelState {
         kind: r.kind,
         thread: r.thread,
         project: r.project ?? null,
+        ...(r.missed === undefined ? {} : { missed: r.missed }),
         transcript: [...r.transcript],
         expires_at: r.expiresAt,
       });
@@ -888,6 +897,7 @@ export class ChannelLoop {
       ...(ctx.type === 'meeting'
         ? {
             project: built.meta.project ?? null,
+            ...(ctx.missed === undefined ? {} : { missed: ctx.missed.place }),
             transcript: [
               { message_id: ctx.transcript.message_id, file_id: ctx.transcript.file_id },
               { message_id: ctx.transcript.vtt_message_id, file_id: ctx.transcript.vtt_file_id },

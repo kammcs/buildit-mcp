@@ -225,6 +225,35 @@ describe('buildit-meeting-notes', () => {
   });
 });
 
+describe('buildit-meeting-notes, when the person was not there', () => {
+  const text = skill('buildit-meeting-notes');
+
+  it('tells the cases apart by absent and missed_summary', () => {
+    expect(text).toContain('`absent="true"` and `missed_summary="dm"`');
+    expect(text).toContain('`absent="true"` without `missed_summary`');
+    expect(text).toContain('only the normal notes, exactly as when they took them');
+  });
+
+  it('posts the notes in the thread, then "what you missed" and the card in the DM', () => {
+    const missed = section(text, "When the person wasn't there");
+    expect(missed).toContain("The meeting's normal notes still go in its thread first");
+    expect(missed).toContain('`reply` with `request` and `dm: true`');
+    expect(missed).toContain('**Decisions**');
+    expect(missed).toContain('**What needs them:**');
+    expect(missed).toContain('**Their action items:**');
+    expect(missed).toContain(
+      "**The Apply card goes in your direct message,** not the meeting's thread",
+    );
+  });
+
+  it('the shared rules and the worker know the absent case', () => {
+    expect(skill('buildit-requests')).toContain('`absent="true"` with `missed_summary="dm"`');
+    expect(read('agents/buildit-request-worker.md')).toContain(
+      '`absent="true"` with `missed_summary="dm"`',
+    );
+  });
+});
+
 describe('meeting notes in the shared rules and the worker', () => {
   it('the shared rules name the kind, its place and the no-project card', () => {
     const text = skill('buildit-requests');
