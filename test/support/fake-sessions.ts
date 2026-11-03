@@ -1624,6 +1624,8 @@ export class FakeSessions {
         agent: { id: string; name: string };
         session: { id: string; label: string } | null;
       };
+      /** The card's thread and message as the event names them (default: the request's own). */
+      place?: { thread_id: string | null; card_message_id: string | null };
       result?: {
         text: string;
         author?: { kind: 'user' | 'app' | 'agent'; id: string | null; name: string };
@@ -1645,7 +1647,13 @@ export class FakeSessions {
             ? { id: u(7203), key: 'done', name: 'Done', category: 'done' }
             : { id: u(7204), key: 'in_review', name: 'In review', category: 'started' },
       },
-      assignment_request: { id: requestId },
+      assignment_request: {
+        id: requestId,
+        ...(options.place ?? {
+          thread_id: s.assignments.get(requestId)?.thread_id ?? null,
+          card_message_id: s.assignments.get(requestId)?.card_message_id ?? null,
+        }),
+      },
       target: options.target ?? {
         agent: FakeSessions.TARGET.agent,
         session: FakeSessions.TARGET.session,

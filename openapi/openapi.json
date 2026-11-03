@@ -24692,10 +24692,34 @@
               "id": {
                 "description": "The request (get_session_assignment reads it when this session made it).",
                 "$ref": "#/components/schemas/Uuid"
+              },
+              "thread_id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The thread the Assign card is in: an item's id, or a top-level message of the direct message; null at the direct message's top level."
+              },
+              "card_message_id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The Assign card's message; null once deleted."
               }
             },
             "required": [
-              "id"
+              "id",
+              "thread_id",
+              "card_message_id"
             ]
           },
           "target": {

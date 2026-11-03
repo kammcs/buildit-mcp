@@ -1288,7 +1288,17 @@ export class ChannelLoop {
             },
     });
     state.rememberItem(d.item.key, d.item.id);
-    const threadId = await this.assignmentThread(d.assignment_request.id);
+    // The card's thread as the event names it (a card at the top of the direct message is its own
+    // message's thread); only when it names neither, what this process knows or reads.
+    const request = d.assignment_request as {
+      id: string;
+      thread_id?: string | null;
+      card_message_id?: string | null;
+    };
+    const threadId =
+      request.thread_id ??
+      request.card_message_id ??
+      (await this.assignmentThread(d.assignment_request.id));
     await this.send({
       content,
       meta: {
@@ -1307,8 +1317,10 @@ export class ChannelLoop {
   }
 
   /**
-   * The thread of an Assign card this session made: what this process
-   * remembers (the proposal, or its card.closed), else the request read once
+   * The thread of an Assign card this session made, when its report names
+   * neither the thread nor the card (the card's message was deleted at the
+   * top of the direct message): what this process remembers (the proposal,
+   * or its card.closed), else the request read once
    * (get_session_assignment, the handoff unit; at most once per request in
    * this process, so a restart with several reports waiting spends little).
    * A card at the top of the direct message is its own message's thread.

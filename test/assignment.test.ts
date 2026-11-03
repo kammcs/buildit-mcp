@@ -852,7 +852,7 @@ describe("lines for the person's other sessions (agent API 1.25.0)", () => {
     expect(assignmentReads()).toEqual([]);
   });
 
-  it('assigned_item_done after a restart: the request read once for its thread; unknown, no thread', async () => {
+  it('assigned_item_done after a restart: the thread the event names, else the request read once, else none', async () => {
     const c = await startWithPeers();
     const id = requestId(
       await call(c, 'propose_assignment', {
@@ -864,11 +864,18 @@ describe("lines for the person's other sessions (agent API 1.25.0)", () => {
     const card = session().assignments.get(id)!.card_message_id;
     await stops.splice(0)[0]!();
     const c2 = await start({ reopen: false });
+    // The event names the card (at the top of the direct message: its own message's thread).
     api.sessions.assignedItemDone(TOKEN, id, demoItem(43), 'in_review');
-    api.sessions.assignedItemDone(TOKEN, id, demoItem(43), 'done');
-    const [a, b] = await notes(c2, 2);
+    const [a] = await notes(c2, 1);
     expect(a!.params!.meta).toMatchObject({ event: 'assigned_item_done', thread_id: card });
+    expect(assignmentReads()).toEqual([]);
+    // The event names neither (the card's message deleted): the request, read once.
+    const none = { thread_id: null, card_message_id: null };
+    api.sessions.assignedItemDone(TOKEN, id, demoItem(43), 'done', { place: none });
+    api.sessions.assignedItemDone(TOKEN, id, demoItem(43), 'done', { place: none });
+    const [, b, b2] = await notes(c2, 3);
     expect(b!.params!.meta).toMatchObject({ event: 'assigned_item_done', thread_id: card });
+    expect(b2!.params!.meta).toMatchObject({ thread_id: card });
     expect(assignmentReads()).toHaveLength(1);
     // A request this session didn't make (another session's work it took over): no thread.
     api.sessions.assignedItemDone(
@@ -876,11 +883,27 @@ describe("lines for the person's other sessions (agent API 1.25.0)", () => {
       '00000000-0000-4000-8000-0000000000bb',
       demoItem(44),
       'done',
+      { place: none },
     );
-    const all = await notes(c2, 3);
-    expect(all[2]!.params!.meta).toMatchObject({ event: 'assigned_item_done', item: 'DEMO-44' });
-    expect(all[2]!.params!.meta).not.toHaveProperty('thread_id');
+    const all = await notes(c2, 4);
+    expect(all[3]!.params!.meta).toMatchObject({ event: 'assigned_item_done', item: 'DEMO-44' });
+    expect(all[3]!.params!.meta).not.toHaveProperty('thread_id');
     expect(assignmentReads()).toHaveLength(2);
+  });
+
+  it('assigned_item_done goes to the item thread the event names, without a lookup', async () => {
+    const c = await startWithPeers();
+    const thread = story().id;
+    api.sessions.assignedItemDone(
+      TOKEN,
+      '00000000-0000-4000-8000-0000000000dd',
+      demoItem(43),
+      'done',
+      { place: { thread_id: thread, card_message_id: '00000000-0000-4000-8000-0000000000de' } },
+    );
+    const [n] = await notes(c, 1);
+    expect(n!.params!.meta).toMatchObject({ event: 'assigned_item_done', thread_id: thread });
+    expect(assignmentReads()).toEqual([]);
   });
 
   it("item_assigned from another session's card names it, never its reasons", async () => {

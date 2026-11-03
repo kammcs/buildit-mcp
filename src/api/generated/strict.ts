@@ -3454,7 +3454,11 @@ export const SessionAssignedItemDoneDataSchema = z.strictObject({
   channel: z.strictObject({ id: UuidSchema, name: z.string().nullable() }),
   project: SessionEventProjectSchema,
   item: SessionEventItemSchema,
-  assignment_request: z.strictObject({ id: UuidSchema }),
+  assignment_request: z.strictObject({
+    id: UuidSchema,
+    thread_id: UuidSchema.nullable(),
+    card_message_id: UuidSchema.nullable(),
+  }),
   target: z.strictObject({ agent: AgentBriefSchema, session: SessionBriefSchema.nullable() }),
   outcome: z.enum(['in_review', 'done']),
   result: SessionChildResultSchema.nullable(),

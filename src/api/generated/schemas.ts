@@ -3057,7 +3057,11 @@ export const SessionAssignedItemDoneDataSchema = z.looseObject({
   channel: z.looseObject({ id: UuidSchema, name: z.string().nullable() }),
   project: SessionEventProjectSchema,
   item: SessionEventItemSchema,
-  assignment_request: z.looseObject({ id: UuidSchema }),
+  assignment_request: z.looseObject({
+    id: UuidSchema,
+    thread_id: UuidSchema.nullable(),
+    card_message_id: UuidSchema.nullable(),
+  }),
   target: z.looseObject({ agent: AgentBriefSchema, session: SessionBriefSchema.nullable() }),
   outcome: openEnum(['in_review', 'done']),
   result: SessionChildResultSchema.nullable(),
