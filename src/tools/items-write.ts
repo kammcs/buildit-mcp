@@ -74,6 +74,9 @@ export const AGENT_SELF_ASSIGN_NOTE =
   "A Claude Code session can't assign items to its own agent: only the person can, in buildIt.Social. You may hand an item back with agent: null.";
 const AGENT_ASSIGNEE_NOTE =
   'You can assign only your own personal agent, in a project whose channel you are in: "mine" or its name.';
+/** Why an agent can't take work in this project (agent API 1.23.0). */
+const AGENT_NOT_IN_PROJECT_NOTE =
+  "This agent has no live session that reaches the item's project, so it can't be assigned there. Connect a session for it that includes the project, or assign someone else. An item it already has keeps it.";
 
 /** An agent refusal (forbidden with an agent reason) with its explanation, else the error itself. */
 function agentRefusal(err: unknown): unknown {
@@ -81,6 +84,7 @@ function agentRefusal(err: unknown): unknown {
   const reason = (err.details as { reason?: unknown } | undefined)?.reason;
   if (reason === 'agent_self_assign') return err.withNote(AGENT_SELF_ASSIGN_NOTE);
   if (reason === 'agent_assignee') return err.withNote(AGENT_ASSIGNEE_NOTE);
+  if (reason === 'agent_not_in_project') return err.withNote(AGENT_NOT_IN_PROJECT_NOTE);
   return err;
 }
 
@@ -114,7 +118,7 @@ export const createItemTool = defineTool({
 - Give project (a key such as DEMO), or parent: a story's parent is an epic, a subtask's parent is a story or task, and the project then comes from the parent.
 - type, status, labels, sprint, fix_release and custom fields are names from describe_project. Without type, the project's default type at the parent's child level is used; without status, the workflow's initial status.
 - assignee: "me", an email or an exact display name. Mention people in the description as @email or @[Display Name].
-- assignee_agent: your agent works on it for you (you are then the assignee); a channel-mode session can't set it.
+- assignee_agent: your agent works on it for you (you are then the assignee), when one of its live sessions reaches the project; a channel-mode session can't set it.
 - needs: capabilities a session must have to work on it, such as ["macos", "ios"]; an agent's work goes only to a session that has them.
 - position: {"before": "DEMO-3"} or {"after": "DEMO-3"}; default is last.
 - idempotency_key: retrying with the same key returns the first item instead of creating a second; one is generated and returned if you leave it out.
@@ -360,7 +364,7 @@ export const assignItemTool = defineTool({
   toolset: 'items',
   title: 'Assign an item',
   description:
-    'Assigns one item to a person or to your agent, or unassigns it. assignee is "me", an email, or an exact display name among the project\'s members (find_users lists them); null or "none" unassigns. A display name shared by two people fails with the candidates to choose from. agent ("mine" or its name) has your agent work on it for you, assigned to you; null takes the agent off. Only the person can assign their agent: in channel mode you can\'t, but may hand an item back with agent: null. Returns the item.',
+    'Assigns one item to a person or to your agent, or unassigns it. assignee is "me", an email, or an exact display name among the project\'s members (find_users lists them); null or "none" unassigns. A display name shared by two people fails with the candidates to choose from. agent ("mine" or its name) has your agent work on it for you, assigned to you; null takes the agent off. The agent needs a live session that reaches the item\'s project; otherwise it is refused (agent_not_in_project): connect a session for that project, or assign someone else. Only the person can assign their agent: in channel mode you can\'t, but may hand an item back with agent: null. Returns the item.',
   scopes: scopesOf('update_item'),
   annotations: {
     title: 'Assign an item',
