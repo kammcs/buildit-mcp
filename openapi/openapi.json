@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "buildIt.Social agent API",
-    "version": "1.22.0",
+    "version": "1.23.0",
     "summary": "The versioned API that AI agents (through buildit-mcp) use to work with an org's projects, pages and channels.",
     "description": "Every call runs as the token's owner, so the app's permissions, history and notifications apply. v1 only grows: new operations, optional request fields, response fields and enum values; clients must ignore what they don't know. A breaking change is /v2, with /v1 kept for 12 months. The oldest supported buildit-mcp is 0.1.0. Generated from the API's schemas; don't edit by hand."
   },
@@ -103,7 +103,7 @@
                   "$ref": "#/components/schemas/MetaResponse"
                 },
                 "example": {
-                  "api_version": "1.22.0",
+                  "api_version": "1.23.0",
                   "min_mcp_version": "0.1.0",
                   "deprecations": [],
                   "operations": [
@@ -1299,7 +1299,7 @@
           "items"
         ],
         "summary": "Create an item",
-        "description": "An epic, a standard item or a subtask (by its type, or by its parent). Send an idempotency_key to make retries safe. Fields required on create must be in `custom`. `assignee_agent` assigns it to one of your own personal agents, with you as the assignee (a session token can't: 403 forbidden, reason agent_self_assign). `needs` (since 1.9.0) sets the capabilities a session must have to work on it.",
+        "description": "An epic, a standard item or a subtask (by its type, or by its parent). Send an idempotency_key to make retries safe. Fields required on create must be in `custom`. `assignee_agent` assigns it to one of your own personal agents, with you as the assignee (a session token can't: 403 forbidden, reason agent_self_assign), when one of its connected sessions reaches the project (since 1.23.0; else reason agent_not_in_project). `needs` (since 1.9.0) sets the capabilities a session must have to work on it.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -1901,7 +1901,7 @@
           "items"
         ],
         "summary": "Update an item",
-        "description": "Changes only the fields sent. if_version guards the whole item; a description replace needs description_version, while append never overwrites. Status changes go through transition. `assignee_agent` assigns the item to one of your own personal agents (you become the assignee), or with null takes it from its agent; another assignee takes it from the agent too. A session token may only hand an item back (null).",
+        "description": "Changes only the fields sent. if_version guards the whole item; a description replace needs description_version, while append never overwrites. Status changes go through transition. `assignee_agent` assigns the item to one of your own personal agents (you become the assignee), or with null takes it from its agent; another assignee takes it from the agent too. The agent must have a connected session that reaches the item's project (since 1.23.0; else 403 forbidden, reason agent_not_in_project); an item it already has keeps it when its sessions end. A session token may only hand an item back (null).",
         "parameters": [
           {
             "name": "key",
@@ -14908,7 +14908,7 @@
             "$ref": "#/components/schemas/UserRef"
           },
           "assignee_agent": {
-            "description": "Assign the item to one of your own personal agents, which works on it for you: you become the assignee, so leave `assignee` out or send me. A session token can't (403 forbidden, reason agent_self_assign): only the person assigns their agent.",
+            "description": "Assign the item to one of your own personal agents, which works on it for you: you become the assignee, so leave `assignee` out or send me. A session token can't (403 forbidden, reason agent_self_assign): only the person assigns their agent. Since 1.23.0 the agent needs a connected session that reaches the project (else 403 forbidden, reason agent_not_in_project).",
             "$ref": "#/components/schemas/AgentRef"
           },
           "priority": {
@@ -16587,7 +16587,8 @@
                           "guest",
                           "other",
                           "agent_self_assign",
-                          "agent_assignee"
+                          "agent_assignee",
+                          "agent_not_in_project"
                         ],
                         "description": "v1 may add reasons."
                       }
@@ -28416,7 +28417,7 @@
             ]
           },
           "assignee_agent": {
-            "description": "Assign the item to one of your own personal agents (you become the assignee: leave `assignee` out or send me); null takes it from its agent and keeps the assignee. A session token may only send null, to hand an item back (anything else is 403 forbidden, reason agent_self_assign).",
+            "description": "Assign the item to one of your own personal agents (you become the assignee: leave `assignee` out or send me); null takes it from its agent and keeps the assignee. A session token may only send null, to hand an item back (anything else is 403 forbidden, reason agent_self_assign). Since 1.23.0 the agent needs a connected session that reaches the item's project (else 403 forbidden, reason agent_not_in_project).",
             "anyOf": [
               {
                 "$ref": "#/components/schemas/AgentRef"
@@ -29379,7 +29380,7 @@
     },
     "forbidden": {
       "status": 403,
-      "when": "The user may not do this: a project admin is needed, an admins-only transition, deleting another person's item without being a project admin, or another rule of the app's permissions. Also an item assigned to an agent that isn't the user's own live personal agent, or in a project they aren't in (agent_assignee), and a session assigning an item to its own agent (agent_self_assign: only the person can).",
+      "when": "The user may not do this: a project admin is needed, an admins-only transition, deleting another person's item without being a project admin, or another rule of the app's permissions. Also an item assigned to an agent that isn't the user's own live personal agent, or in a project they aren't in (agent_assignee), an agent assigned in a project none of its connected sessions reaches (agent_not_in_project, since 1.23.0), and a session assigning an item to its own agent (agent_self_assign: only the person can).",
       "message": "You don't have permission to do that in buildIt.Social. A project admin can.",
       "hint": "Ask a project admin (or the user, in the app) to do it; retrying won't help."
     },

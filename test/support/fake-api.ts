@@ -46,6 +46,7 @@ import {
   type DescribeProjectResponse,
   type Development,
   type Feedback,
+  type FormRequest,
   type HistoryEvent,
   type ItemDetail,
   type ItemSearchResult,
@@ -369,6 +370,8 @@ export interface FakeAgent {
   id: string;
   name: string;
   ownerId: string;
+  /** Project keys none of its connected sessions reaches (1.23.0: it can't be assigned there). */
+  unreachable?: string[];
 }
 
 export interface FakeStore {
@@ -389,6 +392,8 @@ export interface FakeStore {
   development: Record<string, Development>;
   /** Feedback-app reports by item id; an item without an entry wasn't filed through it. */
   feedback: Record<string, Feedback>;
+  /** Request-form requests by item id; an item without an entry wasn't sent through a form. */
+  requests: Record<string, FormRequest>;
 }
 
 let idCounter = 1000;
@@ -787,6 +792,7 @@ export function seedStore(): FakeStore {
     ],
     plans: [],
     feedback: {},
+    requests: {},
     development: {
       [story.id]: {
         pull_requests: [
@@ -2336,6 +2342,9 @@ export class FakeApi {
         ...(this.store.feedback[item.id]
           ? { feedback: structuredClone(this.store.feedback[item.id]) }
           : {}),
+        ...(this.store.requests[item.id]
+          ? { request: structuredClone(this.store.requests[item.id]) }
+          : {}),
         ...(query.include_development === 'true'
           ? {
               development: structuredClone(
@@ -2377,13 +2386,16 @@ export class FakeApi {
   /**
    * assignee_agent of an item write: the caller's own agent ("mine", its
    * id or name), and the assignee it forces (the caller). A session token
-   * may only take the agent off.
+   * may only take the agent off. Since 1.23.0 a new agent must reach the
+   * project (one it already has stays).
    */
   private agentFor(
     ref: unknown,
     assignee: unknown,
     identity: FakeIdentity,
     token: string,
+    project: string,
+    current: string | null = null,
   ): string | null {
     if (ref === null) return null;
     if (token.startsWith('buildit_ags_')) {
@@ -2420,6 +2432,13 @@ export class FakeApi {
     }
     const agent = found[0];
     if (!agent) throw new FakeError('not_found', { kind: 'agent', ref: refText });
+    if (agent.id !== current && agent.unreachable?.includes(project)) {
+      throw new FakeError(
+        'forbidden',
+        { reason: 'agent_not_in_project' },
+        "None of the agent's connected sessions reaches this project.",
+      );
+    }
     return agent.id;
   }
 
@@ -2482,7 +2501,7 @@ export class FakeApi {
     const agentId =
       b.assignee_agent === undefined
         ? null
-        : this.agentFor(b.assignee_agent, b.assignee, identity, token);
+        : this.agentFor(b.assignee_agent, b.assignee, identity, token, p.key);
     const initial = p.statuses.find((s) => s.initial)!;
     const now = this.now();
     const custom: Record<string, string> = {};
@@ -2603,7 +2622,7 @@ export class FakeApi {
     }
     const agentId =
       'assignee_agent' in b
-        ? this.agentFor(b.assignee_agent, b.assignee, identity, token)
+        ? this.agentFor(b.assignee_agent, b.assignee, identity, token, p.key, item.assigneeAgentId)
         : undefined;
     if ('assignee' in b) {
       item.assigneeId =

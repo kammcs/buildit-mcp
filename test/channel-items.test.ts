@@ -437,6 +437,35 @@ describe('assign_item with agent', () => {
     expect(unknown.isError).toBe(true);
     expect(textOf(unknown)).toContain('not_found');
   });
+
+  it('explains an agent that reaches no session in the project, and keeps one it has', async () => {
+    api.store.agents[0]!.unreachable = ['DEMO'];
+    const { client } = await connect(api, TOKENS.full);
+    const note =
+      "This agent has no live session that reaches the item's project, so it can't be assigned there. Connect a session for it that includes the project, or assign someone else.";
+    const assigned = await client.callTool({
+      name: 'assign_item',
+      arguments: { item: key, agent: 'mine' },
+    });
+    expect(assigned.isError).toBe(true);
+    expect(textOf(assigned)).toContain('forbidden');
+    expect(textOf(assigned)).toContain(note);
+    expect(story().assigneeAgentId ?? null).toBeNull();
+    const created = await client.callTool({
+      name: 'create_item',
+      arguments: { project: 'DEMO', title: 'Out of reach', assignee_agent: 'mine' },
+    });
+    expect(created.isError).toBe(true);
+    expect(textOf(created)).toContain(note);
+    story().assigneeId = USERS.me.id;
+    story().assigneeAgentId = SESSION_IDS.agent;
+    const kept = await client.callTool({
+      name: 'update_item',
+      arguments: { item: key, assignee_agent: 'mine', priority: 'high' },
+    });
+    expect(kept.isError).toBeFalsy();
+    expect(story().assigneeAgentId).toBe(SESSION_IDS.agent);
+  });
 });
 
 describe('a message written through an agent', () => {

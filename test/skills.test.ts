@@ -7,6 +7,17 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
+import { ChannelState } from '../src/channel/loop.js';
+import {
+  buildInstructions,
+  CHANNEL_WORK_UPDATES_INSTRUCTIONS,
+  ITEM_WORKER_AGENT,
+} from '../src/server.js';
+import { createAskTool } from '../src/tools/ask.js';
+import { createProposeHandoffTool } from '../src/tools/handoff.js';
+import { createReplyTool } from '../src/tools/reply.js';
+import { createListThreadsTool } from '../src/tools/threads.js';
+
 const read = (path: string): string =>
   readFileSync(new URL(`../plugin/${path}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
@@ -268,5 +279,101 @@ describe('meeting notes in the shared rules and the worker', () => {
     expect(text).toContain('`buildit-meeting-notes` for `meeting_notes`');
     expect(text).toContain('`read_thread` and `get_attachment` with `request`');
     expect(text).toContain("Don't open any other file or run commands for a request.");
+  });
+});
+
+describe('work updates: everything in the app, each post on its own item', () => {
+  // Agent API 1.21.0: an assigned epic's or story's descendants' threads are the session's too.
+  it('the server instructions say so in channel mode only', () => {
+    const text = CHANNEL_WORK_UPDATES_INSTRUCTIONS;
+    expect(buildInstructions([], true)).toContain(text);
+    expect(buildInstructions([], true, { maxParallelItems: 2 })).toContain(text);
+    expect(buildInstructions([], false)).not.toContain(text);
+    for (const phrase of [
+      'not in this terminal',
+      'progress, decisions, questions, contract or design agreements, blockers and results',
+      'nothing that matters to them stays only in the terminal',
+      'Post each update in the thread of the item it concerns',
+      "list_threads doesn't list them",
+      "reply with item set to the child's key",
+      "the epic's or story's own thread holds the overview",
+      'Ask questions with ask in the thread of the item they concern',
+      "what changed, the commits and tests, what's next, any decision",
+      'post with reply, never add_comment',
+      'thread_not_bound',
+      '"post your result there with reply"',
+    ]) {
+      expect(text).toContain(phrase);
+    }
+  });
+
+  it("the lead sends a child's thread events to the worker of the item above", () => {
+    const lead = buildInstructions([], true, { maxParallelItems: 2 });
+    expect(lead).toContain(ITEM_WORKER_AGENT);
+    expect(lead).toContain(
+      "an event in the thread of a story, task, bug or subtask under a worker's item (get_item shows its parent) is that worker's too",
+    );
+  });
+
+  it('the skill says when, where, how short and what, and passes it on to agents it starts', () => {
+    const text = skill('buildit-work-updates');
+    expect(text).toContain('**Everything about the work goes to them in the app**');
+    expect(text).toContain('Nothing that matters to them stays only in the terminal.');
+    const when = section(text, 'When to post');
+    for (const phrase of [
+      '**You started:**',
+      '**A result:**',
+      '**A merge or a deploy:**',
+      '**A decision or an agreement:**',
+      '**A question:**',
+      '**A blocker:**',
+    ]) {
+      expect(when).toContain(phrase);
+    }
+    const which = section(text, 'Which item');
+    expect(which).toContain('For an epic or a story, that is the overview');
+    expect(which).toContain("`reply` with `item` set to the child's key");
+    expect(which).toContain("`list_threads` doesn't list the children's threads");
+    expect(which).toContain('`thread_not_bound`');
+    const how = section(text, 'How');
+    expect(how).toContain('never `add_comment`');
+    expect(how).toContain('**Ask with `ask`** in the thread of the item the question concerns');
+    expect(how).toContain('**Short and factual:**');
+    const what = section(text, 'What to include');
+    expect(what).toContain('the tests you ran with their outcome');
+    expect(what).toContain("What's next.");
+    const agents = section(text, 'Agents you start yourself');
+    expect(agents).toContain('posts **its own** result on **its own** item');
+    expect(agents).toContain('"post your result there with `reply`"');
+  });
+
+  it("the item worker posts each child's work in that child's thread, with reply only", () => {
+    const text = read('agents/buildit-item-worker.md');
+    const post = section(text, 'Post in the app, in the thread of the item it concerns');
+    expect(post).toContain('never only in the terminal');
+    expect(post).toContain('`buildit-work-updates`');
+    expect(post).toContain("Post each child's work in that child's own thread");
+    expect(post).toContain("with `item` set to the child's key");
+    expect(post).toContain('the overview');
+    expect(post).toContain('Post in these threads with `reply`, never `add_comment`');
+    expect(post).toContain('"post your result there with `reply`"');
+    // No rule left that forbids the children's threads.
+    expect(text).not.toContain("never post in another item's thread");
+    expect(text).not.toContain("## Post only in this item's thread");
+  });
+
+  it("the tools say descendants' threads are usable, and that list_threads leaves them out", () => {
+    const state = new ChannelState();
+    const reply = createReplyTool(state, { files: true }).description;
+    expect(reply).toContain(
+      "post each child's work in that child's thread (item with the child's key)",
+    );
+    expect(createReplyTool(state).description).toContain('and their descendants');
+    const ask = createAskTool(state, { questionsInApp: true, hookWaitS: 60 }).description;
+    expect(ask).toContain("a child's question goes in that child's thread");
+    const threads = createListThreadsTool(state).description;
+    expect(threads).toContain("children and subtasks, where you post too, aren't listed");
+    const handoff = createProposeHandoffTool(state).description;
+    expect(handoff).toContain('a subtask of one of its stories too, when it is an epic');
   });
 });

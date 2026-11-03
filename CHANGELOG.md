@@ -36,6 +36,19 @@ The person can send their agent to listen in on a call they can't make. Its `mee
 - Agent API 1.22.0: `absent` and `missed_summary` on a meeting's context (`SessionRequestMeetingContext`); 1.20.0's `request` block on `get_item` (`FormRequest`, not shown by `get_item` yet) and 1.21.0's descendants' threads wording are in the regenerated code.
 - Agent API 1.19.0: the three assignment request operations (`get_session_assignment` isn't used: the outcome event carries everything), `SessionAssignmentRequest` and its outcome, `assignment` on `card.closed`, `assignment_request` on `work_item.assigned`, the kind `assignment_request`, and the codes `assignment_not_allowed`, `assignment_outside_thread` and `assignment_closed`.
 
+## Unreleased
+
+Built on version 1.23.0 of the agent API's contract (`openapi.json` copied from the API and regenerated; it also carries 1.19.0's additions, which no tool uses yet, 1.21.0's, which change only wording, 1.22.0's `absent` and `missed_summary` on a `meeting_notes` request's context, which pass through, and 1.23.0's forbidden reason `agent_not_in_project`). An older server leaves the new block out and refuses posts in a child's thread with `thread_not_bound`, and everything works as in 0.14.1.
+
+### Added
+
+- **Work updates in the app, on each item** (agent API 1.21.0). Assigning an epic or a story to the agent also gives the session the threads of its stories, tasks, bugs and subtasks, so `reply`, `ask`, cards, "is writing" and files work there with the child's key. The server's instructions (channel mode) now say that everything about the work goes to the person in buildIt.Social, never only the terminal (progress, decisions, questions, agreements, blockers, results), each post in the thread of the item it concerns (a child's work in the child's thread, the overview in the epic's), questions with `ask` there, short and factual, and that agents a session starts itself post their own results on their item. The lead sends an event in a child's thread to the worker of the item above.
+- **The `buildit-work-updates` skill** in the plugin: when to post, which item, how short, what to include, and what to pass on to agents the session starts. The item worker posts each child's work in that child's own thread (with `reply`, never `add_comment`), and names the skill.
+- **An agent is assigned only where it reaches** (agent API 1.23.0). The server refuses to make an agent an item's assignee in a project none of its live sessions reaches (`403 forbidden`, reason `agent_not_in_project`); `assign_item`, `update_item` and `create_item` now explain it: connect a session for the agent that includes the project, or assign someone else. An item the agent already has keeps it. `assign_item`'s and `create_item`'s descriptions say so. A 1.22 or older server never refuses this way.
+- **Tool text:** `reply` and `ask` say a descendant's thread works; `list_threads` says it doesn't list them; `propose_handoff` (and its `not_parent_session` note) takes a subtask under the item, a story's under an epic too.
+
+- **`get_item` shows a request form's request.** An item someone sent through a project's request form carries `request`: the form's title and the requester's name, each wrapped as untrusted content (`source="request"`; in the text, one block), and `public_status`, the status the requester sees (`sent`, `accepted`, `in_progress`, `waiting_on_you`, `done`, `fixed`, `wont_do`, `duplicate` or `closed`; a newer one passes through). A deleted form and a requester who is gone read as such. A fixed line tells the agent its comments never reach the requester, even one starting with `@requester`: only a person's `@requester` comment does (the server refuses an agent's). The tool's description mentions the block; the `buildit://items/{key}` resource shows it too.
+
 ## [0.14.1] - 2026-11-01
 
 ### Fixed

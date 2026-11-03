@@ -57,7 +57,7 @@ const ThreadInput = z
   );
 
 const ItemInput = ItemRefInput.optional().describe(
-  "A work item's key (DEMO-12), to answer in its thread: one you work on (the <channel> tag's item). Instead of thread_id.",
+  "A work item's key (DEMO-12), to answer in its thread: one you work on (the <channel> tag's item), or a story, task, bug or subtask under it. Instead of thread_id.",
 );
 
 const ReplyToInput = z
@@ -151,7 +151,7 @@ const ReplyWithFilesOutputSchema = ReplyOutputSchema.extend({
     .describe('The files posted, as given, with the name readers see.'),
 });
 
-const BASE_DESCRIPTION = `Answers the person who directs this session, in buildIt.Social: posts your text as the agent (labelled with this session) in its conversation with them, or in a work item's thread when the message came from one (meta item), where they read it on their computer or phone. Use it for every answer to a message that arrived as a <channel> tag: pass that tag's thread_id so the answer lands in the same thread (left out, it goes to the thread of the latest message, mention or assignment; with none yet, it starts a new message in your conversation with them). For an item assigned to you, post progress, questions and the result in its thread: pass its thread_id, or item with its key. You can post only in the threads of items you work on; everyone in the project's channel reads them. Markdown, at most ${REPLY_MAX_CHARS} characters; split longer answers. idempotency_key makes a retry return the first message instead of posting twice; one is generated and returned if you leave it out.`;
+const BASE_DESCRIPTION = `Answers the person who directs this session, in buildIt.Social: posts your text as the agent (labelled with this session) in its conversation with them, or in a work item's thread when the message came from one (meta item), where they read it on their computer or phone. Use it for every answer to a message that arrived as a <channel> tag: pass that tag's thread_id so the answer lands in the same thread (left out, it goes to the thread of the latest message, mention or assignment; with none yet, it starts a new message in your conversation with them). For an item assigned to you, post progress, questions and the result in its thread: pass its thread_id, or item with its key. When it is an epic or a story, the threads of its stories, tasks, bugs and subtasks are yours too: post each child's work in that child's thread (item with the child's key), and the overview in the item's own. You can post only in the threads of items you work on and their descendants; everyone in the project's channel reads them. Markdown, at most ${REPLY_MAX_CHARS} characters; split longer answers. idempotency_key makes a retry return the first message instead of posting twice; one is generated and returned if you leave it out.`;
 
 const REQUEST_DESCRIPTION = ` For the result of a request (a <channel> tag with event="request"), pass its request_id as request, and post where the tag's result says: result="dm" means your direct message only, so leave thread_id and item out; "thread" and "item_thread" mean the request's own thread or item thread, which request picks for you; "meeting_thread" means the meeting's thread, which request picks for you too. Anything else about a request (a question, a queued notice) goes with dm: true.`;
 

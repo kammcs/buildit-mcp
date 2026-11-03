@@ -265,14 +265,16 @@ describe('the tool list', () => {
     // 161,500 until read_channel's item threads and list_comments' since (agent API 1.14.0);
     // 163,500 until propose_new_items and propose_item_changes (agent API 1.15.0);
     // 173,000 until a meeting's notes (read_thread's request, the cards' dm; agent API 1.18.0).
-    expect(JSON.stringify(tools).length).toBeLessThan(174_500);
+    // 174,500 until get_item's request block (agent API 1.20.0).
+    expect(JSON.stringify(tools).length).toBeLessThan(175_300);
     const defaults = await client(TOKENS.full, { toolsets: DEFAULT_TOOLSETS });
     // About 16,000 tokens: 60,000 until get_item's feedback block (62,000),
     // then search_items' link and activity filters and find_users without a project (64,000),
     // then the items' agent assignee (assign_item's agent, assignee_agent),
     // then the items' Needs (65,500 before),
-    // then list_comments' since (66,800 before).
-    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(67_200);
+    // then list_comments' since (66,800 before),
+    // then get_item's request block (67,200 before).
+    expect(JSON.stringify((await defaults.client.listTools()).tools).length).toBeLessThan(68_100);
   });
 });
 
