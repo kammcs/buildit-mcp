@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "buildIt.Social agent API",
-    "version": "1.20.0",
+    "version": "1.21.0",
     "summary": "The versioned API that AI agents (through buildit-mcp) use to work with an org's projects, pages and channels.",
     "description": "Every call runs as the token's owner, so the app's permissions, history and notifications apply. v1 only grows: new operations, optional request fields, response fields and enum values; clients must ignore what they don't know. A breaking change is /v2, with /v1 kept for 12 months. The oldest supported buildit-mcp is 0.1.0. Generated from the API's schemas; don't edit by hand."
   },
@@ -103,7 +103,7 @@
                   "$ref": "#/components/schemas/MetaResponse"
                 },
                 "example": {
-                  "api_version": "1.20.0",
+                  "api_version": "1.21.0",
                   "min_mcp_version": "0.1.0",
                   "deprecations": [],
                   "operations": [
@@ -9751,7 +9751,7 @@
           "session"
         ],
         "summary": "Reply as the session",
-        "description": "Posts a message as the agent in its direct message with its owner, shown as the agent with this session's label. `id` is yours (a random uuid): a retry with the same id answers the first message (created: false). A reply goes in a thread (`thread_id`, a top-level message of the direct message): a thread belongs to the session that started it or was handed it, and another session's thread is 409 thread_other_session. A new top-level message starts a thread of this session. With an item's id as `thread_id`, the message goes in that item's thread in its project's channel, where everyone in the channel reads it and those following it are notified: only in a thread this session works in (the item assigned to the agent, or its thread routed or handed to this session; else 403 thread_not_bound), and only while the session reaches the project (403 outside_reach). With `card`, the message carries a question card for the owner (see QuestionCard): their answer arrives as a card.response event; accept it (answer_session_response), which closes the card, or reject it with a note. A card that breaks a rule is 422 card_invalid. Since 1.11.0, with `files` (completed uploads made for this thread; needs files:write) it posts them at once, with the text or alone: one message, or several (`messages`), readable by whoever reads the thread. Since 1.13.0, `request` names the request (agent.request) the post answers: its result goes only where the event says (a catch-up in the direct message: 409 request_result_private elsewhere). Since 1.15.0, a request whose place is a channel's thread or an item's thread posts there by the request, whoever the thread is bound to and without binding it: at most 3 posts per place (429 request_post_limit), within 24 hours of its delivery. Since 1.18.0, a meeting_notes request posts the same way in the meeting's thread (a channel's or a direct message's), and in the direct message with the owner. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
+        "description": "Posts a message as the agent in its direct message with its owner, shown as the agent with this session's label. `id` is yours (a random uuid): a retry with the same id answers the first message (created: false). A reply goes in a thread (`thread_id`, a top-level message of the direct message): a thread belongs to the session that started it or was handed it, and another session's thread is 409 thread_other_session. A new top-level message starts a thread of this session. With an item's id as `thread_id`, the message goes in that item's thread in its project's channel, where everyone in the channel reads it and those following it are notified: only in a thread this session works in (the item assigned to the agent, or its thread routed or handed to this session; else 403 thread_not_bound), and only while the session reaches the project (403 outside_reach). Since 1.21.0 that includes the threads of the descendants of an item assigned to the agent whose thread this session works in: an epic's stories, tasks and bugs and their subtasks, a story's subtasks. The nearest item above with an agent assignee decides, so a child assigned to another agent, one whose own thread another session works in (409 thread_other_session when it is this agent's), or a subtask being handed off is not this session's. Posting there binds nothing: it ends when the item above is unassigned, or the child leaves it. With `card`, the message carries a question card for the owner (see QuestionCard): their answer arrives as a card.response event; accept it (answer_session_response), which closes the card, or reject it with a note. A card that breaks a rule is 422 card_invalid. Since 1.11.0, with `files` (completed uploads made for this thread; needs files:write) it posts them at once, with the text or alone: one message, or several (`messages`), readable by whoever reads the thread. Since 1.13.0, `request` names the request (agent.request) the post answers: its result goes only where the event says (a catch-up in the direct message: 409 request_result_private elsewhere). Since 1.15.0, a request whose place is a channel's thread or an item's thread posts there by the request, whoever the thread is bound to and without binding it: at most 3 posts per place (429 request_post_limit), within 24 hours of its delivery. Since 1.18.0, a meeting_notes request posts the same way in the meeting's thread (a channel's or a direct message's), and in the direct message with the owner. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -10707,7 +10707,7 @@
           "session"
         ],
         "summary": "Say the session is writing",
-        "description": "Shows \"<agent> is writing…\" to the owner in the direct message, or in a thread of it: the session has their message and is working on the answer. In an item's thread (its id as `thread_id`, a thread this session works in), everyone viewing the thread sees it. It shows for 30 seconds: send it again every 15 seconds while working, and typing false (or the answer itself) to stop. It counts only in the session's own window, 10 a minute by default (429 rate_limited, bucket session_typing_per_minute), never against the user's or the org's limits; a 429 can be ignored. Answers 204 with no body. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
+        "description": "Shows \"<agent> is writing…\" to the owner in the direct message, or in a thread of it: the session has their message and is working on the answer. In an item's thread (its id as `thread_id`, a thread this session works in, since 1.21.0 a descendant's of an item assigned to the agent too, as post_session_message says), everyone viewing the thread sees it. It shows for 30 seconds: send it again every 15 seconds while working, and typing false (or the answer itself) to stop. It counts only in the session's own window, 10 a minute by default (429 rate_limited, bucket session_typing_per_minute), never against the user's or the org's limits; a 429 can be ignored. Answers 204 with no body. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -10820,7 +10820,7 @@
           "session"
         ],
         "summary": "The session's threads",
-        "description": "The threads this session works in, newest activity first, at most 50: threads of the agent's direct message it started or was handed, and the threads of items assigned to the agent, routed to it or mentioning it. Each says which item it is (key, title, status), why it is this session's, when the owner last wrote there and how many of this session's cards still wait for the owner. Post in one with its thread_id. A thread taken from the session (handed on, its item unassigned) is no longer listed. It counts in the session's own poll window (session_polls_per_minute), never against the user's or the org's limits. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
+        "description": "The threads this session works in, newest activity first, at most 50: threads of the agent's direct message it started or was handed, and the threads of items assigned to the agent, routed to it or mentioning it. Each says which item it is (key, title, status), why it is this session's, when the owner last wrote there and how many of this session's cards still wait for the owner. Post in one with its thread_id. A thread taken from the session (handed on, its item unassigned) is no longer listed. The threads of an assigned item's children and subtasks, where the session also posts (since 1.21.0), aren't listed: post there with the child's id. It counts in the session's own poll window (session_polls_per_minute), never against the user's or the org's limits. Needs a session token (buildit_ags_): a personal access token is 403 session_token_required. A successful call isn't written to the org's agent activity log.",
         "parameters": [
           {
             "$ref": "#/components/parameters/X-Buildit-Tool"
@@ -29515,7 +29515,7 @@
     },
     "thread_other_session": {
       "status": 409,
-      "when": "A session replied in a thread that belongs to another session of the same agent.",
+      "when": "A session replied in a thread that belongs to another session of the same agent (since 1.21.0, also a child's or subtask's thread of an item whose thread is that other session's).",
       "message": "That thread belongs to another session of this agent. Reply in one of this session's threads, or post a new top-level message.",
       "hint": "Reply in a thread of this session, or post a new top-level message."
     },
@@ -29563,9 +29563,9 @@
     },
     "thread_not_bound": {
       "status": 403,
-      "when": "A session posted, changed a card or said it was writing in an item's thread it doesn't work in: the item isn't assigned to its agent, and the thread wasn't routed or handed to this session (another agent's session may work there).",
-      "message": "This session doesn't work in that item's thread. Reply where its events came from; only the person can assign the item to the agent.",
-      "hint": "Reply in a thread this session's events came from; only the person can assign it items."
+      "when": "A session posted, changed a card or said it was writing in an item's thread it doesn't work in: the item isn't assigned to its agent, the thread wasn't routed or handed to this session (another agent's session may work there), and (since 1.21.0) no epic or story above the item is assigned to the agent with its thread this session's (a child assigned to another agent, or being handed off, never is).",
+      "message": "This session doesn't work in that item's thread. Reply where its events came from, or in the thread of an item assigned to the agent or of one of that item's children and subtasks; only the person can assign the item to the agent.",
+      "hint": "Reply where events came from, or in an assigned item's or a descendant's thread; only the person assigns items."
     },
     "thread_required": {
       "status": 422,
