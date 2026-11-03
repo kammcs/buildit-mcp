@@ -111,6 +111,9 @@ function placeWords(known: KnownRequest): string {
   if (known.place === 'thread')
     return `the thread it was made in (thread_id ${known.thread ?? '?'})`;
   if (known.place === 'meeting_thread') {
+    if (known.missed === 'dm') {
+      return `the meeting's thread (thread_id ${known.thread ?? '?'}) for the normal notes, and your direct message with the person for the "what you missed" summary and the Apply card (they weren't in the call)`;
+    }
     return known.project === null
       ? `the meeting's thread (thread_id ${known.thread ?? '?'}) for the summary, and your direct message with the person for the Apply card (the meeting has no project)`
       : `the meeting's thread (thread_id ${known.thread ?? '?'}), or your direct message with the person`;
@@ -133,6 +136,13 @@ export function outsidePlace(known: KnownRequest): string {
  */
 export const NO_PROJECT_CARD =
   'Not posted (plan_outside_thread, no_project): this meeting has no project, so its thread takes no Apply card. Ask the person in your direct message which project (ask with dm: true), then propose again for that project only, with the same request and dm: true (or card_thread left out): the card goes in your direct message.';
+
+/**
+ * The refusal of an Apply card in a meeting's thread when the owner wasn't
+ * in the call (missed_summary): the card goes in the direct message.
+ */
+export const MISSED_CARD =
+  'Not posted (request_result_private): the person wasn\'t in this call, so the Apply card goes in your direct message with them, next to the "what you missed" summary, not in the meeting\'s thread. Propose again with the same request and dm: true (or card_thread left out).';
 
 /**
  * The thread a post for a request goes to (reply, a propose_* card,
@@ -198,7 +208,9 @@ export function requestThread(
  * A meeting's notes (place meeting_thread): the summary goes in the
  * meeting's thread (the default for a post); the Apply card there only when
  * the meeting has a project, else in the direct message (the default for a
- * card then: undefined, or its latest thread). Notes for the person go to
+ * card then: undefined, or its latest thread). An absent owner's meeting
+ * (missed 'dm') takes its card in the direct message whatever the project:
+ * a new message there (undefined) by default. Notes for the person go to
  * the direct message too (`dm: true`, handled by the callers). A thread
  * named outside those (the meeting's thread, the direct message's latest)
  * is refused before any call.
@@ -213,11 +225,14 @@ function meetingThread(
   if (thread === undefined) return undefined;
   if (given.item !== undefined) throw new ToolInputError(outsidePlace(known));
   const named = given.thread_id;
+  const missedCard = what === 'card' && known.missed === 'dm';
   const noCard = what === 'card' && known.project === null;
   if (named === undefined) {
+    if (missedCard) return { known, threadId: undefined };
     return { known, threadId: noCard ? dmThread(state) : thread };
   }
   if (named.toLowerCase() === thread.toLowerCase()) {
+    if (missedCard) throw new ToolInputError(MISSED_CARD);
     if (noCard) throw new ToolInputError(NO_PROJECT_CARD);
     return { known, threadId: thread };
   }

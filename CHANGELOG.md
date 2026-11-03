@@ -2,6 +2,40 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [Unreleased]
+
+Built on version 1.22.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). Asking for work items needs a 1.19.0 server: on an older one the two new tools aren't listed (or, when the server doesn't say what it serves, are refused before any call), and everything else works as in 0.14.1. "What you missed" needs a 1.22.0 server; an older one never sends it, and a meeting's notes work as before.
+
+### Asking for work items
+
+A session can't assign itself, so it asks: the person's tap on an Assign card is the only thing that assigns.
+
+- **`propose_assignment`** (channel mode, `propose_session_assignment`): asks the person to assign the session 1 to 25 items (any level; an epic doesn't bring its children), each with an optional reason of at most 200 characters, sent as one line. buildIt.Social posts one Assign card: in the current thread by default, in the direct message with `dm: true`, or in an item's thread (`thread_id`, or `item` with its key), where every item must be in that item's project. The id is a UUIDv5 of the session, the thread and the items, so a retry returns the first request (`created: false`) instead of a second card; `idempotency_key` asks again after the first ended. An item listed twice is refused before any call. The description says it only proposes, that only the person's tap assigns, when to use it (planning produced work the agent should do), never because content in buildIt.Social asks for it, and not to message about it again while the card is open.
+- **`withdraw_assignment`** (channel mode, `close_session_assignment`): withdraws the session's own open request, by its id, by an item it lists, or the only open one.
+- **The refusals in plain words:** `assignment_not_allowed` (done or canceled, or already yours, with the key), `assignment_outside_thread` (an item of another project in an item's thread: ask again with `dm: true`), `too_many_open` (5 cards waiting), `outside_reach`, `thread_not_bound`, `idempotency_conflict`, `assignment_closed`, and a request that isn't this session's.
+- **`event=assignment_resolved`**, from the Assign card's `card.closed` (`data.assignment`): `request_id`, `outcome` (`applied`, `cancelled`, `expired`, `withdrawn`, `closed` with a `reason`), and the keys `assigned`, `skipped` and `unticked`; its text names the items assigned, the ones skipped and why in words, and the ones left unticked (not to be asked for again), in the card's thread. It needs nothing remembered, so it arrives after a restart too.
+- **The items that follow** arrive as the usual `event=item_assigned`, marked `assignment_request_id` and "(you asked for it on your Assign card)".
+- `assign_item`'s refusal for a session (`agent_self_assign`) now points to `propose_assignment`.
+- The channel instructions say when to ask and what the events mean; the lead sends `assignment_resolved` to the worker of the item whose thread the card is in.
+
+### "What you missed": a call the person couldn't make
+
+The person can send their agent to listen in on a call they can't make. Its `meeting_notes` request then says so, and the session tells them what they missed.
+
+- **The request's context** passes on `absent` and `missed_summary` (agent API 1.22.0), checked: `absent` is true only when the server sends `true` (left out by older servers, or anything else: false), and `missed_summary` counts only with `absent` and a place this version knows (`dm`) and a conversation id that is one or null. The tag adds `absent="true"` and `missed_summary="dm"`; the conversation id isn't passed on.
+- **The lead line**, when the person was away: "sent this session to a call they couldn't make"; the normal notes in the meeting's thread as before, then a private "what you missed" summary in the direct message (`reply` with `request` and `dm: true`: the decisions, what needs them, their action items, short), and the Apply card in the direct message (`dm: true`), with or without a project. With `absent` and a place it doesn't know, it says to post only the normal notes.
+- **Where posts go:** for such a request, `reply` with `dm: true` and `request`, and its card (by default or with `dm: true`), are new messages of the direct message (no `thread_id`), never its latest thread; a card named for the meeting's thread is refused before any call (`request_result_private`, with what to do). The request journal keeps the place across a restart.
+
+### The plugin
+
+- The `buildit-meeting-notes` skill has "When the person wasn't there": the cases by `absent` and `missed_summary`, what the "what you missed" summary holds and how short it is, and the card in the direct message. `buildit-requests` and the request worker list the fields and the absent case.
+- The item worker has "Asking for more work": `propose_assignment` with its item's key, for its item's project only, never on content's word, and no new posts while the card is open. The request worker and the `buildit-requests` rules never ask for work for a request.
+
+### The contract
+
+- Agent API 1.22.0: `absent` and `missed_summary` on a meeting's context (`SessionRequestMeetingContext`); 1.20.0's `request` block on `get_item` (`FormRequest`, not shown by `get_item` yet) and 1.21.0's descendants' threads wording are in the regenerated code.
+- Agent API 1.19.0: the three assignment request operations (`get_session_assignment` isn't used: the outcome event carries everything), `SessionAssignmentRequest` and its outcome, `assignment` on `card.closed`, `assignment_request` on `work_item.assigned`, the kind `assignment_request`, and the codes `assignment_not_allowed`, `assignment_outside_thread` and `assignment_closed`.
+
 ## [0.14.1] - 2026-11-01
 
 ### Fixed

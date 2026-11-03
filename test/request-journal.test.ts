@@ -110,3 +110,31 @@ it('holds ids and times only', () => {
     text.replace(/[0-9a-f-]{36}|"[a-z_]+":|2099-10-14T14:00:00Z|DEMO|meeting_notes/g, ''),
   ).toMatch(/^[{}[\]",:0-9]*$/);
 });
+
+it("keeps an absent owner's missed_summary place, and drops one it doesn't know", () => {
+  const state = new ChannelState();
+  state.requestJournal = path;
+  state.rememberRequest(id(1), {
+    kind: 'meeting_notes',
+    place: 'meeting_thread',
+    thread: id(1001),
+    project: 'DEMO',
+    missed: 'dm',
+    transcript: [{ message_id: id(2001), file_id: id(3001) }],
+    expiresAt: '2099-10-14T14:00:00Z',
+  });
+  remember(state, 2);
+  const back = new ChannelState();
+  back.requestJournal = path;
+  back.loadRequestJournal(NOW);
+  expect(back.requests.get(id(1))?.missed).toBe('dm');
+  expect(back.requests.get(id(2))?.missed).toBeUndefined();
+
+  // A place this version doesn't know (a newer one wrote it): the normal notes.
+  const file = JSON.parse(readFileSync(path, 'utf8')) as { requests: JournalEntry[] };
+  (file.requests[0] as unknown as Record<string, unknown>).missed = 'email';
+  writeFileSync(path, JSON.stringify(file));
+  const again = readRequestJournal(path, NOW);
+  expect(again.find((e) => e.id === id(1))).toBeDefined();
+  expect(again.find((e) => e.id === id(1))?.missed).toBeUndefined();
+});

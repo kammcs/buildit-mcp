@@ -85,6 +85,8 @@ src/
                         back (channel mode only; listed when the API serves files)
   tools/handoff.ts      propose_handoff, withdraw_handoff, decline_handoff (channel mode only;
                         listed when the API serves them)
+  tools/assignment.ts   propose_assignment, withdraw_assignment (channel mode only; listed when
+                        the API serves them)
   tools/ask.ts          ask: questions as a card, the answer back (channel mode only; also the
                         plugin's AskUserQuestion hook, format "hook")
   tools/approve.ts      approve: tool approvals as cards (the plugin's PermissionRequest hook),
@@ -97,6 +99,7 @@ src/
                         events (assigned, mentions and replies in an item's thread, unassigned)
   channel/item-events.ts  the content of a work item's notifications (lead, data blocks)
   channel/handoffs.ts   the handoffs seen, and the content of child_done and handoff_resolved
+  channel/assignments.ts  the content of assignment_resolved (an Assign card's card.closed)
   channel/requests.ts   requests from buildIt.Social (agent.request): the event's shape, the checks,
                         and the content of event=request (attributes and the lead line)
   channel/request-journal.ts  a meeting's notes requests' scope (ids only), kept across a restart

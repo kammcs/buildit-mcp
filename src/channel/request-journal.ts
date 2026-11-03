@@ -21,6 +21,8 @@ export interface JournalEntry {
   thread: string;
   /** The meeting's project key, or null when it has none. */
   project: string | null;
+  /** An absent owner's meeting: where the "what you missed" summary goes ('dm'); else left out. */
+  missed?: 'dm';
   transcript: { message_id: string; file_id: string }[];
   /** When the request expires (RFC 3339); dropped after that. */
   expires_at: string;
@@ -61,11 +63,14 @@ function entryOf(v: unknown, now: number): JournalEntry | undefined {
   }
   const expires = typeof e.expires_at === 'string' ? Date.parse(e.expires_at) : NaN;
   if (!Number.isFinite(expires) || expires <= now) return undefined;
+  // A place this version doesn't know is left out: the normal notes, as before.
+  const missed = e.missed === 'dm' ? ('dm' as const) : undefined;
   return {
     id: e.id.toLowerCase(),
     kind: e.kind,
     thread: e.thread,
     project: e.project,
+    ...(missed === undefined ? {} : { missed }),
     transcript,
     expires_at: e.expires_at as string,
   };

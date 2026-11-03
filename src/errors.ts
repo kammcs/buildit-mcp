@@ -117,6 +117,7 @@ const NOT_FOUND_HINTS: Record<string, string> = {
   channel: 'list_channels lists the channels in reach; use one of those names.',
   message: 'read_channel lists the messages of a channel and their ids.',
   plan: 'Use a handle a propose_* tool returned in this conversation, or propose the change again.',
+  assignment_request: 'Use a request id propose_assignment returned in this session.',
   route:
     'The API does not serve this call: it may be older than this buildit-mcp. Check BUILDIT_API_URL, or use another tool.',
 };
@@ -130,6 +131,8 @@ const SERVER_HINTS: Record<string, string> = {
   handoff_exists:
     "Don't propose it again: the subtask already has a live handoff (details.handoff_id), whose outcome arrives as event=handoff_resolved.",
   handoff_closed: 'Nothing more to do with this handoff: its card has already ended.',
+  assignment_closed:
+    'Nothing more to do with this request: its card has already ended, and its outcome arrives, or arrived, as event=assignment_resolved.',
 };
 
 /** The rate-limit buckets the contract names in a rate_limited error's details.bucket. */

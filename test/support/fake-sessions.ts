@@ -12,7 +12,8 @@
  * thread (`itemMessage`), and `revoke` or `expire` a session. For
  * handoffs: the owner's answer to a proposal's card (`resolveHandoff`), a
  * subtask handed to this session (`handOver`), and a handed subtask's
- * result (`childDone`).
+ * result (`childDone`). For assignment requests: the owner's answer to an
+ * Assign card (`resolveAssignment`), then each assigned item's event.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -110,7 +111,18 @@ export interface FakeSession {
   suggestions: string[][];
   /** The handoffs this session proposed (asked) or was handed (target), by id. */
   handoffs: Map<string, FakeHandoff>;
+  /** The assignment requests this session made, by id, as the API answers them. */
+  assignments: Map<string, FakeAssignment>;
 }
+
+/** An assignment request in the fake, as the API answers it. */
+export type FakeAssignment = Record<string, unknown> & {
+  id: string;
+  status: string;
+  card_message_id: string;
+  thread_id: string | null;
+  items: { item: { id: string; key: string }; reason: string | null; [k: string]: unknown }[];
+};
 
 /** A handoff in the fake, as the API answers it, and which side this session is on. */
 export interface FakeHandoff {
@@ -157,7 +169,7 @@ export interface FakeApproval {
 }
 
 export interface FakeCard {
-  kind: 'question' | 'plan' | 'approval' | 'handoff';
+  kind: 'question' | 'plan' | 'approval' | 'handoff' | 'assignment';
   /** A tool approval card's state. */
   approval?: FakeApproval;
   threadId: string | null;
@@ -356,7 +368,10 @@ export class SessionRefusal extends Error {
       | 'reporter_questions_off'
       | 'reporter_question_limit'
       | 'reporter_text_invalid'
-      | 'plan_outside_thread',
+      | 'plan_outside_thread'
+      | 'assignment_not_allowed'
+      | 'assignment_outside_thread'
+      | 'assignment_closed',
     readonly details: Record<string, unknown> = {},
   ) {
     super(code);
@@ -1267,6 +1282,214 @@ export class FakeSessions {
     if (options.forget === true) s.handoffs.delete(id);
   }
 
+  // -- assignment requests ----------------------------------------------------
+
+  /** POST /v1/session/assignment-requests: an Assign card listing the items. */
+  proposeAssignment(
+    token: string,
+    body: Record<string, unknown>,
+  ): { status: number; body: unknown } {
+    const s = this.live(token);
+    const id = String(body.id);
+    const asked = body.items as { item: string; reason?: string }[];
+    const threadId = typeof body.thread_id === 'string' ? body.thread_id : null;
+    const items = asked.map((a) => {
+      const item = this.host.findItem?.(a.item);
+      if (item === undefined) throw new SessionRefusal('not_found', { kind: 'item', ref: a.item });
+      return item;
+    });
+    const replay = s.assignments.get(id);
+    if (replay !== undefined) {
+      const same =
+        replay.thread_id === threadId &&
+        replay.items.length === items.length &&
+        replay.items.every((r, n) => r.item.id === items[n]?.id);
+      if (!same) throw new SessionRefusal('idempotency_conflict', { idempotency_key: id });
+      return { status: 200, body: { request: replay, created: false } };
+    }
+    const seen = new Set<string>();
+    items.forEach((item, n) => {
+      if (seen.has(item.id)) {
+        throw new SessionRefusal('validation', {
+          fields: [{ path: `items.${n}.item`, message: 'The same item twice.' }],
+        });
+      }
+      seen.add(item.id);
+    });
+    const reasons = asked.map((a, n) => {
+      const one = a.reason?.replace(/\s+/g, ' ').trim();
+      if (one !== undefined && one.length > 200) {
+        throw new SessionRefusal('validation', {
+          fields: [{ path: `items.${n}.reason`, message: 'At most 200 characters.' }],
+        });
+      }
+      return one === undefined || one === '' ? null : one;
+    });
+    let inItem = false;
+    if (threadId !== null) {
+      if (s.items.has(threadId)) {
+        inItem = true;
+        const project = this.host.findItem?.(threadId)?.key.split('-')[0];
+        const outside = items.find((i) => i.key.split('-')[0] !== project);
+        if (project !== undefined && outside !== undefined) {
+          throw new SessionRefusal('assignment_outside_thread', {
+            thread_id: threadId,
+            key: outside.key,
+          });
+        }
+      } else if (!s.dmThreads.includes(threadId)) {
+        throw new SessionRefusal('thread_not_bound', { thread_id: threadId });
+      }
+    }
+    const open = [...s.assignments.values()].filter((a) => a.status === 'open').length;
+    if (open >= 5) throw new SessionRefusal('too_many_open', { open });
+    const cardId = randomUUID();
+    s.cards.set(cardId, {
+      kind: 'assignment',
+      threadId,
+      closedAt: null,
+      closedBy: null,
+      responses: [],
+      updates: [],
+    });
+    const json: FakeAssignment = {
+      id,
+      status: 'open',
+      card_message_id: cardId,
+      conversation_id: inItem ? SESSION_IDS.demoChannel : SESSION_IDS.dm,
+      thread_id: threadId,
+      closes_at: '2026-10-08T15:00:00.000Z',
+      created_at: this.host.now(),
+      items: items.map((i, n) => ({
+        item: { id: i.id, key: i.key },
+        reason: reasons[n] ?? null,
+      })),
+    };
+    s.assignments.set(id, json);
+    return { status: 201, body: { request: json, created: true } };
+  }
+
+  private ownAssignment(s: FakeSession, id: string): FakeAssignment {
+    const a = s.assignments.get(id);
+    if (a === undefined) {
+      throw new SessionRefusal('not_found', { kind: 'assignment_request', ref: id });
+    }
+    return a;
+  }
+
+  /** GET /v1/session/assignment-requests/{id} */
+  getAssignment(token: string, id: string): { status: number; body: unknown } {
+    const s = this.live(token);
+    return { status: 200, body: { request: this.ownAssignment(s, id) } };
+  }
+
+  /** POST /v1/session/assignment-requests/{id}/close: withdrawn, and its card.closed follows. */
+  closeAssignment(token: string, id: string): { status: number; body: unknown } {
+    const s = this.live(token);
+    const a = this.ownAssignment(s, id);
+    if (a.status !== 'open') throw new SessionRefusal('assignment_closed', { request_id: id });
+    this.endAssignment(s, a, 'withdrawn', 'app', {});
+    return { status: 200, body: { request: a } };
+  }
+
+  /**
+   * The owner answers an Assign card (applied: `assigned` and `skipped` by
+   * key, the rest unticked; or another outcome). Its card.closed comes
+   * first, then each assigned item's work_item.assigned with
+   * assignment_request, to this session.
+   */
+  resolveAssignment(
+    token: string,
+    id: string,
+    outcome: 'applied' | 'cancelled' | 'expired' | 'withdrawn' | 'closed',
+    options: {
+      assigned?: string[];
+      skipped?: { key: string; reason: string }[];
+      reason?: string;
+      /** Leave the items' events out (a test of the outcome alone). */
+      noItemEvents?: boolean;
+    } = {},
+  ): void {
+    const s = this.session(token);
+    const a = this.ownAssignment(s, id);
+    const closedBy =
+      outcome === 'applied' || outcome === 'cancelled'
+        ? 'owner'
+        : outcome === 'expired'
+          ? 'time'
+          : outcome === 'withdrawn'
+            ? 'app'
+            : 'session_ended';
+    const assigned = this.endAssignment(s, a, outcome, closedBy, options);
+    if (options.noItemEvents === true) return;
+    for (const item of assigned) {
+      const ev = demoItem(Number(item.key.split('-')[1]), { id: item.id });
+      s.items.add(item.id);
+      this.event(s, 'work_item.assigned', {
+        ...this.itemData(ev, true),
+        assignment: this.assignment(s),
+        context: this.context(s, []),
+        user: { id: s.ownerId, name: s.ownerName, is_guest: false, locale: 'en' },
+        assignment_request: { id },
+      });
+    }
+  }
+
+  private endAssignment(
+    s: FakeSession,
+    a: FakeAssignment,
+    outcome: string,
+    closedBy: string,
+    options: { assigned?: string[]; skipped?: { key: string; reason: string }[]; reason?: string },
+  ): { id: string; key: string }[] {
+    const keys = a.items.map((i) => i.item);
+    const applied = outcome === 'applied';
+    const assigned = applied
+      ? keys.filter((k) => (options.assigned ?? keys.map((x) => x.key)).includes(k.key))
+      : [];
+    const skipped = applied
+      ? (options.skipped ?? []).flatMap((sk) => {
+          const item = keys.find((k) => k.key === sk.key);
+          return item === undefined ? [] : [{ item, reason: sk.reason }];
+        })
+      : [];
+    const unticked = applied
+      ? keys.filter((k) => !assigned.includes(k) && !skipped.some((sk) => sk.item.id === k.id))
+      : [];
+    a.status = outcome;
+    if (applied || outcome === 'cancelled') a.decided_at = this.host.now();
+    if (options.reason !== undefined) a.reason = options.reason;
+    if (applied) {
+      for (const i of a.items) {
+        const sk = skipped.find((x) => x.item.id === i.item.id);
+        i.outcome = assigned.includes(i.item) ? 'assigned' : sk ? 'skipped' : 'unticked';
+        if (sk) i.skip_reason = sk.reason;
+      }
+    }
+    const card = s.cards.get(a.card_message_id);
+    if (card) {
+      card.closedAt = this.host.now();
+      card.closedBy = closedBy;
+    }
+    this.event(s, 'card.closed', {
+      ...this.cardData(s, a.card_message_id),
+      closed_by: closedBy,
+      closed_at: this.host.now(),
+      respondents: applied || outcome === 'cancelled' ? 1 : 0,
+      counts: null,
+      private: null,
+      assignment: {
+        id: a.id,
+        outcome,
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+        assigned,
+        skipped,
+        unticked,
+      },
+    });
+    return assigned;
+  }
+
   /**
    * The owner hands this session a subtask another session proposed: a
    * work_item.assigned with data.handoff; the session works in its thread.
@@ -1681,6 +1904,7 @@ export class FakeSessions {
       capabilitiesDetected: [],
       suggestions: [],
       handoffs: new Map(),
+      assignments: new Map(),
     };
     this.sessions.set(token, session);
     return session;

@@ -850,6 +850,13 @@ export const V111_OPS = new Set<OperationId>([
   'complete_session_upload',
 ]);
 
+/** The operations API 1.19.0 added (compat.v119 false leaves them out). */
+export const V119_OPS = new Set<OperationId>([
+  'propose_session_assignment',
+  'get_session_assignment',
+  'close_session_assignment',
+]);
+
 /** What an API older than 1.15.0 doesn't serve (compat.v115 false). */
 const V115_OPS = new Set<OperationId>(['ask_session_reporter']);
 
@@ -869,7 +876,7 @@ function normalNeeds(raw: unknown): string[] {
 
 /** What /v1/meta says, apart from the served operations (compat.servedList). */
 function defaultMeta(): Record<string, unknown> {
-  return { api_version: '1.18.0', min_mcp_version: '0.1.0', deprecations: [] };
+  return { api_version: '1.19.0', min_mcp_version: '0.1.0', deprecations: [] };
 }
 
 /** The release operations an older API doesn't serve (compat.releaseOps false). */
@@ -1009,7 +1016,8 @@ export class FakeApi {
    * without create_items, edit_items, post_plan_card's request and
    * ask_session_reporter (v115 false: 1.14.0); without reading by a
    * meeting's notes request, which get_thread and the attachment link then
-   * ignore (v118 false: 1.15.0). With sessionCardRead (a server that has
+   * ignore (v118 false: 1.15.0); without assignment requests (v119 false:
+   * 1.18.0). With sessionCardRead (a server that has
    * it, proposed in 0.14.1): get_session_card, listed in /v1/meta.
    */
   compat = {
@@ -1026,6 +1034,7 @@ export class FakeApi {
     v114: true,
     v115: true,
     v118: true,
+    v119: true,
     sessionCardRead: false,
   };
 
@@ -1063,6 +1072,7 @@ export class FakeApi {
       v114: true,
       v115: true,
       v118: true,
+      v119: true,
       sessionCardRead: false,
     };
     this.requests.length = 0;
@@ -1292,7 +1302,8 @@ export class FakeApi {
         (V14_OPS.has(route.id) && !this.compat.v14) ||
         (V19_OPS.has(route.id) && !this.compat.v19) ||
         (V111_OPS.has(route.id) && !this.compat.v111) ||
-        (V115_OPS.has(route.id) && !this.compat.v115);
+        (V115_OPS.has(route.id) && !this.compat.v115) ||
+        (V119_OPS.has(route.id) && !this.compat.v119);
       if (olderRoute) {
         this.send(res, {
           status: 404,
@@ -1709,6 +1720,7 @@ export class FakeApi {
       .filter((id) => this.compat.v19 || !V19_OPS.has(id))
       .filter((id) => this.compat.v111 || !V111_OPS.has(id))
       .filter((id) => this.compat.v115 || !V115_OPS.has(id))
+      .filter((id) => this.compat.v119 || !V119_OPS.has(id))
       .sort();
   }
 
@@ -1923,6 +1935,16 @@ export class FakeApi {
       case 'decline_session_handoff':
         return this.sessionCheck(() =>
           this.sessions.declineHandoff(call.token, call.params.id ?? '', call.body),
+        );
+      case 'propose_session_assignment':
+        return this.sessionCheck(() => this.sessions.proposeAssignment(call.token, call.body));
+      case 'get_session_assignment':
+        return this.sessionCheck(() =>
+          this.sessions.getAssignment(call.token, call.params.id ?? ''),
+        );
+      case 'close_session_assignment':
+        return this.sessionCheck(() =>
+          this.sessions.closeAssignment(call.token, call.params.id ?? ''),
         );
       case 'create_session_attachment_link':
         return this.sessionCheck(() => {
