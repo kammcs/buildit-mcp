@@ -25,7 +25,10 @@
  * (`data.handoff`) becomes `handoff_resolved`. An Assign card's
  * `card.closed` (`data.assignment`, assignments.ts) becomes
  * `assignment_resolved`, and each item it assigned arrives next as an
- * `item_assigned` with `assignment_request`. When the session starts, it
+ * `item_assigned` with `assignment_request` (`assigned_from` when another of
+ * the person's sessions asked for it); an item the card sent to another
+ * session reports back as `work_item.assigned_item_done`, which becomes
+ * `assigned_item_done` in the card's thread. When the session starts, it
  * suggests its capability tags (PUT /v1/session/capabilities; an older
  * server's 404 is skipped). A tool approval card's verdict is its `card.closed` (`data.approval`),
  * handed to the `approve` call that waits for it; an answer to such a card
@@ -59,7 +62,7 @@ import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
 import { planResolvedContent } from '../tools/plans.js';
 import { statusName } from '../tools/threads.js';
 import { childDoneContent, handoffResolvedContent, Handoffs, targetName } from './handoffs.js';
-import { assignmentResolvedContent, Assignments } from './assignments.js';
+import { assignedItemDoneContent, assignmentResolvedContent, Assignments } from './assignments.js';
 import {
   assignedContent,
   handedContent,
@@ -771,6 +774,10 @@ export class ChannelLoop {
       await this.deliverChildDone(event, info);
       return;
     }
+    if (event.type === 'work_item.assigned_item_done') {
+      await this.deliverAssignedItemDone(event, info);
+      return;
+    }
     if (
       event.type === 'work_item.assigned' ||
       event.type === 'work_item.unassigned' ||
@@ -985,8 +992,18 @@ export class ChannelLoop {
       const handoff = event.data.handoff;
       const request = event.data.assignment_request;
       if (handoff === undefined) {
-        content = assignedContent(owner, key, item, context, request !== undefined);
+        // Another of the person's sessions asked for it on its card (API 1.25.0): named, never its reasons.
+        const from =
+          request?.from === undefined ? undefined : (targetName(request.from) ?? undefined);
+        content = assignedContent(
+          owner,
+          key,
+          item,
+          context,
+          request === undefined ? false : { from },
+        );
         if (request !== undefined) meta = { ...meta, assignment_request_id: request.id };
+        if (from !== undefined) meta = { ...meta, assigned_from: from };
       } else {
         const parent = sanitizeLabel(handoff.parent.key, 40);
         const needs = handoff.needs.map((n) => sanitizeLabel(n, 32)).filter((n) => n !== '');
@@ -1233,6 +1250,105 @@ export class ChannelLoop {
   }
 
   /**
+   * work_item.assigned_item_done: an item this session's Assign card sent to
+   * another of the person's sessions is in review or done. It goes to the
+   * card's thread (event=assigned_item_done), with the result inside a
+   * block, as child_done does.
+   */
+  private async deliverAssignedItemDone(
+    event: Extract<SessionEvent, { type: 'work_item.assigned_item_done' }>,
+    info: SessionInfo,
+  ): Promise<void> {
+    const { logger, state } = this.options;
+    if (event.session.id !== info.session.id) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: 'other_session' });
+      return;
+    }
+    const d = event.data;
+    const owner = sanitizeLabel(info.owner.name, 64);
+    const key = sanitizeLabel(d.item.key, 40);
+    const outcome = sanitizeLabel(d.outcome, 20);
+    const to = targetName(d.target);
+    const message = d.result?.message;
+    const content = assignedItemDoneContent(owner, {
+      item: key,
+      status: d.item.status === null ? null : statusName(d.item.status),
+      outcome,
+      to,
+      result:
+        message === undefined
+          ? null
+          : {
+              author: { kind: message.author.kind, name: message.author.name },
+              from_owner: message.from_owner,
+              via_agent: message.via_agent,
+              text: message.text,
+              message_id: message.id,
+              files: message.files,
+            },
+    });
+    state.rememberItem(d.item.key, d.item.id);
+    const threadId = await this.assignmentThread(d.assignment_request.id);
+    await this.send({
+      content,
+      meta: {
+        event: 'assigned_item_done',
+        ...(threadId === undefined ? {} : { thread_id: threadId }),
+        item: key,
+        outcome,
+        request_id: d.assignment_request.id,
+        ...(to === undefined ? {} : { to }),
+        project: sanitizeLabel(d.project.key, 20),
+        session: sanitizeLabel(event.session.label, 40),
+      },
+    });
+    if (threadId !== undefined) state.typing?.start(threadId);
+    logger.info('assigned item report delivered', { event_id: event.id, outcome });
+  }
+
+  /**
+   * The thread of an Assign card this session made: what this process
+   * remembers (the proposal, or its card.closed), else the request read once
+   * (get_session_assignment, the handoff unit; at most once per request in
+   * this process, so a restart with several reports waiting spends little).
+   * A card at the top of the direct message is its own message's thread.
+   * Undefined when neither says (another session's card whose work this one
+   * took over): the report then goes to the direct message.
+   */
+  private async assignmentThread(requestId: string): Promise<string | undefined> {
+    const { api, state } = this.options;
+    const id = requestId.toLowerCase();
+    const known = state.assignments.get(id);
+    const place = (thread: string | null | undefined, card: string | null | undefined) =>
+      thread ?? card ?? undefined;
+    if (known !== undefined && (known.thread !== undefined || known.card !== undefined)) {
+      return place(known.thread, known.card);
+    }
+    if (this.assignmentsLookedUp.has(id)) return undefined;
+    this.assignmentsLookedUp.add(id);
+    const signal = AbortSignal.any([this.signal, AbortSignal.timeout(10_000)]);
+    const r = await callOperation(
+      api,
+      'get_session_assignment',
+      { path: { id: requestId } },
+      { signal },
+    ).catch(() => undefined);
+    if (r === undefined) return undefined;
+    state.assignments.remember({
+      id,
+      keys: r.request.items.map((i) => i.item.key.toUpperCase()),
+      ids: r.request.items.map((i) => i.item.id.toLowerCase()),
+      status: r.request.status,
+      thread: r.request.thread_id,
+      card: r.request.card_message_id,
+    });
+    return place(r.request.thread_id, r.request.card_message_id);
+  }
+
+  /** The requests assignmentThread read already (at most once each). */
+  private readonly assignmentsLookedUp = new Set<string>();
+
+  /**
    * The parent item of a handoff this process doesn't remember (it
    * restarted, or the proposal is older than its memory), without
    * get_session_handoff: that call takes the session's handoff unit, which
@@ -1366,27 +1482,51 @@ export class ChannelLoop {
       return;
     }
     const a = parsed.data;
+    const elsewhereRaw = a.assigned_elsewhere ?? [];
+    const message = data.message as { thread_id?: unknown } | undefined;
+    const cardThread = typeof message?.thread_id === 'string' ? message.thread_id : undefined;
+    const threadId = cardThread ?? messageId;
     state.assignments.settle(a.id, a.outcome);
-    for (const i of [...a.assigned, ...a.unticked, ...a.skipped.map((s) => s.item)]) {
+    // Where the card is, for its lines' reports (assigned_item_done) after this.
+    const known = state.assignments.get(a.id);
+    state.assignments.remember({
+      id: a.id.toLowerCase(),
+      keys: known?.keys ?? [],
+      ids: known?.ids ?? [],
+      status: a.outcome,
+      thread: cardThread ?? null,
+      card: messageId,
+    });
+    for (const i of [
+      ...a.assigned,
+      ...a.unticked,
+      ...a.skipped.map((s) => s.item),
+      ...elsewhereRaw.map((e) => e.item),
+    ]) {
       state.rememberItem(i.key, i.id);
     }
     const key = (i: { key: string }): string => sanitizeLabel(i.key, 40);
     const outcome = sanitizeLabel(a.outcome, 20);
     const reason = a.reason === undefined ? undefined : sanitizeLabel(a.reason, 20);
     const assigned = a.assigned.map(key);
+    const elsewhere = elsewhereRaw.map((e) => ({
+      key: key(e.item),
+      to: targetName(e) ?? 'another of your sessions',
+      queued: e.queued,
+    }));
     const skipped = a.skipped.map((s) => ({
       key: key(s.item),
       reason: sanitizeLabel(s.reason, 30),
+      to: s.target === undefined ? undefined : targetName(s.target),
     }));
     const unticked = a.unticked.map(key);
-    const message = data.message as { thread_id?: unknown } | undefined;
-    const threadId = typeof message?.thread_id === 'string' ? message.thread_id : messageId;
     await this.send({
       content: assignmentResolvedContent(sanitizeLabel(info.owner.name, 64), {
         id: a.id,
         outcome,
         reason,
         assigned,
+        elsewhere,
         skipped,
         unticked,
       }),
@@ -1396,6 +1536,9 @@ export class ChannelLoop {
         outcome,
         ...(reason === undefined ? {} : { reason }),
         ...(assigned.length > 0 ? { assigned: assigned.join(',') } : {}),
+        ...(elsewhere.length > 0
+          ? { assigned_elsewhere: elsewhere.map((e) => e.key).join(',') }
+          : {}),
         ...(skipped.length > 0 ? { skipped: skipped.map((s) => s.key).join(',') } : {}),
         ...(unticked.length > 0 ? { unticked: unticked.join(',') } : {}),
         thread_id: threadId,

@@ -98,6 +98,7 @@ describe('whoami', () => {
       ],
       features: { projects: true },
       capabilities: null,
+      peer_sessions: null,
       rate_limits: {
         requests_per_minute: 120,
         user_requests_per_minute: 300,

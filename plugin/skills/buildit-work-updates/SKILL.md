@@ -44,6 +44,10 @@ Each post goes **in the thread of the item it concerns**.
 
 Leave out logs, long diffs and credentials. Share a file (a render, a log) with `reply`'s `files` only when the person needs it.
 
+## Work for the person's other sessions
+
+When a plan splits between this session and the person's other sessions (items that need another computer), ask with **one** Assign card (`propose_assignment`), each line with its `session` (`whoami` lists your other sessions), instead of creating subtasks to move whole items. The person picks each line's session on the card. Say in your item's thread which items you suggested for which session. Items sent elsewhere are that session's: don't post in their threads; when one reports back (event=assigned_item_done, at In review and at Done), check its result and post what came back in your own item's thread. Handoffs (`propose_handoff`) stay for a subtask of your own item whose result must come back.
+
 ## Agents you start yourself
 
 When you start agents of your own for parts of the work (lanes, sub-agents), each posts **its own** result on **its own** item, through this session's buildit tools:

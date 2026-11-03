@@ -113,6 +113,18 @@ export interface FakeSession {
   handoffs: Map<string, FakeHandoff>;
   /** The assignment requests this session made, by id, as the API answers them. */
   assignments: Map<string, FakeAssignment>;
+  /** get_session's peer_sessions (API 1.25.0); left out when undefined (an older API). */
+  peers?: FakePeer[] | undefined;
+}
+
+/** Another of the owner's live sessions, as get_session's peer_sessions lists it. */
+export interface FakePeer {
+  id: string;
+  agent: { id: string; name: string };
+  label: string;
+  capabilities: string[];
+  online: boolean;
+  projects: string[];
 }
 
 /** An assignment request in the fake, as the API answers it. */
@@ -371,7 +383,8 @@ export class SessionRefusal extends Error {
       | 'plan_outside_thread'
       | 'assignment_not_allowed'
       | 'assignment_outside_thread'
-      | 'assignment_closed',
+      | 'assignment_closed'
+      | 'assignment_target_invalid',
     readonly details: Record<string, unknown> = {},
   ) {
     super(code);
@@ -492,6 +505,7 @@ export class FakeSessions {
           capabilities: s.capabilities,
           capabilities_detected: s.capabilitiesDetected,
         },
+        ...(s.peers === undefined ? {} : { peer_sessions: s.peers }),
         agent: { id: SESSION_IDS.agent, name: 'Claude' },
         owner: { id: s.ownerId, name: s.ownerName },
         org: { id: identity.org.id, name: identity.org.name },
@@ -1291,21 +1305,31 @@ export class FakeSessions {
   ): { status: number; body: unknown } {
     const s = this.live(token);
     const id = String(body.id);
-    const asked = body.items as { item: string; reason?: string }[];
+    const asked = body.items as {
+      item: string;
+      reason?: string;
+      session?: string;
+      agent?: string;
+    }[];
     const threadId = typeof body.thread_id === 'string' ? body.thread_id : null;
     const items = asked.map((a) => {
       const item = this.host.findItem?.(a.item);
       if (item === undefined) throw new SessionRefusal('not_found', { kind: 'item', ref: a.item });
       return item;
     });
+    const asks = asked.map((a) =>
+      a.session === undefined
+        ? ''
+        : `${a.session}${a.agent === undefined ? '' : `@${a.agent}`}`.toLowerCase(),
+    );
     const replay = s.assignments.get(id);
     if (replay !== undefined) {
       const same =
         replay.thread_id === threadId &&
         replay.items.length === items.length &&
-        replay.items.every((r, n) => r.item.id === items[n]?.id);
+        replay.items.every((r, n) => r.item.id === items[n]?.id && r.ask === asks[n]);
       if (!same) throw new SessionRefusal('idempotency_conflict', { idempotency_key: id });
-      return { status: 200, body: { request: replay, created: false } };
+      return { status: 200, body: { request: this.assignmentJson(replay), created: false } };
     }
     const seen = new Set<string>();
     items.forEach((item, n) => {
@@ -1343,6 +1367,7 @@ export class FakeSessions {
     }
     const open = [...s.assignments.values()].filter((a) => a.status === 'open').length;
     if (open >= 5) throw new SessionRefusal('too_many_open', { open });
+    const targets = asked.map((a, n) => this.lineTarget(s, a, n, items[n]!));
     const cardId = randomUUID();
     s.cards.set(cardId, {
       kind: 'assignment',
@@ -1363,10 +1388,70 @@ export class FakeSessions {
       items: items.map((i, n) => ({
         item: { id: i.id, key: i.key },
         reason: reasons[n] ?? null,
+        target: targets[n],
+        ask: asks[n],
       })),
     };
     s.assignments.set(id, json);
-    return { status: 201, body: { request: json, created: true } };
+    return { status: 201, body: { request: this.assignmentJson(json), created: true } };
+  }
+
+  /** A request as the API answers it (the fake's own fields left out). */
+  private assignmentJson(a: FakeAssignment): FakeAssignment {
+    return {
+      ...a,
+      items: a.items.map((i) => {
+        const rest = { ...i };
+        delete rest.ask;
+        return rest;
+      }),
+    };
+  }
+
+  /**
+   * A line's target (API 1.25.0): this session (left out or "self"), or one
+   * of `peers` by id or label (with agent by name or id). Unknown or
+   * ambiguous: 422 assignment_target_invalid with the peers as candidates.
+   */
+  private lineTarget(
+    s: FakeSession,
+    a: { session?: string; agent?: string },
+    index: number,
+    item: { id: string; key: string },
+  ): Record<string, unknown> {
+    const self = {
+      self: true,
+      agent: { id: SESSION_IDS.agent, name: 'Claude' },
+      session: { id: s.id, label: s.label },
+    };
+    const want = a.session?.trim();
+    if (want === undefined || want.toLowerCase() === 'self' || want.toLowerCase() === s.id) {
+      return self;
+    }
+    const peers = s.peers ?? [];
+    const agentOk = (p: FakePeer): boolean =>
+      a.agent === undefined ||
+      p.agent.id === a.agent.toLowerCase() ||
+      p.agent.name.toLowerCase() === a.agent.trim().toLowerCase();
+    const found = peers.filter(
+      (p) =>
+        p.id === want.toLowerCase() || (p.label.toLowerCase() === want.toLowerCase() && agentOk(p)),
+    );
+    if (found.length !== 1) {
+      throw new SessionRefusal('assignment_target_invalid', {
+        index,
+        item: { id: item.id, key: item.key },
+        reason: found.length === 0 ? 'unknown_session' : 'ambiguous',
+        candidates: peers.slice(0, 4).map((p) => ({
+          id: p.id,
+          agent: p.agent,
+          label: p.label,
+          online: p.online,
+        })),
+      });
+    }
+    const p = found[0]!;
+    return { self: false, agent: p.agent, session: { id: p.id, label: p.label } };
   }
 
   private ownAssignment(s: FakeSession, id: string): FakeAssignment {
@@ -1380,7 +1465,7 @@ export class FakeSessions {
   /** GET /v1/session/assignment-requests/{id} */
   getAssignment(token: string, id: string): { status: number; body: unknown } {
     const s = this.live(token);
-    return { status: 200, body: { request: this.ownAssignment(s, id) } };
+    return { status: 200, body: { request: this.assignmentJson(this.ownAssignment(s, id)) } };
   }
 
   /** POST /v1/session/assignment-requests/{id}/close: withdrawn, and its card.closed follows. */
@@ -1389,7 +1474,7 @@ export class FakeSessions {
     const a = this.ownAssignment(s, id);
     if (a.status !== 'open') throw new SessionRefusal('assignment_closed', { request_id: id });
     this.endAssignment(s, a, 'withdrawn', 'app', {});
-    return { status: 200, body: { request: a } };
+    return { status: 200, body: { request: this.assignmentJson(a) } };
   }
 
   /**
@@ -1406,6 +1491,8 @@ export class FakeSessions {
       assigned?: string[];
       skipped?: { key: string; reason: string }[];
       reason?: string;
+      /** Lines for another session whose session wasn't online at the tap, by key. */
+      queued?: string[];
       /** Leave the items' events out (a test of the outcome alone). */
       noItemEvents?: boolean;
     } = {},
@@ -1440,21 +1527,49 @@ export class FakeSessions {
     a: FakeAssignment,
     outcome: string,
     closedBy: string,
-    options: { assigned?: string[]; skipped?: { key: string; reason: string }[]; reason?: string },
+    options: {
+      assigned?: string[];
+      skipped?: { key: string; reason: string }[];
+      reason?: string;
+      queued?: string[];
+    },
   ): { id: string; key: string }[] {
     const keys = a.items.map((i) => i.item);
     const applied = outcome === 'applied';
-    const assigned = applied
+    type Target = { self: boolean; agent: unknown; session: unknown };
+    const targetOf = (k: { id: string }): Target | undefined =>
+      a.items.find((i) => i.item.id === k.id)?.target as Target | undefined;
+    const ticked = applied
       ? keys.filter((k) => (options.assigned ?? keys.map((x) => x.key)).includes(k.key))
       : [];
+    const assigned = ticked.filter((k) => targetOf(k)?.self !== false);
+    const elsewhere = ticked
+      .filter((k) => targetOf(k)?.self === false)
+      .map((k) => {
+        const t = targetOf(k)!;
+        return {
+          item: k,
+          agent: t.agent,
+          session: t.session,
+          queued: (options.queued ?? []).includes(k.key),
+        };
+      });
     const skipped = applied
       ? (options.skipped ?? []).flatMap((sk) => {
           const item = keys.find((k) => k.key === sk.key);
-          return item === undefined ? [] : [{ item, reason: sk.reason }];
+          if (item === undefined) return [];
+          const t = targetOf(item);
+          return [
+            {
+              item,
+              reason: sk.reason,
+              ...(t?.self === false ? { target: { agent: t.agent, session: t.session } } : {}),
+            },
+          ];
         })
       : [];
     const unticked = applied
-      ? keys.filter((k) => !assigned.includes(k) && !skipped.some((sk) => sk.item.id === k.id))
+      ? keys.filter((k) => !ticked.includes(k) && !skipped.some((sk) => sk.item.id === k.id))
       : [];
     a.status = outcome;
     if (applied || outcome === 'cancelled') a.decided_at = this.host.now();
@@ -1462,8 +1577,12 @@ export class FakeSessions {
     if (applied) {
       for (const i of a.items) {
         const sk = skipped.find((x) => x.item.id === i.item.id);
-        i.outcome = assigned.includes(i.item) ? 'assigned' : sk ? 'skipped' : 'unticked';
+        i.outcome = ticked.includes(i.item) ? 'assigned' : sk ? 'skipped' : 'unticked';
         if (sk) i.skip_reason = sk.reason;
+        const t = targetOf(i.item);
+        if (ticked.includes(i.item) && t !== undefined) {
+          i.assigned_to = { ...t, queued: (options.queued ?? []).includes(i.item.key) };
+        }
       }
     }
     const card = s.cards.get(a.card_message_id);
@@ -1483,11 +1602,70 @@ export class FakeSessions {
         outcome,
         ...(options.reason === undefined ? {} : { reason: options.reason }),
         assigned,
+        assigned_elsewhere: elsewhere,
         skipped,
         unticked,
       },
     });
     return assigned;
+  }
+
+  /**
+   * An item this session's Assign card sent to another session reached In
+   * review or Done: work_item.assigned_item_done, to this session.
+   */
+  assignedItemDone(
+    token: string,
+    requestId: string,
+    item: FakeEventItem,
+    outcome: 'in_review' | 'done',
+    options: {
+      target?: {
+        agent: { id: string; name: string };
+        session: { id: string; label: string } | null;
+      };
+      result?: {
+        text: string;
+        author?: { kind: 'user' | 'app' | 'agent'; id: string | null; name: string };
+        viaAgent?: string | null;
+        fromOwner?: boolean;
+      } | null;
+    } = {},
+  ): void {
+    const s = this.session(token);
+    const data = this.itemData(item, false);
+    const r = options.result;
+    this.event(s, 'work_item.assigned_item_done', {
+      channel: data.channel,
+      project: data.project,
+      item: {
+        ...(data.item as Record<string, unknown>),
+        status:
+          outcome === 'done'
+            ? { id: u(7203), key: 'done', name: 'Done', category: 'done' }
+            : { id: u(7204), key: 'in_review', name: 'In review', category: 'started' },
+      },
+      assignment_request: { id: requestId },
+      target: options.target ?? {
+        agent: FakeSessions.TARGET.agent,
+        session: FakeSessions.TARGET.session,
+      },
+      outcome,
+      result:
+        r === undefined || r === null
+          ? null
+          : {
+              untrusted: true,
+              message: {
+                id: randomUUID(),
+                author: r.author ?? { kind: 'agent', id: null, name: 'Claude' },
+                from_owner: r.fromOwner ?? false,
+                via_agent: r.viaAgent === undefined ? 'Claude' : r.viaAgent,
+                text: r.text,
+                created_at: this.host.now(),
+              },
+            },
+    });
   }
 
   /**
@@ -1753,7 +1931,18 @@ export class FakeSessions {
   assignItem(
     token: string,
     item: FakeEventItem,
-    options: { context?: FakeContextMessage[]; owner?: { id: string; name: string } } = {},
+    options: {
+      context?: FakeContextMessage[];
+      owner?: { id: string; name: string };
+      /** From an Assign card (with `from`: another session's, API 1.25.0). */
+      assignmentRequest?: {
+        id: string;
+        from?: {
+          agent: { id: string; name: string };
+          session: { id: string; label: string } | null;
+        };
+      };
+    } = {},
   ): void {
     const s = this.session(token);
     s.items.add(item.id);
@@ -1764,6 +1953,9 @@ export class FakeSessions {
       assignment,
       context: this.context(s, options.context ?? []),
       user: { id: s.ownerId, name: s.ownerName, is_guest: false, locale: 'en' },
+      ...(options.assignmentRequest === undefined
+        ? {}
+        : { assignment_request: options.assignmentRequest }),
     });
   }
 

@@ -92,6 +92,21 @@ const OutputSchema = z.object({
     .describe(
       "An agent session's capability tags; null for a personal token or an API older than 1.9.0.",
     ),
+  peer_sessions: z
+    .array(
+      z.object({
+        id: z.string(),
+        agent: z.string(),
+        label: z.string(),
+        online: z.boolean(),
+        capabilities: z.array(z.string()),
+        projects: z.array(z.string()).describe('Keys of the projects it shares with this one.'),
+      }),
+    )
+    .nullable()
+    .describe(
+      "A session's other live sessions of the person's, sharing a project with it (for an Assign card's line: propose_assignment's session takes the id or label); null for a token or an API before 1.25.0.",
+    ),
   server: z.object({
     name: z.string(),
     version: z.string(),
@@ -190,6 +205,19 @@ export const whoamiTool = defineTool({
               .filter((t) => !(confirmed ?? []).includes(t)),
           };
 
+    const peers = session?.peer_sessions;
+    const peer_sessions =
+      peers === undefined
+        ? null
+        : peers.map((p) => ({
+            id: p.id,
+            agent: sanitizeLabel(p.agent.name, 64),
+            label: sanitizeLabel(p.label, 40),
+            online: p.online,
+            capabilities: p.capabilities.map((t) => sanitizeLabel(t, 32)),
+            projects: p.projects.map((k) => sanitizeLabel(k, 40)),
+          }));
+
     const minVersion = meta?.min_mcp_version;
     const updateRequired =
       minVersion !== undefined && compareVersions(SERVER_VERSION, minVersion) < 0;
@@ -223,6 +251,7 @@ export const whoamiTool = defineTool({
       })),
       features: { projects: me.features.projects },
       capabilities,
+      peer_sessions,
       rate_limits: {
         requests_per_minute: me.rate_limits.requests_per_minute,
         user_requests_per_minute: me.rate_limits.user_requests_per_minute,
@@ -262,6 +291,13 @@ export const whoamiTool = defineTool({
     if (s.limits.channels !== null && s.limits.channels.length > 0) {
       names.push(`Channels the token is limited to: ${s.limits.channels.join(', ')}`);
     }
+    if (s.peer_sessions !== null && s.peer_sessions.length > 0) {
+      const shown = s.peer_sessions.map((p) => {
+        const caps = p.capabilities.length > 0 ? p.capabilities.join(', ') : 'no capabilities';
+        return `${p.agent} · ${p.label} (session ${p.id}; ${p.online ? 'online' : 'offline'}; ${caps}; ${p.projects.join(', ') || 'no shared project'})`;
+      });
+      names.push(`Your other sessions: ${shown.join('; ')}`);
+    }
     const lines = [
       `Signed in to buildIt.Social with ${s.token.kind === 'session' ? "an agent session's token (it acts as the session's owner)" : 'a personal access token'}${s.token.expires_at ? ` (expires ${s.token.expires_at})` : ''}. Who and where, as people named them:`,
       wrapLines(names, 'names'),
@@ -281,7 +317,14 @@ export const whoamiTool = defineTool({
     if (s.capabilities !== null) {
       const { confirmed: mine, suggested } = s.capabilities;
       lines.push(
-        `Capabilities of this session: ${mine.length > 0 ? mine.join(', ') : 'none confirmed'}${suggested.length > 0 ? `; suggested, not confirmed: ${suggested.join(', ')}` : ''}. Only confirmed ones count: work that needs others goes to another of the person's sessions (propose_handoff), or the person confirms them in buildIt.Social (Settings → Agents).`,
+        `Capabilities of this session: ${mine.length > 0 ? mine.join(', ') : 'none confirmed'}${suggested.length > 0 ? `; suggested, not confirmed: ${suggested.join(', ')}` : ''}. Only confirmed ones count: work that needs others goes to another of the person's sessions (a whole item as an Assign card's line for that session, propose_assignment; a subtask of your own item whose result you need back, propose_handoff), or the person confirms them in buildIt.Social (Settings → Agents).`,
+      );
+    }
+    if (s.peer_sessions !== null) {
+      lines.push(
+        s.peer_sessions.length === 0
+          ? 'Your other sessions: none live that share a project with this one. Every line of an Assign card is for this session.'
+          : `Your other sessions: ${s.peer_sessions.length} live that share a project with this one (listed above). An Assign card's line can go to one of them (propose_assignment's session: its id or label); the person picks on the card. Never message them.`,
       );
     }
     if (s.org.test === true) {

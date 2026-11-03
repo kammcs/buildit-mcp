@@ -99,7 +99,8 @@ src/
                         events (assigned, mentions and replies in an item's thread, unassigned)
   channel/item-events.ts  the content of a work item's notifications (lead, data blocks)
   channel/handoffs.ts   the handoffs seen, and the content of child_done and handoff_resolved
-  channel/assignments.ts  the content of assignment_resolved (an Assign card's card.closed)
+  channel/assignments.ts  the content of assignment_resolved (an Assign card's card.closed) and
+                        of assigned_item_done (a line sent to another session reporting back)
   channel/requests.ts   requests from buildIt.Social (agent.request): the event's shape, the checks,
                         and the content of event=request (attributes and the lead line)
   channel/request-journal.ts  a meeting's notes requests' scope (ids only), kept across a restart

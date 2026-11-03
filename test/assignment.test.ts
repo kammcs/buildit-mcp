@@ -12,7 +12,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { CallToolResult } from '@modelcontextprotocol/client';
 
 import { assignmentResolvedContent, skipWords } from '../src/channel/assignments.js';
-import { buildInstructions, CHANNEL_ASSIGN_INSTRUCTIONS } from '../src/server.js';
+import {
+  buildInstructions,
+  CHANNEL_ASSIGN_INSTRUCTIONS,
+  CHANNEL_HANDOFF_INSTRUCTIONS,
+} from '../src/server.js';
 import {
   channelConfig,
   channelNotes,
@@ -21,8 +25,8 @@ import {
   type ChannelClient,
 } from './support/channel-harness.js';
 import { FakeApi, TOKENS } from './support/fake-api.js';
-import { demoItem, SESSION_TOKENS } from './support/fake-sessions.js';
-import { assertDefused, connect, HOSTILE } from './support/harness.js';
+import { demoItem, SESSION_TOKENS, type FakePeer } from './support/fake-sessions.js';
+import { assertDefused, connect, HOSTILE, injectionIsInsideBlocks } from './support/harness.js';
 
 const TOKEN = SESSION_TOKENS.first;
 const ASSIGNMENT_TOOLS = ['propose_assignment', 'withdraw_assignment'];
@@ -331,7 +335,7 @@ describe('propose_assignment', () => {
       [
         'idempotency_conflict',
         { idempotency_key: 'k' },
-        'used for other items or another thread: leave it out',
+        'used for other items, other sessions or another thread: leave it out',
       ],
     ];
     for (const [code, details, words] of cases) {
@@ -566,5 +570,393 @@ describe('the instructions', () => {
     const r = await call(c, 'assign_item', { item: 'DEMO-42', agent: 'mine' });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain('To ask for items, use propose_assignment');
+  });
+});
+
+describe("lines for the person's other sessions (agent API 1.25.0)", () => {
+  const MAC = {
+    id: '00000000-0000-4000-8000-000000007301',
+    agent: { id: '00000000-0000-4000-8000-000000007310', name: 'Claude Mac' },
+    label: 'mac-mini',
+    capabilities: ['macos', 'ios', 'xcode'],
+    online: true,
+    projects: ['DEMO'],
+  };
+  const LINUX = {
+    id: '00000000-0000-4000-8000-000000007302',
+    agent: { id: '00000000-0000-4000-8000-000000007311', name: 'Claude Linux' },
+    label: 'build-box',
+    capabilities: ['linux'],
+    online: false,
+    projects: ['DEMO'],
+  };
+
+  /** A 1.25.0 server, with the person's other sessions. */
+  async function startWithPeers(peers: FakePeer[] = [MAC, LINUX]): Promise<ChannelClient> {
+    api.meta.api_version = '1.25.0';
+    api.sessions.open(TOKEN);
+    session().peers = peers;
+    return start({ reopen: false });
+  }
+
+  const assignmentReads = () =>
+    api.requests.filter((q) => q.method === 'GET' && q.path.includes('/assignment-requests/'));
+
+  it("sends each line's session, covers it in the id, and shows who each line is for", async () => {
+    const c = await startWithPeers();
+    const r = await call(c, 'propose_assignment', {
+      items: [
+        { item: 'DEMO-42', reason: 'Windows part' },
+        { item: 'DEMO-43', session: ' Mac-Mini ', agent: 'Claude Mac' },
+        { item: 'DEMO-44', session: LINUX.id.toUpperCase() },
+        { item: 'DEMO-46', session: 'SELF' },
+      ],
+      dm: true,
+    });
+    expect(r.isError, textOf(r)).toBeFalsy();
+    expect((posts()[0]!.body as { items: unknown }).items).toEqual([
+      { item: 'DEMO-42', reason: 'Windows part' },
+      { item: 'DEMO-43', session: 'Mac-Mini', agent: 'Claude Mac' },
+      { item: 'DEMO-44', session: LINUX.id },
+      { item: 'DEMO-46', session: 'self' },
+    ]);
+    expect(r.structuredContent).toMatchObject({
+      request: {
+        items: [
+          { item: 'DEMO-42', for: null },
+          { item: 'DEMO-43', for: 'Claude Mac · mac-mini' },
+          { item: 'DEMO-44', for: 'Claude Linux · build-box' },
+          { item: 'DEMO-46', for: null },
+        ],
+      },
+    });
+    const text = textOf(r);
+    expect(text).toContain(
+      "Suggested for your other sessions: DEMO-43 (Claude Mac · mac-mini), DEMO-44 (Claude Linux · build-box); the person can change each line's session on the card.",
+    );
+    expect(text).toContain(
+      'each reports back as event=assigned_item_done at In review and at Done',
+    );
+    expect(text).toContain('2. DEMO-43, for Claude Mac · mac-mini');
+    // The same items without sessions are another request; the same sessions again, a retry.
+    const plain = await call(c, 'propose_assignment', {
+      items: [{ item: 'DEMO-42' }, { item: 'DEMO-43' }, { item: 'DEMO-44' }, { item: 'DEMO-46' }],
+      dm: true,
+    });
+    expect(plain.structuredContent).toMatchObject({ created: true });
+    const again = await call(c, 'propose_assignment', {
+      items: [
+        { item: 'DEMO-42' },
+        { item: 'DEMO-43', session: 'mac-mini', agent: 'claude mac' },
+        { item: 'DEMO-44', session: LINUX.id },
+        { item: 'DEMO-46', session: 'self' },
+      ],
+      dm: true,
+    });
+    expect(again.structuredContent).toMatchObject({ created: false });
+    const ids = posts().map((q) => (q.body as { id: string }).id);
+    expect(ids[2]).toBe(ids[0]);
+    expect(ids[1]).not.toBe(ids[0]);
+    for (const id of ids) expect(id).toMatch(UUID_V5);
+  });
+
+  it('refuses agent without a label, or a label over 40 characters, before any call', async () => {
+    const c = await startWithPeers();
+    const cases: [Record<string, unknown>, string][] = [
+      [{ item: 'DEMO-42', agent: 'Claude Mac' }, 'agent goes only with session'],
+      [{ item: 'DEMO-42', session: 'self', agent: 'Claude' }, 'not with "self" or a session id'],
+      [{ item: 'DEMO-42', session: MAC.id, agent: 'Claude' }, 'not with "self" or a session id'],
+      [{ item: 'DEMO-42', session: 'x'.repeat(41) }, 'at most 40 characters'],
+    ];
+    for (const [line, words] of cases) {
+      const r = await call(c, 'propose_assignment', { items: [line], dm: true });
+      expect(r.isError, words).toBe(true);
+      expect(textOf(r)).toContain(words);
+    }
+    expect(posts()).toEqual([]);
+  });
+
+  it('on an older server: a line for another session is refused before any call; "self" is left out', async () => {
+    api.meta.api_version = '1.24.0';
+    const c = await start();
+    const r = await call(c, 'propose_assignment', {
+      items: [{ item: 'DEMO-42' }, { item: 'DEMO-43', session: 'mac-mini' }],
+      dm: true,
+    });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain(
+      "older than agent API 1.25.0, so it can't offer work to your other sessions yet",
+    );
+    expect(posts()).toEqual([]);
+    const self = await call(c, 'propose_assignment', {
+      items: [{ item: 'DEMO-42', session: 'self' }],
+      dm: true,
+    });
+    expect(self.isError, textOf(self)).toBeFalsy();
+    expect((posts()[0]!.body as { items: unknown }).items).toEqual([{ item: 'DEMO-42' }]);
+  });
+
+  it("says why a session can't take a line, with the candidates, in plain words", async () => {
+    const hostile: FakePeer = {
+      ...MAC,
+      label: HOSTILE.slice(0, 40),
+      agent: { ...MAC.agent, name: HOSTILE },
+    };
+    const c = await startWithPeers([hostile, LINUX]);
+    const r = await call(c, 'propose_assignment', {
+      items: [{ item: 'DEMO-42' }, { item: 'DEMO-43', session: 'laptop' }],
+      dm: true,
+    });
+    expect(r.isError).toBe(true);
+    const text = textOf(r);
+    expect(text).toContain('assignment_target_invalid');
+    expect(text).toContain(
+      "DEMO-43 (line 2) can't go to the session you named: no live session of the person's own has that id or label",
+    );
+    expect(text).toContain('Try one of these for it (session takes the id):');
+    expect(text).toContain(`Claude Linux · build-box (session ${LINUX.id})`);
+    expect(text).toContain(`(session ${hostile.id}, online)`);
+    // Names are labels (sanitized, cut), as in every lead line: no forged block survives.
+    assertDefused(text);
+
+    const item = story().id;
+    const cases: [string, Record<string, unknown>, string][] = [
+      [
+        'assignment_target_invalid',
+        { index: 0, item: { id: item, key: 'DEMO-42' }, reason: 'needs_unmet', candidates: [] },
+        "DEMO-42 (line 1) can't go to the session you named: that session lacks one of its Needs. None of the person's other sessions can take it now",
+      ],
+      [
+        'assignment_target_invalid',
+        { index: 0, item: { id: item, key: 'DEMO-42' }, reason: 'ambiguous' },
+        'give agent too, or the session',
+      ],
+      [
+        'assignment_not_allowed',
+        { item_id: item, key: 'DEMO-42', reason: 'already_theirs' },
+        'DEMO-42 is already the work of the session you named for it',
+      ],
+    ];
+    for (const [code, details, words] of cases) {
+      api.enqueueError('/v1/session/assignment-requests', code as never, details);
+      const e = await call(c, 'propose_assignment', {
+        items: [{ item: 'DEMO-42', session: 'mac-mini' }],
+        dm: true,
+      });
+      expect(textOf(e), code).toContain(words);
+    }
+  });
+
+  it('applied: names the lines sent elsewhere (queued ones too); only its own lines arrive here', async () => {
+    const c = await startWithPeers();
+    const proposal = await call(c, 'propose_assignment', {
+      items: [
+        { item: 'DEMO-42' },
+        { item: 'DEMO-43', session: 'mac-mini' },
+        { item: 'DEMO-44', session: 'mac-mini' },
+        { item: 'DEMO-46', session: 'build-box' },
+        { item: 'DEMO-101', session: 'build-box' },
+      ],
+      dm: true,
+    });
+    expect(proposal.isError, textOf(proposal)).toBeFalsy();
+    const id = requestId(proposal);
+    api.sessions.resolveAssignment(TOKEN, id, 'applied', {
+      assigned: ['DEMO-42', 'DEMO-43', 'DEMO-44', 'DEMO-46'],
+      queued: ['DEMO-46'],
+      skipped: [{ key: 'DEMO-101', reason: 'target_ended' }],
+    });
+    const [resolved, own] = await notes(c, 2);
+    expect(resolved!.params!.meta).toMatchObject({
+      event: 'assignment_resolved',
+      outcome: 'applied',
+      assigned: 'DEMO-42',
+      assigned_elsewhere: 'DEMO-43,DEMO-44,DEMO-46',
+      skipped: 'DEMO-101',
+    });
+    expect(resolved!.params!.content).toBe(
+      [
+        'Test User assigned you 1 of the 5 items on your Assign card: DEMO-42. Each arrives next as its own event=item_assigned: work on them there as usual, in their threads.',
+        "Sent to Claude Mac · mac-mini: DEMO-43, DEMO-44. Sent to Claude Linux · build-box: DEMO-46 (waiting for it to connect). They're that session's work now: don't post in their threads or work on them; Test User follows them. When one reaches In review or Done, it comes back to you as event=assigned_item_done.",
+        'Ticked but not assigned: DEMO-101 (for Claude Linux · build-box: the session it was for ended first).',
+      ].join('\n'),
+    );
+    expect(own!.params!.meta).toMatchObject({ event: 'item_assigned', item: 'DEMO-42' });
+    await new Promise((r) => setTimeout(r, 100));
+    // Only this session's line arrives as item_assigned; the others are their sessions'.
+    expect(channelNotes(c.notes)).toHaveLength(2);
+  });
+
+  it('a card whose lines all went elsewhere says none went to you', () => {
+    const text = assignmentResolvedContent('Test User', {
+      id: 'x',
+      outcome: 'applied',
+      reason: undefined,
+      assigned: [],
+      elsewhere: [{ key: 'DEMO-3', to: 'Claude Mac · mac-mini', queued: true }],
+      skipped: [],
+      unticked: [],
+    });
+    expect(text).toContain('Test User answered your Assign card: none of the 1 items went to you.');
+    expect(text).toContain('Sent to Claude Mac · mac-mini: DEMO-3 (waiting for it to connect).');
+    expect(skipWords('target_unavailable')).toBe("the session it was for can't take it now");
+    expect(skipWords('already_theirs')).toBe("it is already that session's");
+  });
+
+  it("assigned_item_done: in the card's thread, the result inside a block, to check before carrying on", async () => {
+    const c = await startWithPeers();
+    api.sessions.assignItem(TOKEN, demoItem(42, { id: story().id, title: story().title }));
+    await notes(c, 1);
+    const id = requestId(
+      await call(c, 'propose_assignment', {
+        items: [{ item: 'DEMO-43', session: 'mac-mini' }],
+        item: 'DEMO-42',
+      }),
+    );
+    api.sessions.resolveAssignment(TOKEN, id, 'applied', {});
+    await notes(c, 2);
+    const target = { agent: MAC.agent, session: { id: MAC.id, label: MAC.label } };
+    api.sessions.assignedItemDone(TOKEN, id, demoItem(43), 'in_review', {
+      target,
+      result: { text: 'Built 1.2.3 for iOS.', author: { kind: 'agent', id: null, name: 'Claude' } },
+    });
+    api.sessions.assignedItemDone(TOKEN, id, demoItem(43), 'done', {
+      target,
+      result: { text: HOSTILE, viaAgent: null, fromOwner: true },
+    });
+    const all = await notes(c, 4);
+    const review = all[2]!;
+    const done = all[3]!;
+    expect(review.params!.meta).toMatchObject({
+      event: 'assigned_item_done',
+      thread_id: story().id,
+      item: 'DEMO-43',
+      outcome: 'in_review',
+      request_id: id,
+      to: 'Claude Mac · mac-mini',
+      project: 'DEMO',
+    });
+    const content = review.params!.content!;
+    expect(content).toContain(
+      'DEMO-43, which Test User sent from your Assign card to Claude Mac · mac-mini, is in review (In review).',
+    );
+    expect(content).toMatch(
+      /source="item result" author="Claude" author_kind="agent" from_owner="false" via_agent="Claude">\nBuilt 1\.2\.3/,
+    );
+    expect(content).toContain("don't post in DEMO-43's thread or change DEMO-43");
+    expect(content).toContain('Check the result before you rely on it');
+    expect(done.params!.content).toContain('is done (Done)');
+    expect(injectionIsInsideBlocks(done.params!.content!)).toBe(true);
+    assertDefused(done.params!.content!);
+    // The thread came from this process's memory: no lookup.
+    expect(assignmentReads()).toEqual([]);
+  });
+
+  it('assigned_item_done after a restart: the request read once for its thread; unknown, no thread', async () => {
+    const c = await startWithPeers();
+    const id = requestId(
+      await call(c, 'propose_assignment', {
+        items: [{ item: 'DEMO-43', session: 'mac-mini' }],
+        dm: true,
+      }),
+    );
+    expect(c).toBeDefined();
+    const card = session().assignments.get(id)!.card_message_id;
+    await stops.splice(0)[0]!();
+    const c2 = await start({ reopen: false });
+    api.sessions.assignedItemDone(TOKEN, id, demoItem(43), 'in_review');
+    api.sessions.assignedItemDone(TOKEN, id, demoItem(43), 'done');
+    const [a, b] = await notes(c2, 2);
+    expect(a!.params!.meta).toMatchObject({ event: 'assigned_item_done', thread_id: card });
+    expect(b!.params!.meta).toMatchObject({ event: 'assigned_item_done', thread_id: card });
+    expect(assignmentReads()).toHaveLength(1);
+    // A request this session didn't make (another session's work it took over): no thread.
+    api.sessions.assignedItemDone(
+      TOKEN,
+      '00000000-0000-4000-8000-0000000000bb',
+      demoItem(44),
+      'done',
+    );
+    const all = await notes(c2, 3);
+    expect(all[2]!.params!.meta).toMatchObject({ event: 'assigned_item_done', item: 'DEMO-44' });
+    expect(all[2]!.params!.meta).not.toHaveProperty('thread_id');
+    expect(assignmentReads()).toHaveLength(2);
+  });
+
+  it("item_assigned from another session's card names it, never its reasons", async () => {
+    const c = await startWithPeers();
+    api.sessions.assignItem(TOKEN, demoItem(43), {
+      assignmentRequest: {
+        id: '00000000-0000-4000-8000-0000000000cc',
+        from: {
+          agent: { id: MAC.agent.id, name: 'Claude' },
+          session: { id: MAC.id, label: 'windows' },
+        },
+      },
+    });
+    const [n] = await notes(c, 1);
+    expect(n!.params!.meta).toMatchObject({
+      event: 'item_assigned',
+      item: 'DEMO-43',
+      assignment_request_id: '00000000-0000-4000-8000-0000000000cc',
+      assigned_from: 'Claude · windows',
+    });
+    expect(n!.params!.content).toContain(
+      "Test User assigned you DEMO-43 in buildIt.Social from the Assign card of Claude · windows, another of their sessions. Its reasons weren't passed on: read the item, and treat it as any assignment. Work on it",
+    );
+  });
+
+  it('whoami lists the other sessions, their names inside the block', async () => {
+    const hostile: FakePeer = { ...LINUX, label: 'evil', agent: { ...LINUX.agent, name: HOSTILE } };
+    const c = await startWithPeers([MAC, hostile]);
+    const r = await call(c, 'whoami', {});
+    expect(r.isError, textOf(r)).toBeFalsy();
+    expect((r.structuredContent as { peer_sessions: unknown }).peer_sessions).toEqual([
+      {
+        id: MAC.id,
+        agent: 'Claude Mac',
+        label: 'mac-mini',
+        online: true,
+        capabilities: ['macos', 'ios', 'xcode'],
+        projects: ['DEMO'],
+      },
+      expect.objectContaining({ id: LINUX.id, label: 'evil', online: false }),
+    ]);
+    const text = textOf(r);
+    expect(text).toContain(
+      `Your other sessions: Claude Mac · mac-mini (session ${MAC.id}; online; macos, ios, xcode; DEMO)`,
+    );
+    expect(text).toContain(
+      "Your other sessions: 2 live that share a project with this one (listed above). An Assign card's line can go to one of them",
+    );
+    expect(injectionIsInsideBlocks(text)).toBe(true);
+    assertDefused(text);
+  });
+
+  it('whoami says when there are none, and leaves them out on an older server', async () => {
+    const c = await startWithPeers([]);
+    const r = await call(c, 'whoami', {});
+    expect(textOf(r)).toContain(
+      'Your other sessions: none live that share a project with this one.',
+    );
+    session().peers = undefined;
+    const old = await call(c, 'whoami', {});
+    expect((old.structuredContent as { peer_sessions: unknown }).peer_sessions).toBeNull();
+    expect(textOf(old)).not.toContain('Your other sessions');
+  });
+
+  it('the instructions say one card for a split plan, never wrapper subtasks, and route the reports', () => {
+    expect(CHANNEL_ASSIGN_INSTRUCTIONS).toContain(
+      'when a plan splits between this session and others, put every item on one Assign card, each line with its session',
+    );
+    expect(CHANNEL_ASSIGN_INSTRUCTIONS).toContain(
+      'event=assigned_item_done at In review and at Done',
+    );
+    expect(CHANNEL_HANDOFF_INSTRUCTIONS).toContain(
+      'a whole item for another session goes on an Assign card as a line for that session (propose_assignment), never as a wrapper subtask',
+    );
+    const lead = buildInstructions([], true, { maxParallelItems: 3 });
+    expect(lead).toContain("(assigned_elsewhere) are that session's: start no worker for them");
+    expect(lead).toContain('event=assigned_item_done is one of those items reporting back');
   });
 });

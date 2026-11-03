@@ -2,6 +2,22 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [Unreleased]
+
+Built on version 1.25.0 of the agent API's contract (`openapi.json` copied from the API and regenerated; it includes 1.24.0's `get_session_card`, which `ask` already reads where it is served), and works with servers from 1.19.0 through 1.25.0. A line for another session needs 1.25.0: on an older server it is refused before any call, and everything else works as in 0.15.0.
+
+### One Assign card for the person's sessions
+
+A plan that splits between this session and the person's other sessions (Windows and a Mac, say) goes on **one** Assign card: each line names who it is for, the person picks or changes it on the card, and only their tap assigns.
+
+- **`propose_assignment`**: each item takes `session` (`"self"`, another of the person's sessions by its id, or by its label, matched without case) and, with a label only, `agent` (when two agents share the label). Left out, a line is for this session when it can take the item, else for the best other session that can (online first). The request id also covers each line's session (`self`, the id, or `label@agent`, in lower case); a card without sessions keeps the id it had. A pair that can't make a valid call (`agent` without a label, a label over 40 characters) is refused before any call; on a server older than 1.25.0 a line for another session is refused plainly, and `"self"` is left out. The result names who each line is for (`for`, and once applied `assigned_to`, with "waiting for it to connect"). The description says when to use it instead of a handoff: whole items go on the card; `propose_handoff` stays for a subtask of the session's own item whose result must come back.
+- **The refusals in plain words:** `assignment_target_invalid` by its reason (an unknown or ambiguous session, one that ended, is out of the project's reach, can't write, lacks the item's Needs, or whose agent can't be assigned there), with up to 4 sessions that could take it ("try one of these"); `assignment_not_allowed` with `already_theirs`.
+- **`whoami`** lists `peer_sessions`: the person's other live sessions that share a project with this one (agent and label, id, online, confirmed capabilities, the shared projects), so the agent can suggest one. Their names are inside the names block.
+- **`event=assignment_resolved`** adds the lines sent elsewhere (`assigned_elsewhere`, keys), one sentence per session, with the ones waiting for an offline session marked; they are that session's work, not to be posted in or changed. Skipped lines name the session they were for, and the new reasons are in words: `target_ended`, `target_unavailable`, `already_theirs`. `assigned` stays this session's lines only.
+- **`event=assigned_item_done`** (new, `work_item.assigned_item_done`): an item the card sent to another session reached In review or Done. It goes in the card's thread (remembered from the proposal or its outcome; after a restart, read once with `get_session_assignment`; else without a thread), with `item`, `outcome`, `request_id`, `to` and `project`. Its result, that item thread's last reply, comes inside an untrusted_content block, as `child_done`'s: check it before relying on it, then carry on. 0.15.0 and older drop the event.
+- **`event=item_assigned`** from another session's card says so (`assigned_from`, the session's name) and that its reasons weren't passed on.
+- **Instructions:** the channel instructions say to put a split plan on one card and never to create wrapper subtasks for whole items; the lead starts no worker for the lines sent elsewhere and routes `assigned_item_done` like `assignment_resolved`. The item worker's "Asking for more work" and "Work this session can't do", and the `buildit-work-updates` skill, say the same.
+
 ## [0.15.0] - 2026-11-03
 
 Built on version 1.23.0 of the agent API's contract (`openapi.json` copied from the API and regenerated), and works with servers from 1.19.0 through 1.23.0. Each feature needs the version that brought it; on an older server it is left out or refused plainly, and everything else works as in 0.14.1:

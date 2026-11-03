@@ -377,3 +377,29 @@ describe('work updates: everything in the app, each post on its own item', () =>
     expect(handoff).toContain('a subtask of one of its stories too, when it is an epic');
   });
 });
+
+describe("work for the person's other sessions: one Assign card", () => {
+  it('the item worker puts a split plan on one card and keeps handoffs for subtasks', () => {
+    const text = read('agents/buildit-item-worker.md');
+    const cant = section(text, "Work this session can't do");
+    expect(cant).toContain('A **whole item** for another session');
+    expect(cant).toContain('Never create a subtask only to move a whole item.');
+    expect(cant).toContain('**part of your own item**');
+    const more = section(text, 'Asking for more work');
+    expect(more).toContain('put every item on **one** Assign card, each line with its `session`');
+    expect(more).toContain('event=assigned_item_done at In review and at Done');
+    expect(more).toContain(
+      "Items sent to another session are its work: don't post in their threads",
+    );
+  });
+
+  it('the work-updates skill says the same', () => {
+    const own = section(skill('buildit-work-updates'), "Work for the person's other sessions");
+    expect(own).toContain(
+      '**one** Assign card (`propose_assignment`), each line with its `session`',
+    );
+    expect(own).toContain('instead of creating subtasks to move whole items');
+    expect(own).toContain('event=assigned_item_done');
+    expect(own).toContain('Handoffs (`propose_handoff`) stay for a subtask of your own item');
+  });
+});
