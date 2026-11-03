@@ -156,7 +156,7 @@ bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes 
 plugin/                 the Claude Code plugin (channel server; AskUserQuestion, Stop and the
                         tool approval hooks;
                         the item and request worker subagents in agents/; the request skills
-                        in skills/);
+                        and buildit-work-updates in skills/);
                         .claude-plugin/marketplace.json lists it (versions match package.json)
 server.json             the MCP Registry entry (its versions must match package.json; a test checks)
 docs/releasing.md       how a release ships through npm, GHCR, the bundle and the Registry

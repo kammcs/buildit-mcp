@@ -201,7 +201,7 @@ describe('the Claude Code plugin', () => {
     }
   });
 
-  it("ships the shared request rules and each request kind's skill, and only those", async () => {
+  it("ships the shared request rules, each request kind's skill and the work updates skill, and only those", async () => {
     const { REQUEST_KINDS } = await import('../src/channel/requests.js');
     const skills = readdirSync(new URL('../plugin/skills/', import.meta.url)).sort();
     expect(skills).toEqual([
@@ -211,6 +211,7 @@ describe('the Claude Code plugin', () => {
       'buildit-requests',
       'buildit-thread-to-items',
       'buildit-triage',
+      'buildit-work-updates',
     ]);
     for (const skill of skills) {
       const text = readFileSync(
@@ -222,13 +223,14 @@ describe('the Claude Code plugin', () => {
       expect(/^description: (.+)$/m.exec(front)?.[1]).toBeDefined();
       expect(text).toContain('untrusted_content');
     }
-    // Every kind names a shipped skill, and every skill but the shared rules handles a kind.
+    // Every kind names a shipped skill, and every skill but the shared rules and the work
+    // updates (item work, not a request) handles a kind.
     const named = new Set<string>();
     for (const kind of Object.values(REQUEST_KINDS)) {
       expect(kind.skill).toBeDefined();
       if (kind.skill !== undefined) named.add(kind.skill);
     }
-    expect([...named, 'buildit-requests'].sort()).toEqual(skills);
+    expect([...named, 'buildit-requests', 'buildit-work-updates'].sort()).toEqual(skills);
   });
 
   it("makes a local marketplace whose plugin runs the checkout's dist/ with the same hooks and settings", async () => {
@@ -266,6 +268,7 @@ describe('the Claude Code plugin', () => {
         'skills/buildit-triage/SKILL.md',
         'skills/buildit-item-helper/SKILL.md',
         'skills/buildit-meeting-notes/SKILL.md',
+        'skills/buildit-work-updates/SKILL.md',
       ]) {
         expect(readFileSync(join(out, 'buildit', file), 'utf8')).toBe(
           readFileSync(new URL(`../plugin/${file}`, import.meta.url), 'utf8'),

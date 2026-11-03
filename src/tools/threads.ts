@@ -86,7 +86,7 @@ export function createListThreadsTool(state: ChannelState): ToolDefinition {
     toolset: 'chat',
     title: 'List the threads this session works in',
     description:
-      "Lists the threads this session works in: your direct message with the person, and the work items' threads (key, title, status, open cards, when the person last wrote). Use it to name the thread for reply, ask or an approval card (thread_id, or the item's key) while you work in several, and after a restart.",
+      "Lists the threads this session works in: your direct message with the person, and the work items' threads (key, title, status, open cards, when the person last wrote). Use it to name the thread for reply, ask or an approval card (thread_id, or the item's key) while you work in several, and after a restart. The threads of an assigned epic's or story's children and subtasks, where you post too, aren't listed: name them with the child's key.",
     scopes: [],
     annotations: {
       title: 'List the threads this session works in',
