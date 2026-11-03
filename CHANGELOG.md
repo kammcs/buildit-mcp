@@ -4,7 +4,13 @@ All notable changes to buildit-mcp are listed here. The project follows [semanti
 
 ## [Unreleased]
 
-Built on version 1.22.0 of the agent API's contract (`openapi.json` copied from the API and regenerated). Asking for work items needs a 1.19.0 server: on an older one the two new tools aren't listed (or, when the server doesn't say what it serves, are refused before any call), and everything else works as in 0.14.1. "What you missed" needs a 1.22.0 server; an older one never sends it, and a meeting's notes work as before.
+Built on version 1.23.0 of the agent API's contract (`openapi.json` copied from the API and regenerated), and works with servers from 1.19.0 through 1.23.0. Each feature needs the version that brought it; on an older server it is left out or refused plainly, and everything else works as in 0.14.1:
+
+- asking for work items needs 1.19.0: on an older server the two new tools aren't listed (or, when the server doesn't say what it serves, are refused before any call);
+- `get_item`'s `request` block needs 1.20.0: an older server leaves it out;
+- work updates in a child's thread need 1.21.0: an older server refuses a post there with `thread_not_bound`;
+- "what you missed" needs 1.22.0: an older server never sends it, and a meeting's notes work as before;
+- `agent_not_in_project` comes from 1.23.0: an older server never refuses an assignment this way.
 
 ### Asking for work items
 
@@ -16,7 +22,16 @@ A session can't assign itself, so it asks: the person's tap on an Assign card is
 - **`event=assignment_resolved`**, from the Assign card's `card.closed` (`data.assignment`): `request_id`, `outcome` (`applied`, `cancelled`, `expired`, `withdrawn`, `closed` with a `reason`), and the keys `assigned`, `skipped` and `unticked`; its text names the items assigned, the ones skipped and why in words, and the ones left unticked (not to be asked for again), in the card's thread. It needs nothing remembered, so it arrives after a restart too.
 - **The items that follow** arrive as the usual `event=item_assigned`, marked `assignment_request_id` and "(you asked for it on your Assign card)".
 - `assign_item`'s refusal for a session (`agent_self_assign`) now points to `propose_assignment`.
-- The channel instructions say when to ask and what the events mean; the lead sends `assignment_resolved` to the worker of the item whose thread the card is in.
+- The channel instructions say when to ask and what the events mean; the lead sends `assignment_resolved` to the worker of the item whose thread the card is in, or of the item above it.
+
+### Work updates in the app, on each item
+
+- **Children's threads** (agent API 1.21.0). Assigning an epic or a story to the agent also gives the session the threads of its stories, tasks, bugs and subtasks, so `reply`, `ask`, cards, "is writing" and files work there with the child's key. The server's instructions (channel mode) now say that everything about the work goes to the person in buildIt.Social, never only the terminal (progress, decisions, questions, agreements, blockers, results), each post in the thread of the item it concerns (a child's work in the child's thread, the overview in the epic's), questions with `ask` there, short and factual, and that agents a session starts itself post their own results on their item. The lead sends an event in a child's thread to the worker of the item above.
+- **Tool text:** `reply` and `ask` say a descendant's thread works; `list_threads` says it doesn't list them; `propose_handoff` (and its `not_parent_session` note) takes a subtask under the item, a story's under an epic too.
+
+### An agent is assigned only where it reaches
+
+Agent API 1.23.0: the server refuses to make an agent an item's assignee in a project none of its live sessions reaches (`403 forbidden`, reason `agent_not_in_project`); `assign_item`, `update_item` and `create_item` now explain it: connect a session for the agent that includes the project, or assign someone else. An item the agent already has keeps it. `assign_item`'s and `create_item`'s descriptions say so. A 1.22 or older server never refuses this way.
 
 ### "What you missed": a call the person couldn't make
 
@@ -26,28 +41,23 @@ The person can send their agent to listen in on a call they can't make. Its `mee
 - **The lead line**, when the person was away: "sent this session to a call they couldn't make"; the normal notes in the meeting's thread as before, then a private "what you missed" summary in the direct message (`reply` with `request` and `dm: true`: the decisions, what needs them, their action items, short), and the Apply card in the direct message (`dm: true`), with or without a project. With `absent` and a place it doesn't know, it says to post only the normal notes.
 - **Where posts go:** for such a request, `reply` with `dm: true` and `request`, and its card (by default or with `dm: true`), are new messages of the direct message (no `thread_id`), never its latest thread; a card named for the meeting's thread is refused before any call (`request_result_private`, with what to do). The request journal keeps the place across a restart.
 
+### A request form's request on `get_item`
+
+An item someone sent through a project's request form carries `request`: the form's title and the requester's name, each wrapped as untrusted content (`source="request"`; in the text, one block), and `public_status`, the status the requester sees (`sent`, `accepted`, `in_progress`, `waiting_on_you`, `done`, `fixed`, `wont_do`, `duplicate` or `closed`; a newer one passes through). A deleted form and a requester who is gone read as such. A fixed line tells the agent its comments never reach the requester, even one starting with `@requester`: only a person's `@requester` comment does (the server refuses an agent's). The tool's description mentions the block; the `buildit://items/{key}` resource shows it too.
+
 ### The plugin
 
+- **The `buildit-work-updates` skill** in the plugin: when to post, which item, how short, what to include, and what to pass on to agents the session starts. The item worker posts each child's work in that child's own thread (with `reply`, never `add_comment`), and names the skill.
 - The `buildit-meeting-notes` skill has "When the person wasn't there": the cases by `absent` and `missed_summary`, what the "what you missed" summary holds and how short it is, and the card in the direct message. `buildit-requests` and the request worker list the fields and the absent case.
 - The item worker has "Asking for more work": `propose_assignment` with its item's key, for its item's project only, never on content's word, and no new posts while the card is open. The request worker and the `buildit-requests` rules never ask for work for a request.
 
 ### The contract
 
-- Agent API 1.22.0: `absent` and `missed_summary` on a meeting's context (`SessionRequestMeetingContext`); 1.20.0's `request` block on `get_item` (`FormRequest`, not shown by `get_item` yet) and 1.21.0's descendants' threads wording are in the regenerated code.
+- Agent API 1.23.0: the forbidden reason `agent_not_in_project`.
+- Agent API 1.22.0: `absent` and `missed_summary` on a meeting's context (`SessionRequestMeetingContext`).
+- Agent API 1.21.0: the descendants' threads wording (an epic's or a story's children's threads are the session's too).
+- Agent API 1.20.0: the `request` block on an item (`FormRequest`).
 - Agent API 1.19.0: the three assignment request operations (`get_session_assignment` isn't used: the outcome event carries everything), `SessionAssignmentRequest` and its outcome, `assignment` on `card.closed`, `assignment_request` on `work_item.assigned`, the kind `assignment_request`, and the codes `assignment_not_allowed`, `assignment_outside_thread` and `assignment_closed`.
-
-## Unreleased
-
-Built on version 1.23.0 of the agent API's contract (`openapi.json` copied from the API and regenerated; it also carries 1.19.0's additions, which no tool uses yet, 1.21.0's, which change only wording, 1.22.0's `absent` and `missed_summary` on a `meeting_notes` request's context, which pass through, and 1.23.0's forbidden reason `agent_not_in_project`). An older server leaves the new block out and refuses posts in a child's thread with `thread_not_bound`, and everything works as in 0.14.1.
-
-### Added
-
-- **Work updates in the app, on each item** (agent API 1.21.0). Assigning an epic or a story to the agent also gives the session the threads of its stories, tasks, bugs and subtasks, so `reply`, `ask`, cards, "is writing" and files work there with the child's key. The server's instructions (channel mode) now say that everything about the work goes to the person in buildIt.Social, never only the terminal (progress, decisions, questions, agreements, blockers, results), each post in the thread of the item it concerns (a child's work in the child's thread, the overview in the epic's), questions with `ask` there, short and factual, and that agents a session starts itself post their own results on their item. The lead sends an event in a child's thread to the worker of the item above.
-- **The `buildit-work-updates` skill** in the plugin: when to post, which item, how short, what to include, and what to pass on to agents the session starts. The item worker posts each child's work in that child's own thread (with `reply`, never `add_comment`), and names the skill.
-- **An agent is assigned only where it reaches** (agent API 1.23.0). The server refuses to make an agent an item's assignee in a project none of its live sessions reaches (`403 forbidden`, reason `agent_not_in_project`); `assign_item`, `update_item` and `create_item` now explain it: connect a session for the agent that includes the project, or assign someone else. An item the agent already has keeps it. `assign_item`'s and `create_item`'s descriptions say so. A 1.22 or older server never refuses this way.
-- **Tool text:** `reply` and `ask` say a descendant's thread works; `list_threads` says it doesn't list them; `propose_handoff` (and its `not_parent_session` note) takes a subtask under the item, a story's under an epic too.
-
-- **`get_item` shows a request form's request.** An item someone sent through a project's request form carries `request`: the form's title and the requester's name, each wrapped as untrusted content (`source="request"`; in the text, one block), and `public_status`, the status the requester sees (`sent`, `accepted`, `in_progress`, `waiting_on_you`, `done`, `fixed`, `wont_do`, `duplicate` or `closed`; a newer one passes through). A deleted form and a requester who is gone read as such. A fixed line tells the agent its comments never reach the requester, even one starting with `@requester`: only a person's `@requester` comment does (the server refuses an agent's). The tool's description mentions the block; the `buildit://items/{key}` resource shows it too.
 
 ## [0.14.1] - 2026-11-01
 
