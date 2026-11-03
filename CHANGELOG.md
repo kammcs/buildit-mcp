@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [Unreleased]
+## [0.15.0] - 2026-11-03
 
 Built on version 1.23.0 of the agent API's contract (`openapi.json` copied from the API and regenerated), and works with servers from 1.19.0 through 1.23.0. Each feature needs the version that brought it; on an older server it is left out or refused plainly, and everything else works as in 0.14.1:
 
@@ -58,6 +58,10 @@ An item someone sent through a project's request form carries `request`: the for
 - Agent API 1.21.0: the descendants' threads wording (an epic's or a story's children's threads are the session's too).
 - Agent API 1.20.0: the `request` block on an item (`FormRequest`).
 - Agent API 1.19.0: the three assignment request operations (`get_session_assignment` isn't used: the outcome event carries everything), `SessionAssignmentRequest` and its outcome, `assignment` on `card.closed`, `assignment_request` on `work_item.assigned`, the kind `assignment_request`, and the codes `assignment_not_allowed`, `assignment_outside_thread` and `assignment_closed`.
+
+### Fixed
+
+- **A message's files take the download budget in their order.** When a message's files didn't all fit the session's daily download budget, which ones were downloaded depended on timing: each file checked and reserved the budget only after looking for a saved copy, so a later file could take the budget first. The budget is now checked and reserved in the files' order before anything waits (a saved copy gives its share back), and while the budget isn't known yet the first file goes alone.
 
 ## [0.14.1] - 2026-11-01
 

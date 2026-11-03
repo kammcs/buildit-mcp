@@ -407,17 +407,22 @@ export class AttachmentStore {
           outcomes.set(file.id, { file, reason: 'timeout' });
           return;
         }
+        // Checked and reserved before the first await, so files take the budget
+        // in their message order and the downloads running at once don't spend
+        // the same bytes (the link says what's left).
+        const overBudget = this.budgetLeft !== undefined && file.size_bytes > this.budgetLeft;
+        if (!overBudget && this.budgetLeft !== undefined) this.budgetLeft -= file.size_bytes;
         const saved = await this.saved(messageId, file.id, 'original', file.size_bytes);
         if (saved !== undefined) {
+          // A copy already here costs nothing: give the reservation back.
+          if (!overBudget && this.budgetLeft !== undefined) this.budgetLeft += file.size_bytes;
           outcomes.set(file.id, { file, path: saved.path });
           return;
         }
-        if (this.budgetLeft !== undefined && file.size_bytes > this.budgetLeft) {
+        if (overBudget) {
           outcomes.set(file.id, { file, reason: 'budget' });
           return;
         }
-        // Reserved now, so the downloads running at once don't spend the same bytes (the link says what's left).
-        if (this.budgetLeft !== undefined) this.budgetLeft -= file.size_bytes;
         try {
           const r = await this.fetch(messageId, {
             fileId: file.id,
@@ -447,7 +452,16 @@ export class AttachmentStore {
         }
       });
     }
-    await inParallel(AUTO_PARALLEL, tasks);
+    // While the budget is unknown (no link yet in this session), the first
+    // file goes alone, so files take the budget in their message order, not
+    // in the order their links happen to reach the server.
+    const [first, ...rest] = tasks;
+    if (this.budgetLeft === undefined && first !== undefined && rest.length > 0) {
+      await first();
+      await inParallel(AUTO_PARALLEL, rest);
+    } else {
+      await inParallel(AUTO_PARALLEL, tasks);
+    }
     return sorted.map((file) => outcomes.get(file.id) ?? { file, reason: 'failed' });
   }
 
