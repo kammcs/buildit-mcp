@@ -122,6 +122,8 @@ export interface TurnContext {
   signal: AbortSignal;
   /** An agent message: item/started, then item/completed. */
   agentMessage(text: string, phase: 'final_answer' | 'commentary' | null): void;
+  /** Questions asked without waiting, as Codex 0.166 asks in plan mode: an async agent message. */
+  asyncQuestion(text: string, questions: { title: string; options: string[] | null }[]): void;
   /** A finished plan (plan mode): a `plan` item. */
   plan(text: string): void;
   /** Codex's checklist while it works (turn/plan/updated). */
@@ -733,6 +735,17 @@ export class FakeAppServer {
           memoryCitation: null,
           delivery: null,
           questions: null,
+        });
+      },
+      asyncQuestion: (text, questions) => {
+        emitItem({
+          type: 'agentMessage',
+          id: `call_${randomUUID()}`,
+          text,
+          phase: 'final_answer',
+          memoryCitation: null,
+          delivery: 'async',
+          questions,
         });
       },
       plan: (text) => {

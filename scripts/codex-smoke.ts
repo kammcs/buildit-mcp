@@ -18,11 +18,17 @@
  *                                   (work items in their own threads and worktrees: 3 turns, at
  *                                   most 4; see "Threads" below)
  *   npx tsx scripts/codex-smoke.ts --approved --only questions --model <id> --cwd <empty folder>
- *                                   (ask, and plan mode: 3 turns, at most 4)
+ *                                   (ask, and plan mode: 3 turns, 4 when Codex asks without
+ *                                   waiting, at most 5)
  *   npx tsx scripts/codex-smoke.ts --approved --only requests --model <id> --cwd <empty folder>
  *                                   (a catch-up and a thread to items: 2 turns, at most 3)
- *   (threads, questions and requests first make the empty folder a git repository with
- *   one empty commit.)
+ *   npx tsx scripts/codex-smoke.ts --approved --only unassign --model <id> --cwd <empty folder>
+ *                                   (threads' step B alone: 1 turn, at most 2)
+ *   npx tsx scripts/codex-smoke.ts --approved --only plan --model <id> --cwd <empty folder>
+ *                                   (questions' plan step alone, asking nothing: 2 turns, at
+ *                                   most 4: a question Codex asks anyway takes one more)
+ *   (threads, unassign, questions, plan and requests first make the empty folder a git
+ *   repository with one empty commit.)
  *
  * Four turns, at most five (the script stops before a sixth):
  *   1. reply      "Reply with the single word pong."  -> a post
@@ -72,13 +78,15 @@
  *   B. unassign     a slow count in DEMO-44's thread, then the item is unassigned ->
  *                   turn/interrupt, thread/unsubscribe, nothing more in its thread
  *
- * Questions (--only questions): three turns, at most four. The in-process
+ * Questions (--only questions): three turns (four when Codex asks without
+ * waiting), at most five. The in-process
  * owner answers each question card with its first option and approves the
  * plan's card; work items plan first (--plan-items):
  *   A. ask          "call the buildit ask tool once" in the direct message -> a question
  *                   card, answered "red" -> the answer posted
  *   B. plan mode    a mention in DEMO-44's thread: plan a one-word reply, asking first
- *                   with request_user_input -> Codex's question on the card ("yes"), the
+ *                   with request_user_input -> Codex's question on the card ("yes"; Codex
+ *                   0.166 asked it as an async message, which takes one more turn), the
  *                   plan's Approve/Deny card, approved -> the next turn in default mode
  *                   carries it out ("yes" posted)
  *
@@ -140,20 +148,24 @@ const { values } = parseArgs({
 });
 
 const preflightOnly = values['preflight-only'] === true;
-const ONLY = ['steer', 'parity', 'threads', 'questions', 'requests'] as const;
+const ONLY = ['steer', 'parity', 'threads', 'unassign', 'questions', 'plan', 'requests'] as const;
 if (values.only !== undefined && !(ONLY as readonly string[]).includes(values.only)) {
   console.error(
-    '--only takes "steer" (the steer step alone: 1 turn), "parity" (tools, approvals, files: 4 turns), "threads" (work items: 3 turns), "questions" (ask and plan mode: 3 turns) or "requests" (a catch-up and a thread to items: 2 turns).',
+    '--only takes "steer" (the steer step alone: 1 turn), "parity" (tools, approvals, files: 4 turns), "threads" (work items: 3 turns), "unassign" (its step B alone: 1 turn), "questions" (ask and plan mode: 3 turns), "plan" (its plan step alone: 2 turns) or "requests" (a catch-up and a thread to items: 2 turns).',
   );
   process.exit(2);
 }
 const only = values.only === 'steer';
 const parity = values.only === 'parity';
-const threadsStep = values.only === 'threads';
-const questionsStep = values.only === 'questions';
+/** --only unassign and --only plan run one step of threads and of questions. */
+const unassignStep = values.only === 'unassign';
+const planStep = values.only === 'plan';
+const threadsStep = values.only === 'threads' || unassignStep;
+const questionsStep = values.only === 'questions' || planStep;
 const requestsStep = values.only === 'requests';
 /** Turns allowed: each run's turns plus one spare. */
-const maxTurns = only ? 2 : threadsStep || questionsStep ? 4 : requestsStep ? 3 : 5;
+// questions and plan: one turn more when Codex asks without waiting (the answer is a turn).
+const maxTurns = only || unassignStep ? 2 : requestsStep ? 3 : planStep || threadsStep ? 4 : 5;
 if (
   (values.approved !== true && !preflightOnly && values['dry-run'] !== true) ||
   values.model === undefined ||
@@ -203,8 +215,8 @@ const fakeSpawn: SpawnAppServer = (args, env) => {
     if (await fakeParityTurn(fake, ctx, first)) return;
     if (first.includes(THREADS.one) || first.includes(THREADS.two)) {
       ctx.agentMessage(first.includes(THREADS.one) ? 'one' : 'two', 'final_answer');
-      // Both run a while, so they overlap as the real ones do.
-      await sleep(300);
+      // Both run a while (longer than the second worktree takes to make), so they overlap as the real ones do.
+      await sleep(3000);
       ctx.complete();
       return;
     }
@@ -239,6 +251,8 @@ const THREADS = {
 const QUESTIONS = {
   ask: 'Call the buildit ask tool once, with one question: "Pick a colour", header "Colour", options "red" and "blue". Then reply with the chosen colour only, and do nothing else.',
   plan: 'Plan how to reply in this thread with one word. Before you plan, ask me which word with your request_user_input tool: one question, header "Word", options "yes" and "no". Then propose a one-step plan: reply with that word. Do nothing else.',
+  planOnly:
+    'Propose a one-step plan, without asking me anything: reply in this thread with the single word yes. Do nothing else.',
 } as const;
 
 /** The dry run's stand-in for Codex in the questions run; false: not one of its prompts. */
@@ -284,6 +298,9 @@ async function fakeQuestionsTurn(
     const word = JSON.stringify(r.result).includes('"yes"') ? 'yes' : 'no';
     ctx.agentMessage('Here is the plan.', 'final_answer');
     ctx.plan(`1. Reply with the word ${word}.`);
+  } else if (first.includes(QUESTIONS.planOnly)) {
+    ctx.agentMessage('Here is the plan.', 'final_answer');
+    ctx.plan('1. Reply with the word yes.');
   } else if (first.startsWith(PLAN_APPROVED)) {
     ctx.agentMessage('yes', 'final_answer');
   } else {
@@ -938,7 +955,44 @@ async function threadsRun(): Promise<void> {
   const one = storeItem(44);
   const two = storeItem(45);
   try {
-    // A. two items at once
+    if (!unassignStep) await twoAtOnce(run, one, two);
+
+    // B. an unassign interrupts one item
+    const before = textPostsIn(one.id).length;
+    const place = `item:${one.id}`;
+    api.sessions.itemMessage(token, one, THREADS.count, { mention: true });
+    await until(() => run.bridge.runningTurn(place) !== undefined, 60_000, 'turn B running');
+    const turnB = run.bridge.runningTurn(place) ?? '';
+    await sleep(1500);
+    api.sessions.unassignItem(token, one);
+    await until(() => wire.unsubscribes.length >= 1, 60_000, 'unsubscribe');
+    await until(() => wire.completed.has(turnB), 60_000, 'turn B ended');
+    await sleep(1000);
+    // Read once the turn is over: its turn/started may come after turn/start's answer.
+    const threadOne = wire.turnThread.get(turnB) ?? '';
+    check(
+      'B unassign',
+      threadOne !== '' &&
+        wire.interrupts.includes(threadOne) &&
+        wire.unsubscribes.includes(threadOne) &&
+        wire.completed.get(turnB) === 'interrupted' &&
+        textPostsIn(one.id).length === before,
+      `thread ${threadOne}, interrupt ${JSON.stringify(wire.interrupts)}, unsubscribe ${JSON.stringify(wire.unsubscribes)}, status ${String(wire.completed.get(turnB))}, posts after ${textPostsIn(one.id).length} (expected ${before})`,
+    );
+  } finally {
+    stopOwner();
+    await run.stop();
+  }
+}
+
+/** Step A of the threads run: two items' mentions at once. */
+async function twoAtOnce(
+  run: { bridge: CodexBridge },
+  one: { id: string; key: string; title: string },
+  two: { id: string; key: string; title: string },
+): Promise<void> {
+  const token = SESSION_TOKENS.first;
+  {
     api.sessions.itemMessage(token, one, THREADS.one, { mention: true });
     api.sessions.itemMessage(token, two, THREADS.two, { mention: true });
     await until(
@@ -978,30 +1032,6 @@ async function threadsRun(): Promise<void> {
         branches.some((b) => b.startsWith('demo-45')),
       `cwds ${JSON.stringify(cwds.map((c) => c.slice(work.length)))}, plugins off ${String(pluginsOff)}, turns overlapped ${String(overlap)}, posts ${JSON.stringify([textPostsIn(one.id), textPostsIn(two.id)])}, branches ${JSON.stringify(branches)}`,
     );
-
-    // B. an unassign interrupts one item
-    const before = textPostsIn(one.id).length;
-    const place = `item:${one.id}`;
-    api.sessions.itemMessage(token, one, THREADS.count, { mention: true });
-    await until(() => run.bridge.runningTurn(place) !== undefined, 60_000, 'turn B running');
-    const turnB = run.bridge.runningTurn(place) ?? '';
-    const threadOne = wire.turnThread.get(turnB) ?? '';
-    await sleep(1500);
-    api.sessions.unassignItem(token, one);
-    await until(() => wire.unsubscribes.length >= 1, 60_000, 'unsubscribe');
-    await until(() => wire.completed.has(turnB), 60_000, 'turn B ended');
-    await sleep(1000);
-    check(
-      'B unassign',
-      wire.interrupts.includes(threadOne) &&
-        wire.unsubscribes.includes(threadOne) &&
-        wire.completed.get(turnB) === 'interrupted' &&
-        textPostsIn(one.id).length === before,
-      `interrupt ${JSON.stringify(wire.interrupts)}, unsubscribe ${JSON.stringify(wire.unsubscribes)}, status ${String(wire.completed.get(turnB))}, posts after ${textPostsIn(one.id).length} (expected ${before})`,
-    );
-  } finally {
-    stopOwner();
-    await run.stop();
   }
 }
 
@@ -1027,7 +1057,50 @@ async function questionsRun(): Promise<void> {
   }, 100);
   const item = storeItem(44);
   try {
-    // A. ask, through the hosted tool
+    if (!planStep) await askStep(run);
+
+    // B. plan mode: (a question, on a card,) the plan's card, approved, then carried out
+    const turnsBefore = wire.started.length;
+    api.sessions.itemMessage(token, item, planStep ? QUESTIONS.planOnly : QUESTIONS.plan, {
+      mention: true,
+    });
+    await until(
+      () => api.sessions.approvals(token).some((c) => c.toolName === 'plan'),
+      240_000,
+      'the plan card',
+    );
+    await until(
+      () => wire.modes.at(-1) === 'default' && idle(run)(),
+      180_000,
+      'the plan carried out',
+    );
+    await run.bridge.idle();
+    const modes = wire.modes.slice(-(wire.started.length - turnsBefore));
+    const planCardOf = api.sessions.approvals(token).find((c) => c.toolName === 'plan');
+    const native = [...wire.serverRequests.values()].some(
+      (r) => r.method === 'item/tool/requestUserInput' && (r.answer ?? '').includes('"yes"'),
+    );
+    const cards = questionCardsIn(item.id).filter((m) => !cardIdsOf().has(m.id)).length;
+    check(
+      'B plan',
+      (planStep || cards >= 1) &&
+        planCardOf?.status === 'approved' &&
+        modes[0] === 'plan' &&
+        modes.at(-1) === 'default' &&
+        /yes/i.test(textPostsIn(item.id).join(' ')),
+      `question cards ${cards} (requestUserInput answered yes: ${String(native)}; else an async question), plan card ${String(planCardOf?.status)}, modes ${JSON.stringify(modes)}, posts ${JSON.stringify(textPostsIn(item.id))}`,
+    );
+  } finally {
+    clearInterval(answerer);
+    stopOwner();
+    await run.stop();
+  }
+}
+
+/** Step A of the questions run: a question through the hosted ask. */
+async function askStep(run: { bridge: CodexBridge }): Promise<void> {
+  const token = SESSION_TOKENS.first;
+  {
     const thread = api.sessions.postFrom(token, QUESTIONS.ask);
     await until(
       () => wire.started.length >= 1 && idle(run)() && textPostsIn(thread).length >= 1,
@@ -1040,35 +1113,6 @@ async function questionsRun(): Promise<void> {
       questionCardsIn(thread).length === 1 && /red/i.test(textPostsIn(thread).join(' ')),
       `question cards ${questionCardsIn(thread).length}, tool calls ${JSON.stringify(wire.toolCalls)}, posts ${JSON.stringify(textPostsIn(thread))}`,
     );
-
-    // B. plan mode: Codex's own question, the plan's card, approved, then carried out
-    api.sessions.itemMessage(token, item, QUESTIONS.plan, { mention: true });
-    await until(
-      () => api.sessions.approvals(token).some((c) => c.toolName === 'plan'),
-      180_000,
-      'the plan card',
-    );
-    await until(() => wire.started.length >= 3 && idle(run)(), 180_000, 'turn B carried out');
-    await run.bridge.idle();
-    const modes = wire.modes.slice(-2);
-    const planCardOf = api.sessions.approvals(token).find((c) => c.toolName === 'plan');
-    const asked = [...wire.serverRequests.values()].some(
-      (r) => r.method === 'item/tool/requestUserInput' && (r.answer ?? '').includes('"yes"'),
-    );
-    check(
-      'B plan',
-      asked &&
-        questionCardsIn(item.id).length >= 1 &&
-        planCardOf?.status === 'approved' &&
-        modes[0] === 'plan' &&
-        modes[1] === 'default' &&
-        /yes/i.test(textPostsIn(item.id).join(' ')),
-      `requestUserInput answered yes ${String(asked)}, question cards ${questionCardsIn(item.id).length}, plan card ${String(planCardOf?.status)}, modes ${JSON.stringify(modes)}, posts ${JSON.stringify(textPostsIn(item.id))}`,
-    );
-  } finally {
-    clearInterval(answerer);
-    stopOwner();
-    await run.stop();
   }
 }
 

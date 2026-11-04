@@ -21,6 +21,7 @@ import {
   PLUGINS_OFF,
   queuedLine,
   RESUMED_NOTE,
+  RESUMING_LINE,
 } from '../src/codex/bridge.js';
 import { itemPlace, SessionRouter } from '../src/codex/router.js';
 import { branchName, WORKTREES_DIR } from '../src/codex/worktrees.js';
@@ -458,8 +459,11 @@ describe('codex items: restarts', () => {
     expect(resume).toMatchObject({ threadId: thread, excludeTurns: true, cwd: wt });
     expect(second.requests('thread/start')).toHaveLength(0);
     expect(texts(second.requests('turn/start')[0]!.input)[0]).toBe(RESUMED_NOTE);
+    // One line in the item's thread first.
+    expect(postsIn(one.id).map((m) => m.text)).toEqual([RESUMING_LINE]);
     again.release(thread);
-    await waitFor(() => postsIn(one.id).length === 1);
+    await waitFor(() => postsIn(one.id).length === 2);
+    expect(postsIn(one.id)[1]!.text).toBe('done 1');
     // The worktree was reused, not made again.
     const list = execFileSync('git', ['worktree', 'list'], { cwd: bench.folder, encoding: 'utf8' });
     expect(list.split('\n').filter((l) => l.includes('demo-1-keep-going'))).toHaveLength(1);

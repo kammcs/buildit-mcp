@@ -106,7 +106,12 @@ import {
 import { RpcClosedError, RpcError, type AppServerConnection, type RpcNotification } from './rpc.js';
 import { DecliningServerRequests, type ServerRequestRouter } from './server-requests.js';
 import { planCard, PLAN_APPROVED, planUpdateText } from './plans.js';
-import { CodexQuestions } from './questions.js';
+import {
+  asyncAnswersText,
+  asyncCardQuestions,
+  CodexQuestions,
+  hasAsyncQuestions,
+} from './questions.js';
 import { BridgeSkills, type BridgeSkill } from './skills.js';
 import type { ThreadMap } from './thread-map.js';
 import { splitText, stableUuid } from './text.js';
@@ -146,6 +151,9 @@ export const REQUESTS_NOTICE = "This Codex session can't take this kind of reque
 export const REQUEST_THREAD_CONFIG: Readonly<Record<string, boolean>> = {
   'features.shell_tool': false,
 };
+
+/** The line a restarted bridge posts in an item's thread before it carries its work on. */
+export const RESUMING_LINE = 'Resuming after a restart.';
 
 /** The note a restarted bridge carries an item's work on with (static text). */
 export const RESUMED_NOTE =
@@ -239,6 +247,8 @@ interface AgentMessage {
   id: string;
   phase: string | null;
   text: string;
+  /** It asks the person questions (`delivery: "async"`, with `questions`). */
+  asks?: boolean;
 }
 
 /** A running turn, as the bridge follows it. */
@@ -325,9 +335,13 @@ export function imagesOf(extra: NotificationExtra | undefined): string[] {
     .map((f) => f.path);
 }
 
-/** The text to post for a turn: the last final answer, else the last message without a phase. */
+/**
+ * The text to post for a turn: the last final answer, else the last message
+ * without a phase. A message that asks the person questions (async
+ * delivery) is never it: its questions go on a card of their own.
+ */
 export function answerOf(messages: readonly AgentMessage[]): AgentMessage | undefined {
-  const reversed = messages.filter((m) => m.text.trim() !== '').reverse();
+  const reversed = messages.filter((m) => m.text.trim() !== '' && m.asks !== true).reverse();
   return reversed.find((m) => m.phase === 'final_answer') ?? reversed.find((m) => m.phase === null);
 }
 
@@ -344,7 +358,12 @@ function agentMessage(item: unknown): AgentMessage | undefined {
   if (i.type !== 'agentMessage') return undefined;
   const id = str(i.id);
   if (id === undefined || typeof i.text !== 'string') return undefined;
-  return { id, phase: typeof i.phase === 'string' ? i.phase : null, text: i.text };
+  return {
+    id,
+    phase: typeof i.phase === 'string' ? i.phase : null,
+    text: i.text,
+    ...(hasAsyncQuestions(item) ? { asks: true } : {}),
+  };
 }
 
 /** A finished plan item (plan mode). */
@@ -725,29 +744,44 @@ export class CodexBridge {
   /**
    * After a restart, once the session is known: the items whose work was
    * under way (or queued) when the bridge stopped carry on, each with a
-   * short note (their Codex threads are resumed). Within the slots, as
-   * any item.
+   * short note (their Codex threads are resumed), after one line in the
+   * item's thread ("Resuming after a restart."). Within the slots, as any
+   * item.
    */
   restore(): void {
     if (!this.loadThreads()) return;
+    const session = this.options.state.session?.session.id ?? 'session';
     for (const [key, entry] of this.options.threads.list()) {
       if (entry.item === undefined || (entry.running !== true && entry.queued !== true)) continue;
       if (this.conversations.has(key)) continue;
-      const conv = this.conversation(key, { kind: 'item', item: entry.item });
+      const item = entry.item;
+      const conv = this.conversation(key, { kind: 'item', item });
       this.options.logger.info("an item's work is carried on after a restart", {
         item: entry.item.key,
       });
-      void this.enqueue(
-        conv,
-        {
-          key,
-          place: conv.place,
-          threadId: entry.item.id,
-          messageId: undefined,
-          event: 'resumed',
-        },
-        [{ type: 'text', text: RESUMED_NOTE, text_elements: [] }],
-      ).catch(() => undefined);
+      const said = this.postText(
+        stableUuid(`${session}:${this.runId}:resuming:${key}`),
+        RESUMING_LINE,
+        entry.item.id,
+      );
+      this.work.add(said);
+      void said.finally(() => this.work.delete(said));
+      // The line first, then the turn.
+      void said
+        .then(() =>
+          this.enqueue(
+            conv,
+            {
+              key,
+              place: conv.place,
+              threadId: item.id,
+              messageId: undefined,
+              event: 'resumed',
+            },
+            [{ type: 'text', text: RESUMED_NOTE, text_elements: [] }],
+          ),
+        )
+        .catch(() => undefined);
     }
   }
 
@@ -1349,6 +1383,7 @@ export class CodexBridge {
           const item = (p as Partial<ItemCompletedNotification>).item;
           const message = agentMessage(item);
           if (message !== undefined) turn.messages.push(message);
+          if (message?.asks === true) this.asyncQuestion(conv, turn, item, message);
           const plan = planItem(item);
           if (plan !== undefined) turn.plans.push(plan);
         }
@@ -1591,6 +1626,80 @@ export class CodexBridge {
     })();
     this.planCards.add(job);
     void job.finally(() => this.planCards.delete(job));
+  }
+
+  /**
+   * Codex asked the person questions without waiting (an agent message with
+   * `delivery: "async"`, as in plan mode): they go on the stacked question
+   * card in the turn's thread, and the answers come back to the
+   * conversation as its next input (steered in while a turn runs). Without
+   * cards, or questions a card can't show, the message is posted as it is.
+   */
+  private asyncQuestion(
+    conv: Conversation,
+    turn: TurnState,
+    item: unknown,
+    message: AgentMessage,
+  ): void {
+    const thread =
+      turn.joined.at(-1) ??
+      (conv.place.kind === 'item' ? conv.place.item.id : this.options.state.lastDmThread);
+    const questions = asyncCardQuestions(item);
+    const session = this.options.state.session?.session.id ?? 'session';
+    const asker = this.questions;
+    if (questions === undefined || asker === undefined) {
+      if (message.text.trim() === '' || thread === undefined) return;
+      const job = this.postText(
+        stableUuid(`${session}:${turn.id}:${message.id}:asks`),
+        message.text,
+        thread,
+      );
+      this.work.add(job);
+      void job.finally(() => this.work.delete(job));
+      return;
+    }
+    const generation = conv.generation;
+    const codexThread = conv.codexThreadId;
+    const job = (async () => {
+      const answers = await asker.askAsync(
+        `async:${turn.id}:${message.id}`,
+        codexThread,
+        thread,
+        questions,
+      );
+      if (answers === undefined || answers.length === 0 || generation !== conv.generation) return;
+      await this.enqueue(
+        conv,
+        {
+          key: conv.key,
+          place: conv.place,
+          threadId: thread,
+          messageId: undefined,
+          event: 'question_answered',
+        },
+        [{ type: 'text', text: asyncAnswersText(answers), text_elements: [] }],
+      ).catch(() => undefined);
+    })();
+    this.planCards.add(job);
+    void job.finally(() => this.planCards.delete(job));
+  }
+
+  /** One post of the bridge's own (best effort, logged). */
+  private async postText(id: string, text: string, threadId: string): Promise<void> {
+    for (const [i, part] of splitText(text).entries()) {
+      try {
+        await postSessionMessage(
+          this.options.api,
+          { id: i === 0 ? id : stableUuid(`${id}:${i}`), text: part, thread_id: threadId },
+          { tool: 'reply', signal: AbortSignal.timeout(30_000) },
+        );
+      } catch (err) {
+        this.options.logger.warn('a post of the bridge was not made', {
+          code: err instanceof ApiError ? err.code : 'error',
+        });
+        return;
+      }
+    }
   }
 
   /** turn/plan/updated: posted in the turn's thread, only with the setting on. */

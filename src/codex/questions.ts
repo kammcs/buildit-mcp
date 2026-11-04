@@ -85,6 +85,56 @@ export function cardQuestions(
   return { ids, questions: parsed, secret };
 }
 
+/**
+ * An agent message's asynchronous questions (`delivery: "async"`, each a
+ * title and its options) as the card's; undefined when it has none, or the
+ * card can't show them (fewer than two options, or more than four questions).
+ */
+export function asyncCardQuestions(item: unknown): Question[] | undefined {
+  const i = record(item);
+  if (i.type !== 'agentMessage' || i.delivery !== 'async' || !Array.isArray(i.questions)) {
+    return undefined;
+  }
+  const mapped: Question[] = i.questions.map((q, n) => {
+    const r = record(q);
+    const options = Array.isArray(r.options) ? r.options : [];
+    return {
+      question: typeof r.title === 'string' ? r.title : '',
+      header:
+        i.questions !== undefined && (i.questions as unknown[]).length > 1
+          ? `Question ${n + 1}`
+          : 'Question',
+      options: options
+        .filter((o): o is string => typeof o === 'string')
+        .map((label) => ({ label })),
+    };
+  });
+  const parsed = parseQuestions(mapped);
+  if (parsed === undefined || new Set(parsed.map((q) => q.question)).size !== parsed.length) {
+    return undefined;
+  }
+  return parsed;
+}
+
+/** Whether an agent message carries asynchronous questions at all (shown or not). */
+export function hasAsyncQuestions(item: unknown): boolean {
+  const i = record(item);
+  return (
+    i.type === 'agentMessage' &&
+    i.delivery === 'async' &&
+    Array.isArray(i.questions) &&
+    i.questions.length > 0
+  );
+}
+
+/** The input that brings the person's answers back to Codex (its titles, their words). */
+export function asyncAnswersText(answers: readonly { question: string; answer: string }[]): string {
+  return [
+    'The person answered your question in buildIt.Social:',
+    ...answers.map((a) => `- ${a.question.replace(/\s+/g, ' ').trim()}: ${a.answer}`),
+  ].join('\n');
+}
+
 export interface CodexQuestionsOptions {
   api: ApiClient;
   state: ChannelState;
@@ -225,6 +275,68 @@ export class CodexQuestions implements ServerRequestRouter {
               : 'error',
       });
       return pending.ended === 'resolved' ? { none: true } : none;
+    } finally {
+      this.pending.delete(key);
+    }
+  }
+
+  /**
+   * Codex's asynchronous questions (an agent message with `delivery:
+   * "async"` and `questions`, as Codex 0.166 asks in plan mode): the same
+   * card, in `thread`. The turn doesn't wait for them; the answers (by
+   * question) come back for the conversation's next input. Undefined when
+   * nobody answered, or the card closed.
+   */
+  async askAsync(
+    key: string,
+    codexThread: string | undefined,
+    thread: string | undefined,
+    questions: readonly Question[],
+  ): Promise<{ question: string; answer: string }[] | undefined> {
+    const { state, logger } = this.options;
+    const info = state.session;
+    if (info === undefined || state.ended !== undefined || state.waiters.isEnded) return undefined;
+    const abort = new AbortController();
+    const pending: Pending = { codexThread, abort };
+    this.pending.set(key, pending);
+    const ctx = createToolContext({
+      api: this.options.api,
+      logger,
+      tool: 'ask',
+      signal: abort.signal,
+      channel: state,
+    });
+    try {
+      const outcome = await askOnCard(state, ctx, this.options.ask, {
+        id: uuidV5(
+          ['codex-async-question', info.session.id, this.runId, key].join('\n'),
+          ASK_NAMESPACE,
+        ),
+        questions,
+        threadId: thread,
+        inItem: isItemThread(state, thread),
+        waitS: this.options.ask.toolDefaultWaitS ?? this.options.ask.hookWaitS,
+        started: (this.options.ask.now ?? Date.now)(),
+      });
+      if (outcome.status !== 'answered') {
+        logger.info("codex's async question not answered", { reason: outcome.reason });
+        return undefined;
+      }
+      logger.info("codex's async question answered", { questions: questions.length });
+      return questions.flatMap((q) => {
+        const answer = outcome.answers[q.question];
+        return answer === undefined ? [] : [{ question: q.question, answer }];
+      });
+    } catch (err) {
+      logger.warn("codex's async question failed", {
+        code:
+          err instanceof CardNotPosted && err.cause instanceof ApiError
+            ? err.cause.code
+            : err instanceof ApiError
+              ? err.code
+              : 'error',
+      });
+      return undefined;
     } finally {
       this.pending.delete(key);
     }

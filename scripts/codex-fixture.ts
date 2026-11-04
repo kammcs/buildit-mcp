@@ -8,8 +8,10 @@
  * Kept: every message between the bridge and the app-server about the
  * session's threads and turns, in order, with the time since the first.
  * Left out: notifications about the Codex account and this computer
- * (account/*, remoteControl/*, moderation metadata). Rewritten: the
- * working folder and Codex's home (to /tmp paths), the user agent's
+ * (account/*, remoteControl/*, moderation metadata), and the thread
+ * settings notices (Codex's own mode instructions). Rewritten: the
+ * working folder and Codex's home (to /tmp paths), the plugin's skills
+ * folder (to a placeholder the replay maps back), the user agent's
  * platform, the hosted tools' URL (its port and per-thread token), the
  * tools' random idempotency keys (fixed ones), and
  * config/read's answer, cut to the two approval settings the bridge reads
@@ -23,9 +25,17 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-const DROPPED = [/^account\//, /^remoteControl\//, /^turn\/moderationMetadata$/];
+// thread/settings/updated carries Codex's own mode instructions (its prompt text), not the bridge's.
+const DROPPED = [
+  /^account\//,
+  /^remoteControl\//,
+  /^turn\/moderationMetadata$/,
+  /^thread\/settings\/updated$/,
+];
 const WORK = '/tmp/codex-smoke-work';
 const HOME = '/tmp/codex-home';
+/** The plugin's skills folder, as the fixture writes it (the replay puts this checkout's back). */
+export const SKILLS = '/buildit-mcp/plugin/skills';
 /** The hosted tools' per-run URL, as the fixture writes it. */
 const TOOLS_URL = 'http://127.0.0.1:0/mcp/thread-token';
 
@@ -58,14 +68,30 @@ export function fixtureOf(lines: readonly string[]): FixtureRecord[] {
   const parsed = lines
     .filter((l) => l.trim() !== '')
     .map((l) => JSON.parse(l) as { t: number; dir: 'in' | 'out'; line: string });
-  // The folders to rewrite, from the bridge's thread/start and the handshake's answer.
+  // The folders to rewrite: the session's folder (config/read's, else the first thread's, outside
+  // any worktree), Codex's home (the handshake's answer) and the plugin's skills (the bridge's
+  // skill root, which names this checkout).
+  let skills: string | undefined;
   for (const e of parsed) {
     const m = JSON.parse(e.line) as Record<string, unknown>;
     const params = m.params as Record<string, unknown> | undefined;
-    if (m.method === 'thread/start' && typeof params?.cwd === 'string') work ??= params.cwd;
+    if (m.method === 'config/read' && typeof params?.cwd === 'string') work ??= params.cwd;
+    if (m.method === 'thread/start' && typeof params?.cwd === 'string') {
+      work ??= params.cwd.replace(/[\\/]\.buildit[\\/]worktrees[\\/].*$/, '');
+    }
+    const roots = params?.extraRoots;
+    if (m.method === 'skills/extraRoots/set' && Array.isArray(roots)) {
+      skills ??= typeof roots[0] === 'string' ? roots[0] : undefined;
+    }
     const result = m.result as Record<string, unknown> | undefined;
     if (typeof result?.codexHome === 'string') home ??= result.codexHome;
   }
+  /** A path as it appears: as is, with doubled backslashes (in a command), with slashes. */
+  const forms = (path: string): string[] => [
+    path.replace(/\\/g, '\\\\'),
+    path,
+    path.replace(/\\/g, '/'),
+  ];
   const keys = new Map<string, string>();
   const fixedKey = (key: string): string => {
     let fixed = keys.get(key);
@@ -78,8 +104,16 @@ export function fixtureOf(lines: readonly string[]): FixtureRecord[] {
   const scrub = (v: unknown): unknown => {
     if (typeof v === 'string') {
       let s = v;
-      if (work !== undefined) s = s.split(work).join(WORK);
-      if (home !== undefined) s = s.split(home).join(HOME);
+      if (skills !== undefined) {
+        for (const f of forms(skills)) s = s.split(f).join(SKILLS);
+        // The rest of a skill's path after the root, in the slashes of the placeholder.
+        s = s.replace(
+          /\/buildit-mcp\/plugin\/skills((?:\\+[\w.-]+)+)/g,
+          (_m, rest: string) => `${SKILLS}${rest.replace(/\\+/g, '/')}`,
+        );
+      }
+      if (work !== undefined) for (const f of forms(work)) s = s.split(f).join(WORK);
+      if (home !== undefined) for (const f of forms(home)) s = s.split(f).join(HOME);
       s = s.replace(/^\\\\\?\\/, '');
       s = s.replace(/http:\/\/127\.0\.0\.1:\d+\/mcp\/[A-Za-z0-9_-]+/g, TOOLS_URL);
       if (/^[^/\s]+\/\d+\.\d+\.\d+ \(/.test(s)) {
@@ -87,6 +121,10 @@ export function fixtureOf(lines: readonly string[]): FixtureRecord[] {
       }
       if (/[A-Za-z]:\\+Users\\+|\/(Users|home)\/[A-Za-z]/.test(s)) {
         throw new Error('a local user path is left in the transcript');
+      }
+      // Any other absolute Windows path is this computer's too (Windows' own folders aside).
+      if (/(^|[\s"'(=])[A-Za-z]:\\+(?!\\|WINDOWS\\|Windows\\|Program Files)/.test(s)) {
+        throw new Error('a local path is left in the transcript');
       }
       return s;
     }

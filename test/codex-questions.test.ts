@@ -15,7 +15,7 @@ import {
   planParts,
   planUpdateText,
 } from '../src/codex/plans.js';
-import { cardQuestions, SECRET_REFUSED } from '../src/codex/questions.js';
+import { asyncAnswersText, cardQuestions, SECRET_REFUSED } from '../src/codex/questions.js';
 import { toolTimeoutSeconds } from '../src/codex/tool-server.js';
 import { CodexBench, waitFor } from './support/codex-run.js';
 import { FakeApi } from './support/fake-api.js';
@@ -274,6 +274,46 @@ describe('codex plan mode', () => {
     await waitFor(() => codex.requests('turn/start').length === 2);
     expect((codex.requests('turn/start')[1]!.collaborationMode as Json).mode).toBe('plan');
     await waitFor(() => api.sessions.approvals(token).length === 2);
+  });
+
+  it("puts plan mode's async questions on the card, and brings the answer back as the next input", async () => {
+    const s = api.sessions.open(token, 'demo-folder');
+    const codex = bench.fake();
+    const turns: TurnContext[] = [];
+    codex.onTurn = (ctx) => {
+      turns.push(ctx);
+      if (turns.length === 1) {
+        // As Codex 0.166 asked in a real plan-mode turn: an async message, then a closing word.
+        ctx.asyncQuestion('Which word should I use?\n- yes\n- no', [
+          { title: 'Which word should I use?', options: ['yes', 'no'] },
+        ]);
+        ctx.asyncQuestion('And this?', [{ title: 'No options here', options: null }]);
+        ctx.agentMessage('I need your answer first.', 'final_answer');
+      } else {
+        ctx.agentMessage('Planned.', 'final_answer');
+        ctx.plan('1. Reply yes');
+      }
+      ctx.complete();
+    };
+    await bench.start(codex, { planItems: true });
+    await waitFor(() => s.heartbeats.includes('online'));
+    const one = demoItem(1);
+    api.sessions.assignItem(token, one);
+    await waitFor(() => questionCards().length === 1);
+    const card = questionCards()[0]!;
+    expect(card.thread_id).toBe(one.id);
+    expect(JSON.stringify(card.card)).toContain('Which word should I use?');
+    // Questions a card can't show are posted as they came; the carded one isn't posted again.
+    await waitFor(() => textsIn(one.id).includes('I need your answer first.'));
+    expect(textsIn(one.id)).toEqual(['And this?', 'I need your answer first.']);
+    api.sessions.answerCard(token, card.id, { inputs: { q1: 'o1' } });
+    await waitFor(() => turns.length === 2);
+    const next = codex.requests('turn/start')[1]!;
+    expect((next.input as Json[])[0]).toMatchObject({
+      text: asyncAnswersText([{ question: 'Which word should I use?', answer: 'yes' }]),
+    });
+    expect((next.collaborationMode as Json).mode).toBe('plan');
+    await waitFor(() => api.sessions.approvals(token).some((c) => c.toolName === 'plan'));
   });
 
   it('leaves the direct message and items out of plan mode without the setting', async () => {

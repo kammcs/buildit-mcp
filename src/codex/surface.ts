@@ -167,7 +167,13 @@ export const BRIDGE_SURFACE: BridgeSurface = {
   },
   optedOut: DELTA_NOTIFICATIONS,
   types: [
-    { ref: 'v2/ThreadItem', variant: 'agentMessage', fields: ['id', 'text', 'phase'] },
+    {
+      ref: 'v2/ThreadItem',
+      variant: 'agentMessage',
+      fields: ['id', 'text', 'phase', 'delivery', 'questions'],
+    },
+    { ref: 'v2/AsyncUserInputQuestion', fields: ['title', 'options'] },
+    { ref: 'v2/AgentMessageDelivery', values: ['async'] },
     { ref: 'v2/ThreadStatus', variant: 'active', fields: ['activeFlags'] },
     { ref: 'v2/ThreadActiveFlag', values: ['waitingOnApproval', 'waitingOnUserInput'] },
     { ref: 'v2/TurnStatus', values: ['completed', 'interrupted', 'failed'] },

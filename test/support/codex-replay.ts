@@ -23,12 +23,15 @@
  * requests must match the recording's (accept or decline).
  */
 import { readFileSync } from 'node:fs';
+import { sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 import type { AppServerProcess, SpawnAppServer } from '../../src/codex/process.js';
+import { SKILLS_ROOT } from '../../src/codex/skills.js';
+import { SKILLS } from '../../scripts/codex-fixture.js';
 import { PROTOCOL, schemaErrors, unknownFields } from './fake-codex.js';
 
 export interface FixtureRecord {
@@ -63,7 +66,31 @@ export function inputText(msg: Record<string, unknown>): string | undefined {
  * attachments block after it holds this run's paths and block ids).
  */
 export function promptOf(msg: Record<string, unknown>): string | undefined {
-  return inputText(msg)?.split('\n\n')[0];
+  // An untrusted block's id is random each time: not compared.
+  return inputText(msg)
+    ?.split('\n\n')[0]
+    ?.replace(/(untrusted_content id=)"[0-9a-f]{10}"/g, '$1""');
+}
+
+/** The recorded skills folder's placeholder, back to this checkout's (deep, in every string). */
+export function withSkillsRoot(v: unknown): unknown {
+  if (typeof v === 'string') {
+    if (!v.includes(SKILLS)) return v;
+    return v
+      .split(SKILLS)
+      .map((part, i) => {
+        if (i === 0) return part;
+        // The skill's own path after the root, in this system's separators.
+        const rest = /^(?:\/[\w.-]+)*/.exec(part)?.[0] ?? '';
+        return SKILLS_ROOT + rest.split('/').join(sep) + part.slice(rest.length);
+      })
+      .join('');
+  }
+  if (Array.isArray(v)) return v.map(withSkillsRoot);
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, withSkillsRoot(x)]));
+  }
+  return v;
 }
 
 /** A turn method's input item types (text, localImage...). */
@@ -109,6 +136,10 @@ export class ReplayAppServer {
   env: Readonly<Record<string, string>> = {};
   /** The config of the bridge's thread/start (its hosted tools' entry). */
   private threadConfig: Record<string, unknown> | undefined;
+  /** Each recorded thread's config, as the bridge started it (its hosted tools' URL). */
+  private readonly configs = new Map<string, Record<string, unknown>>();
+  /** The config of a thread/start whose recorded answer hasn't been played yet. */
+  private pendingConfig: Record<string, unknown> | undefined;
   /** Awaited before each recorded server message is sent (what Codex did outside the stream). */
   onRecord: ((msg: Record<string, unknown>) => Promise<void>) | undefined;
   private pumping: Promise<void> = Promise.resolve();
@@ -141,8 +172,15 @@ export class ReplayAppServer {
   };
 
   /** Calls a hosted tool as Codex does, on the thread the bridge started. */
-  async mcpCall(name: string, args: Record<string, unknown>): Promise<unknown> {
-    const entry = this.threadConfig?.['mcp_servers.buildit'] as Record<string, unknown> | undefined;
+  async mcpCall(
+    name: string,
+    args: Record<string, unknown>,
+    /** The recorded thread whose URL to call (default: the latest thread the bridge started). */
+    threadId?: string,
+  ): Promise<unknown> {
+    const config =
+      (threadId === undefined ? undefined : this.configs.get(threadId)) ?? this.threadConfig;
+    const entry = config?.['mcp_servers.buildit'] as Record<string, unknown> | undefined;
     if (entry === undefined) throw new Error('the bridge started no thread with its tools');
     const secret = this.env[String(entry.bearer_token_env_var)] ?? '';
     const client = new Client({ name: 'codex-replay', version: '0.166.0' });
@@ -198,6 +236,7 @@ export class ReplayAppServer {
     const e = expected.msg;
     if (method === 'thread/start') {
       this.threadConfig = ((sent.params ?? {}) as { config?: Record<string, unknown> }).config;
+      this.pendingConfig = this.threadConfig;
     }
     if (method === undefined && decisionOf(e) !== decisionOf(sent)) {
       this.violations.push(
@@ -237,7 +276,15 @@ export class ReplayAppServer {
 
   private async pump(): Promise<void> {
     while (this.records[this.position]?.dir === 'in') {
-      const msg = { ...this.records[this.position]!.msg };
+      const msg = withSkillsRoot({ ...this.records[this.position]!.msg }) as Record<
+        string,
+        unknown
+      >;
+      const started = (msg.result as { thread?: { id?: unknown } } | undefined)?.thread?.id;
+      if (typeof started === 'string' && this.pendingConfig !== undefined) {
+        this.configs.set(started, this.pendingConfig);
+        this.pendingConfig = undefined;
+      }
       if (msg.method === undefined && this.ids.has(msg.id)) msg.id = this.ids.get(msg.id);
       if (this.onRecord !== undefined) {
         try {
@@ -247,8 +294,9 @@ export class ReplayAppServer {
         }
       }
       this.checkServer(msg);
-      if (!this.ended) this.toBridge.write(JSON.stringify(msg) + '\n');
+      // Moved on first: the stream may hand the line to the bridge at once, and its answer back.
       this.position++;
+      if (!this.ended) this.toBridge.write(JSON.stringify(msg) + '\n');
     }
   }
 
