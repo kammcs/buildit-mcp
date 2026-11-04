@@ -296,6 +296,7 @@ export function createReplyTool(
         );
         state.typing?.stop(threadId);
         const m = r.message;
+        state.notePosted(m.thread_id ?? m.id);
         const item = args.item === undefined ? undefined : itemRef(args.item).toUpperCase();
         const where = whereOf(m, item);
         return {
@@ -347,6 +348,7 @@ export function createReplyTool(
         );
         state.typing?.stop(threadId);
         const m = r.message;
+        state.notePosted(m.thread_id ?? m.id);
         const where = whereOf(m, item);
         return {
           structured: { created: r.created, message: messageOut(m), idempotency_key: key },
@@ -378,6 +380,7 @@ export function createReplyTool(
         });
         state.typing?.stop(threadId);
         const m = r.message;
+        state.notePosted(m.thread_id ?? m.id);
         const messages = (r.messages ?? [m]).map(messageOut);
         const where = whereOf(m, item);
         const n = prepared.files.length;

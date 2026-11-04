@@ -128,6 +128,20 @@ src/
                         the token file)
   channel/typing.ts     "<agent> is writing..." while Claude works on a message
   cli/commands.ts       connect (device flow), disconnect, status
+  cli/codex.ts          buildit-mcp codex (preview): the folder's session, the channel lock and loop,
+                        and a codex app-server child driven by the bridge
+  codex/bridge.ts       the Codex bridge: channel notifications to turns (start or steer), the final
+                        answer posted (with the dedupe rule), "is writing" from turn events, the
+                        thread map and resume; server requests go to a ServerRequestRouter
+  codex/router.ts       which Codex conversation an event goes to (the direct message only, for now)
+  codex/server-requests.ts  the app-server's own requests: declined, the clock, "method not found"
+  codex/rpc.ts          the JSON-RPC connection to the app-server (stdio, one JSON object a line)
+  codex/process.ts      starting and ending the app-server child
+  codex/binary.ts       where the native codex program is (the npm shim followed, or the PATH)
+  codex/thread-map.ts   each place's Codex thread id, kept next to the lock files
+  codex/version.ts      the oldest and the tested Codex versions, read from the user agent
+  codex/protocol.ts     the protocol types the bridge uses (vendored from Codex, Apache-2.0)
+  codex/surface.ts      every method and field the bridge relies on (npm run codex:schema checks it)
   cli/claude-config.ts  reads Claude Code's files for status (a channel server and the plugin)
   secrets/keychain.ts   a folder's session token in the OS keychain (@napi-rs/keyring,
                         optional), or a 0600 file
@@ -140,6 +154,9 @@ test/
   support/fake-files.ts the fake's files for sessions: attachments, links, uploads, a fake storage
   support/harness.ts    an in-memory MCP client on the real catalog, and hostile-content checks
   support/test-tools.ts stand-in tools across toolsets, for registry and transport tests
+  support/fake-codex.ts a scripted fake codex app-server, validating the bridge's messages against
+                        fixtures/codex/app-server-protocol.json (the vendored schema subset)
+  support/codex-replay.ts  plays a recorded real run (fixtures/codex/smoke-*.jsonl) back to the bridge
   *.test.ts             vitest
 scripts/
   codegen.ts, generate.ts  the generator (npm run generate)
@@ -150,6 +167,11 @@ scripts/
                         checkout's dist/ (written where the person says; never committed)
   bundle.ts             build the Claude Desktop bundle (.mcpb) from dist/ and bundle/manifest.json,
                         privacy-check it, and run it against the fake API
+  codex-schema.ts, codex-protocol.ts  npm run codex:schema: the installed Codex's protocol schema,
+                        checked against the bridge's surface and diffed with the vendored subset
+  codex-smoke.ts        the bridge against the real app-server: real model turns, by hand only
+                        (--dry-run: against the fake; --preflight-only: the free checks)
+  codex-fixture.ts      a smoke run's transcript to a replay fixture (account and machine details out)
   privacy.ts            the privacy guard (npm run privacy, and privacy:pack over the packed
                         package; test/privacy.test.ts runs it too)
   conformance.ts        official conformance suite against HTTP mode, offline
@@ -210,6 +232,7 @@ npm run inspect:docker  # the same, also against the container image (Docker Des
 npm run conformance   # official conformance suite against HTTP mode, offline
 npm run generate      # after a contract change; the tests fail if the output is stale
 npm run privacy       # the privacy guard (the tests run it too)
+npm run codex:schema  # the installed Codex's app-server protocol against the bridge (no model turns)
 npm run privacy:pack  # pack the npm package to a temp folder; the guard over its files, and only dist/ and the documents ship
 ```
 
