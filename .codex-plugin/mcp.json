@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "buildit": {
+      "command": "npx",
+      "args": ["-y", "@kammcs/buildit-mcp@0.17.0"],
+      "env_vars": [
+        "BUILDIT_TOKEN",
+        "BUILDIT_API_URL",
+        "BUILDIT_TOOLSETS",
+        "BUILDIT_READ_ONLY",
+        "BUILDIT_EXCLUDE_TOOLS",
+        "BUILDIT_LOG_LEVEL"
+      ],
+      "startup_timeout_sec": 60,
+      "tool_timeout_sec": 300,
+      "default_tools_approval_mode": "approve",
+      "tools": {
+        "apply_plan": {
+          "approval_mode": "prompt"
+        }
+      }
+    }
+  }
+}

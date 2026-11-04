@@ -154,7 +154,11 @@ export async function runCodex(
   const lockDir = deps.lockDir ?? defaultLockDir();
   let lock: ChannelLock | undefined;
   try {
-    lock = acquireChannelLock(options.folder, apiUrl, { plugin: true, dir: lockDir });
+    lock = acquireChannelLock(options.folder, apiUrl, {
+      plugin: true,
+      codex: true,
+      dir: lockDir,
+    });
   } catch (err) {
     logger.warn('could not take the channel lock', { error: err });
   }

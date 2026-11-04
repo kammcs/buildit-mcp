@@ -112,6 +112,8 @@ describe('the privacy guard over the published package', () => {
     'package/SECURITY.md': '# Security',
     'package/CHANGELOG.md': '# Changelog',
     'package/dist/index.js': '#!/usr/bin/env node\n',
+    'package/.codex-plugin/plugin.json': '{"name":"x"}',
+    'package/.codex-plugin/mcp.json': '{"mcpServers":{}}',
   };
 
   it('reads every file of a tarball, long names included', () => {
@@ -163,6 +165,24 @@ describe('the privacy guard over the published package', () => {
       'plugin/agents/buildit-item-worker.md',
       'plugin/hooks/hooks.json',
       'plugin/skills/buildit-requests/notes.txt',
+    ]);
+  });
+
+  it("passes the Codex plugin's manifest and MCP config, and nothing else of it", () => {
+    const { findings } = scanPackage(
+      gzipSync(
+        tar({
+          ...clean,
+          'package/.codex-plugin/hooks.json': '{}',
+          'package/hooks/hooks.json': '{}',
+          'package/.mcp.json': '{}',
+        }),
+      ),
+    );
+    expect(findings.filter((f) => f.rule === 'pack-contents').map((f) => f.file)).toEqual([
+      '.codex-plugin/hooks.json',
+      '.mcp.json',
+      'hooks/hooks.json',
     ]);
   });
 

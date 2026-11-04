@@ -7,6 +7,7 @@
  * names) is stripped of control and direction characters first, so it can't
  * move the cursor or disguise itself in the terminal.
  */
+import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -26,6 +27,7 @@ import { FORBIDDEN_CHARS, type ConnectOptions, type SessionCommandOptions } from
 import { isTokenRefused, isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
 import { channelServers, duplicateChannelWarning, pluginConfigured } from './claude-config.js';
+import { codexConfigs, type CodexConfigFound } from './codex-config.js';
 import { defaultLockDir, lockHolders } from '../channel/lock.js';
 import { policyNotePath, policyWarning, readPolicyNote } from '../codex/policy.js';
 import {
@@ -62,6 +64,11 @@ export interface CommandIO {
   ask?: (question: string) => Promise<string>;
   /** For tests: the home folder whose Claude Code files status reads. */
   home?: string;
+  /**
+   * For tests: Codex's home folder, whose config.toml status reads
+   * (default: CODEX_HOME or ~/.codex; with `home` set, its .codex).
+   */
+  codexHome?: string;
   /** For tests: the folder of the channel lock files status reads. */
   lockDir?: string;
   /** For tests: the machine that capability detection reads. */
@@ -226,7 +233,11 @@ function channelLines(folder: string, apiUrl: string, io: CommandIO): string[] {
   } catch {
     return lines;
   }
-  if (holders.plugin !== undefined) {
+  if (holders.plugin?.codex === true) {
+    lines.push(
+      `Channel:  the Codex bridge (buildit-mcp codex, pid ${holders.plugin.pid}) receives this folder's messages.${holders.server === undefined ? '' : ` A server without the plugin (pid ${holders.server.pid}) is running too: it gives way at its next poll.`}`,
+    );
+  } else if (holders.plugin !== undefined) {
     lines.push(
       `Channel:  the buildit plugin's server (pid ${holders.plugin.pid}) receives this folder's messages.${holders.server === undefined ? '' : ` A server without the plugin (pid ${holders.server.pid}) is running too: it gives way at its next poll.`}`,
     );
@@ -241,13 +252,47 @@ function channelLines(folder: string, apiUrl: string, io: CommandIO): string[] {
 }
 
 /**
- * What `buildit-mcp codex` last found of Codex's approval settings in this
- * folder (its note next to the lock files), when it has run here: a
- * warning when approvals won't reach buildIt.Social as cards.
+ * The folder's Codex setup: the buildit plugin for Codex and buildit-mcp
+ * servers in Codex's config (by name and where), whether the bridge has
+ * run here (its thread map or its note next to the lock files), and what
+ * the bridge last found of Codex's approval settings: a warning when
+ * approvals won't reach buildIt.Social as cards.
  */
-function codexLines(key: string, io: CommandIO): string[] {
-  const note = readPolicyNote(policyNotePath(io.lockDir ?? defaultLockDir(), key));
-  if (note === undefined) return [];
+function codexLines(folder: string, key: string, io: CommandIO): string[] {
+  const lockDir = io.lockDir ?? defaultLockDir();
+  const lines: string[] = [];
+  let configs: CodexConfigFound[];
+  try {
+    configs = codexConfigs(folder, {
+      ...(io.codexHome !== undefined
+        ? { codexHome: io.codexHome }
+        : io.home !== undefined
+          ? { codexHome: join(io.home, '.codex') }
+          : {}),
+    });
+  } catch {
+    configs = [];
+  }
+  const setup = configs.flatMap((c) => [
+    ...c.plugins.map(
+      (id) => `the buildit plugin (${plain(id, 80)}: tools and skills, no messages; in ${c.place})`,
+    ),
+    ...c.servers.map((name) => `the server "${plain(name, 80)}" (buildit-mcp, in ${c.place})`),
+  ]);
+  if (setup.length > 0) lines.push(`Codex:    ${setup.join('; ')}`);
+  const notePath = policyNotePath(lockDir, key);
+  const bridgeRan = existsSync(join(lockDir, `${key}.codex-threads.json`)) || existsSync(notePath);
+  if (bridgeRan) {
+    lines.push(
+      'Codex:    the bridge (buildit-mcp codex) has run in this folder: it brings your messages, items and requests to Codex.',
+    );
+  } else if (setup.length > 0) {
+    lines.push(
+      'Codex:    for messages, items and requests from buildIt.Social, run the bridge in this folder: buildit-mcp codex --project <KEY>.',
+    );
+  }
+  const note = readPolicyNote(notePath);
+  if (note === undefined) return lines;
   // Worked out again from the settings (the file is only data), and made safe for a terminal.
   const warning = policyWarning({
     approvalPolicy: note.approval_policy,
@@ -255,6 +300,7 @@ function codexLines(key: string, io: CommandIO): string[] {
   });
   const checked = plain(note.checked_at, 40);
   return [
+    ...lines,
     warning === undefined
       ? `Codex:    approvals come to buildIt.Social as cards (checked ${checked}).`
       : `Codex:    approvals won't reach buildIt.Social as cards: ${plain(warning, 400)} (checked ${checked}). Change it in your Codex config, or start the bridge with ` +
@@ -524,7 +570,7 @@ export async function runStatus(given: SessionCommandOptions, io: CommandIO): Pr
     `API:      ${options.apiUrl}`,
     ...channelLines(options.folder, options.apiUrl, io),
     ...(duplicate === undefined ? [] : [duplicate]),
-    ...codexLines(key, io),
+    ...codexLines(options.folder, key, io),
   ];
   if (token === undefined) {
     io.out(
