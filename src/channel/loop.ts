@@ -306,6 +306,12 @@ export class ChannelState {
   approvals: ToolApprovals | undefined;
   /** The session's attachments folder (channel mode, once the session is read). */
   attachments: AttachmentStore | undefined;
+  /**
+   * Where the attachments folder is, relative to the project (none:
+   * Claude Code's `.claude/buildit-attachments`; the Codex bridge's is
+   * `.buildit/attachments`).
+   */
+  attachmentsDir: string | undefined;
   /** The handoffs this session proposed or was handed, as seen in this process. */
   readonly handoffs = new Handoffs();
   /** The assignment requests this session made, as seen in this process. */
@@ -327,6 +333,28 @@ export class ChannelState {
   }
 }
 
+/** What a notification carries besides its content, for clients that take it. */
+export interface NotificationExtra {
+  /**
+   * The owner's own files of the event's message that were saved (never a
+   * forwarded message's), with their kind: the Codex bridge gives the
+   * images to the model as images.
+   */
+  files: { path: string; kind: string; type: string }[];
+}
+
+/** The owner's own saved files of a message, for NotificationExtra (none for a forwarded one). */
+function savedOwnFiles(
+  outcomes: readonly AttachmentOutcome[],
+  forwarded: boolean,
+): NotificationExtra | undefined {
+  if (forwarded) return undefined;
+  const files = outcomes.flatMap((o) =>
+    o.path === undefined ? [] : [{ path: o.path, kind: String(o.file.kind), type: o.file.type }],
+  );
+  return files.length === 0 ? undefined : { files };
+}
+
 /** Why the loop ended for good. */
 export type EndReason =
   | 'token_revoked'
@@ -340,8 +368,12 @@ export interface ChannelLoopOptions {
   api: ApiClient;
   logger: Logger;
   state: ChannelState;
-  /** Sends one channel notification to the client. A failure stops the loop. */
-  notify(params: ChannelNotificationParams): Promise<void>;
+  /**
+   * Sends one channel notification to the client. A failure stops the
+   * loop. `extra` is for a client that takes more than the notification
+   * (the Codex bridge: the message's saved images); Claude Code's ignores it.
+   */
+  notify(params: ChannelNotificationParams, extra?: NotificationExtra): Promise<void>;
   /** Called once when the session can't continue (the loop has stopped). */
   onEnded?(reason: EndReason): void | Promise<void>;
   /** For tests: the wait between polls, which `signal` cuts short. */
@@ -692,6 +724,7 @@ export class ChannelLoop {
         api,
         logger: logger.child({ component: 'attachments' }),
         folder: state.folder ?? process.cwd(),
+        dir: state.attachmentsDir,
         sessionId: info.session.id,
         budgetLeft: info.files_budget?.down_bytes_left,
       });
@@ -846,16 +879,19 @@ export class ChannelLoop {
               filesBlock(message.id, outcomes, forwarded, owner),
             ].join('\n\n'),
           );
-    await this.send({
-      content,
-      meta: {
-        thread_id: threadId,
-        message_id: message.id,
-        session: sanitizeLabel(event.session.label, 40),
-        ...(forwarded ? { forwarded: 'true' } : {}),
-        ...(files.length > 0 ? { attachments: String(files.length) } : {}),
+    await this.send(
+      {
+        content,
+        meta: {
+          thread_id: threadId,
+          message_id: message.id,
+          session: sanitizeLabel(event.session.label, 40),
+          ...(forwarded ? { forwarded: 'true' } : {}),
+          ...(files.length > 0 ? { attachments: String(files.length) } : {}),
+        },
       },
-    });
+      savedOwnFiles(outcomes, forwarded !== undefined),
+    );
     const conversationId = event.data.channel?.id;
     this.options.state.lastDmThread = threadId;
     this.options.state.last = {
@@ -932,9 +968,9 @@ export class ChannelLoop {
   }
 
   /** Sends one notification; a failure stops the loop (the page is not acknowledged). */
-  private async send(params: ChannelNotificationParams): Promise<void> {
+  private async send(params: ChannelNotificationParams, extra?: NotificationExtra): Promise<void> {
     try {
-      await this.options.notify(params);
+      await this.options.notify(params, extra);
     } catch (err) {
       this.options.logger.error('channel notification failed; stopping', { error: err });
       this.stopper.abort();
@@ -991,6 +1027,7 @@ export class ChannelLoop {
     const context: ContextMessage[] = event.data.context?.messages ?? [];
     let content: string;
     let meta: Record<string, string>;
+    let extra: NotificationExtra | undefined;
     const shown = context.map((m) => m.id);
     if (event.type === 'work_item.assigned') {
       if (event.data.assignment.owner.id !== info.owner.id) {
@@ -1085,9 +1122,10 @@ export class ChannelLoop {
       }
       if (forwarded) meta.forwarded = 'true';
       if (files.length > 0) meta.attachments = String(files.length);
+      extra = savedOwnFiles(outcomes, forwarded !== undefined);
       shown.push(message.id);
     }
-    await this.send({ content, meta });
+    await this.send({ content, meta }, extra);
     this.shown.add(threadId, shown);
     const conversationId = event.data.channel?.id;
     state.activateItem(item.key, item.id);

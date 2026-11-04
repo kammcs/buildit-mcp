@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { ApiClient } from '../api/client.js';
 import { suggestedCapabilities } from '../capabilities.js';
 import { ToolApprovals } from '../channel/approvals.js';
+import { BRIDGE_ATTACHMENTS_DIR } from '../channel/attachments.js';
 import { acquireChannelLock, defaultLockDir, type ChannelLock } from '../channel/lock.js';
 import { ChannelLoop, ChannelState } from '../channel/loop.js';
 import { TypingIndicator } from '../channel/typing.js';
@@ -170,6 +171,8 @@ export async function runCodex(
   });
   state.requestJournal = join(lockDir, `${key}.requests.json`);
   state.loadRequestJournal();
+  // Attachments go to a folder of no client's own (.buildit/attachments), not Claude Code's.
+  state.attachmentsDir = BRIDGE_ATTACHMENTS_DIR;
 
   // The bridge's tools, for its Codex child only (loopback, a secret for this run).
   const tools = new BridgeToolServer({
@@ -243,7 +246,7 @@ export async function runCodex(
     api,
     logger: logger.child({ component: 'channel' }),
     state,
-    notify: (params) => bridge.handle(params),
+    notify: (params, extra) => bridge.handle(params, extra),
     capabilities: () => suggestedCapabilities(options.capabilities),
     owns: () => lock.owns(),
     ...(deps.intervalMs === undefined ? {} : { intervalMs: deps.intervalMs }),

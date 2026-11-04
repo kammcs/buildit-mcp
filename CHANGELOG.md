@@ -15,6 +15,13 @@ All notable changes to buildit-mcp are listed here. The project follows [semanti
 - **Codex's requests:** the approvals become cards (below); questions, elicitations that aren't an MCP tool's approval, dynamic tool calls and the old v1 approvals are declined and logged; `currentTime/read` is answered; credential and attestation requests, and unknown methods, get "method not found".
 - **Tolerant:** unknown notifications, fields and item types are ignored, and lines that aren't JSON are skipped; logs carry methods, ids and statuses, never text.
 
+### Files for Codex sessions
+
+- **A client-neutral folder:** in bridge mode the attachments are saved in `.buildit/attachments/<session>/<message>/` (a `.gitignore` of `*`, the same caps, budget, reuse, cleanup and temp-folder fallback); channel mode for Claude Code keeps `.claude/buildit-attachments/`. `get_attachment`'s description names the folder of its mode. `disconnect` removes both folders, and `.buildit` when nothing else is in it.
+- **Images as images:** the owner's own saved images of a message (PNG, JPEG, GIF, WebP; at most 10; never a forwarded message's) also go into the turn as `{type: "localImage", path}` inputs after its text, which still lists every file. The channel loop hands a client its message's saved files besides the notification (`notify`'s second argument; Claude Code's channel ignores it).
+- **`reply` with files** works through the hosted tool with every existing check.
+- **Codex's home is a secret folder:** `~/.codex` (and `CODEX_HOME`, when set) joins the folders a session never shares from, in every mode.
+
 ### Codex's approvals as cards
 
 - **Four kinds:** `item/commandExecution/requestApproval` (a command, input to a running one, or a network request), `item/fileChange/requestApproval`, `item/permissions/requestApproval`, and `mcpServer/elicitation/request` with `_meta.codex_approval_kind = "mcp_tool_call"` each post a tool approval card through the session approvals API (the Claude Code plugin's cards: Approve and Deny, only the owner's tap answers), in the thread the Codex thread's turn answers (else the direct message's latest). The verdict is the JSON-RPC answer: `accept`, or `decline` (for permissions, exactly what was asked, `scope: "turn"`; for the MCP tool, `action: "accept"` with an empty `content` and no `_meta`).

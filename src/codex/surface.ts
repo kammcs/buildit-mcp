@@ -155,6 +155,7 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     { ref: 'v2/TurnStatus', values: ['completed', 'interrupted', 'failed'] },
     { ref: 'v2/MessagePhase', values: ['commentary', 'final_answer'] },
     { ref: 'v2/UserInput', variant: 'text', fields: ['text', 'text_elements'] },
+    { ref: 'v2/UserInput', variant: 'localImage', fields: ['path'] },
     { ref: 'v2/TurnError', fields: ['message', 'codexErrorInfo'] },
     { ref: 'CommandExecutionApprovalDecision', values: ['accept', 'decline'] },
     { ref: 'FileChangeApprovalDecision', values: ['accept', 'decline'] },

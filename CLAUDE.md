@@ -112,7 +112,8 @@ src/
   channel/approvals.ts  the session's open tool approvals (what ends them), and their journal
   channel/mask.ts       a tool approval's details: cleaned, credentials masked, cut; and
                         findCredentials, the same rules finding (the files' scan)
-  channel/attachments.ts  the session's attachments folder: the automatic download (caps,
+  channel/attachments.ts  the session's attachments folder (.claude/buildit-attachments, or
+                        .buildit/attachments in Codex bridge mode): the automatic download (caps,
                         budget, timeout, reuse), get_attachment's fetch, names, marks, cleanup
   channel/attachment-blocks.ts  how a message's files are shown (untrusted attachments blocks)
   channel/upload.ts     reply's files: the checks before any request, location removed, the

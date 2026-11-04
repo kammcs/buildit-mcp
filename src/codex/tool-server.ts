@@ -122,7 +122,7 @@ export function bridgeChannelTools(state: ChannelState, ask: AskOptions): ToolDe
   return [
     createReplyTool(state, { files: true }),
     createReplyTool(state, { files: false }),
-    createGetAttachmentTool(state),
+    createGetAttachmentTool(state, { folder: '.buildit/attachments' }),
     createAskTool(state, ask),
     createListThreadsTool(state),
     ...createHandoffTools(state),

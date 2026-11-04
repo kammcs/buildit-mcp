@@ -36,10 +36,15 @@
  * statuses only.
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 
 import { ApiError, type ApiClient } from '../api/client.js';
 import { postSessionMessage } from '../channel/api.js';
-import type { ChannelNotificationParams, ChannelState } from '../channel/loop.js';
+import type {
+  ChannelNotificationParams,
+  ChannelState,
+  NotificationExtra,
+} from '../channel/loop.js';
 import type { Logger } from '../log.js';
 import { REPLY_MAX_CHARS } from '../tools/reply.js';
 import { SERVER_NAME, SERVER_VERSION } from '../version.js';
@@ -185,6 +190,28 @@ interface Conversation {
 }
 
 const COMPLETED_MAX = 20;
+
+/** The image types Codex takes as a local image (the rest are only listed by path). */
+const IMAGE_TYPES: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+/** At most this many images go with one message (the rest are listed by path). */
+export const IMAGES_MAX = 10;
+
+/** The saved images of a message's own files, as `localImage` paths. */
+export function imagesOf(extra: NotificationExtra | undefined): string[] {
+  if (extra === undefined) return [];
+  return extra.files
+    .filter(
+      (f) => f.kind === 'image' && IMAGE_TYPES.has(f.type.toLowerCase()) && isAbsolute(f.path),
+    )
+    .slice(0, IMAGES_MAX)
+    .map((f) => f.path);
+}
 
 /** A UUID made from a name, so the same answer always gets the same message id. */
 export function stableUuid(name: string): string {
@@ -382,7 +409,7 @@ export class CodexBridge {
    * taken by Codex. Settles once Codex has accepted it; throws only when
    * the app-server is gone (the loop then stops without acknowledging).
    */
-  handle(n: ChannelNotificationParams): Promise<void> {
+  handle(n: ChannelNotificationParams, extra?: NotificationExtra): Promise<void> {
     if (n.meta.event === 'session_ended') {
       this.options.logger.warn('the buildIt.Social session ended; no more messages will arrive', {
         reason: n.meta.reason,
@@ -397,7 +424,7 @@ export class CodexBridge {
       return this.notice(n);
     }
     const conv = this.conversation(route.key);
-    const next = conv.queue.then(() => this.deliver(conv, route, n.content));
+    const next = conv.queue.then(() => this.deliver(conv, route, n.content, imagesOf(extra)));
     conv.queue = next.catch(() => undefined);
     return next;
   }
@@ -481,8 +508,23 @@ export class CodexBridge {
     return conv;
   }
 
-  private async deliver(conv: Conversation, route: Route, content: string): Promise<void> {
-    const input: UserInput[] = [{ type: 'text', text: content, text_elements: [] }];
+  private async deliver(
+    conv: Conversation,
+    route: Route,
+    content: string,
+    images: readonly string[] = [],
+  ): Promise<void> {
+    // The text (which lists every file's path), then the owner's images, so the model sees them.
+    const input: UserInput[] = [
+      { type: 'text', text: content, text_elements: [] },
+      ...images.map((path) => ({ type: 'localImage' as const, path })),
+    ];
+    if (images.length > 0) {
+      this.options.logger.info('images given to codex with the message', {
+        message_id: route.messageId,
+        count: images.length,
+      });
+    }
     let threadId = await this.ensureThread(conv);
     const running = conv.turn;
     if (running !== undefined) {
