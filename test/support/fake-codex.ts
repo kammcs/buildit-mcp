@@ -251,7 +251,8 @@ export class FakeAppServer {
     const ref = PROTOCOL['x-methods'].serverNotifications[method]?.params;
     if (ref === undefined) this.selfViolations.push(`notification ${method}: not in the subset`);
     else for (const e of schemaErrors(ref, params)) this.selfViolations.push(`${method} ${e}`);
-    this.write({ method, params });
+    // The real server adds emittedAtMs to every notification, outside params.
+    this.write({ method, params, emittedAtMs: Date.now() });
   }
 
   /** Anything, unchecked (unknown methods and fields). */
@@ -517,10 +518,11 @@ export class FakeAppServer {
     const live = (): boolean => !turn.done && !this.ended;
     const emitItem = (item: Json): void => {
       if (!live()) return;
+      // An agent message starts empty (the real server fills it in with deltas, which the bridge opts out of).
       this.notify('item/started', {
         threadId: thread.id,
         turnId: turn.id,
-        item,
+        item: item.type === 'agentMessage' ? { ...item, text: '' } : item,
         startedAtMs: Date.now(),
       });
       this.notify('item/completed', {
@@ -536,7 +538,15 @@ export class FakeAppServer {
       inputs: turn.inputs,
       signal: turn.abort.signal,
       agentMessage: (text, phase) => {
-        emitItem({ type: 'agentMessage', id: `msg_${randomUUID()}`, text, phase });
+        emitItem({
+          type: 'agentMessage',
+          id: `msg_${randomUUID()}`,
+          text,
+          phase,
+          memoryCitation: null,
+          delivery: null,
+          questions: null,
+        });
       },
       reasoning: () => {
         emitItem({ type: 'reasoning', id: `rs_${randomUUID()}`, summary: [], content: [] });
@@ -601,8 +611,19 @@ export class FakeAppServer {
   }
 }
 
+// The shapes below follow a real app-server's (test/fixtures/codex/smoke-0.166.0.jsonl).
 function turnObject(id: string, status: string, items: Json[] = []): Json {
-  return { id, items, status, error: null, startedAt: null, completedAt: null, durationMs: null };
+  return {
+    id,
+    rootTurnId: id,
+    items,
+    itemsView: items.length > 0 ? 'summary' : 'notLoaded',
+    status,
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null,
+  };
 }
 
 function threadObject(thread: FakeThread): Json {
@@ -613,11 +634,32 @@ function threadObject(thread: FakeThread): Json {
     createdAt: 1_793_000_000,
     updatedAt: 1_793_000_000,
     cwd: thread.cwd,
+    environments: [
+      { environmentId: 'local', cwd: thread.cwd, runtimeWorkspaceRoots: [thread.cwd] },
+    ],
+    extra: null,
+    forkedFromId: null,
+    parentThreadId: null,
     ephemeral: false,
+    section: null,
+    sectionEnteredAt: null,
+    historyMode: 'paginated',
     modelProvider: 'openai',
+    model: 'test-model',
+    reasoningEffort: 'low',
+    recencyAt: 1_793_000_000,
+    path: null,
+    originator: 'buildit_mcp',
+    canAcceptDirectInput: true,
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: null,
+    daybreakEnabled: null,
     preview: '',
     projectId: null,
-    source: 'appServer',
+    source: 'vscode',
     status: { type: 'idle' },
     turns: [],
   };

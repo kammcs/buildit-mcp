@@ -218,6 +218,37 @@ describe('buildit-mcp codex: turns and answers', () => {
     );
   });
 
+  it('keeps the order of two close messages after a turn has ended: the first starts a turn, the second joins it', async () => {
+    const s = api.sessions.open(token, 'demo-folder');
+    const codex = fake();
+    codex.onTurn = replyWith('first done');
+    await start(codex);
+    await waitFor(() => s.heartbeats.includes('online'));
+    api.sessions.postFrom(token, 'Count to 30');
+    await waitFor(() => posts().length === 1);
+    codex.onTurn = async (ctx) => {
+      await ctx.inputsReach(2);
+      ctx.agentMessage(`saw ${ctx.inputs.map((i) => text(i)).join(' then ')}`, 'final_answer');
+      ctx.complete();
+    };
+    // Both arrive in one poll, after the first turn completed.
+    api.sessions.postFrom(token, 'Stop counting');
+    const later = api.sessions.postFrom(token, 'Count to 200');
+    await waitFor(() => posts().length === 2);
+    const starts = codex.requests('turn/start');
+    const steers = codex.requests('turn/steer');
+    expect(starts.map((p) => text(p.input))).toEqual(['Count to 30', 'Stop counting']);
+    expect(steers.map((p) => text(p.input))).toEqual(['Count to 200']);
+    const second = codex.received.find(
+      (m) =>
+        m.method === 'turn/steer' &&
+        (m.params as { expectedTurnId?: string }).expectedTurnId !== undefined,
+    );
+    expect(second).toBeDefined();
+    expect(posts()[1]?.text).toBe('saw Stop counting then Count to 200');
+    expect(s.messages[1]).toMatchObject({ thread_id: later });
+  });
+
   it('starts a turn when the steer is refused, and the server joins it to the running turn', async () => {
     const s = api.sessions.open(token, 'demo-folder');
     const codex = fake();
@@ -394,8 +425,11 @@ describe('buildit-mcp codex: "is writing" and server requests', () => {
     const id = api.sessions.postFrom(token, 'Run echo hi');
     await waitFor(() => posts().length === 1);
     expect(answer).toMatchObject({ result: { decision: 'decline' } });
-    await waitFor(() => s.typings.at(-1)?.typing === false);
-    expect(s.typings.map((t) => t.typing)).toEqual([true, false, true, false]);
+    // Start, pause, resume, stop. The indicator's notices are separate requests, so the first
+    // three may reach the server in any order; the stop comes after the post.
+    await waitFor(() => s.typings.length === 4);
+    expect(s.typings.filter((t) => t.typing)).toHaveLength(2);
+    expect(s.typings[3]?.typing).toBe(false);
     expect(s.typings.every((t) => t.thread_id === id)).toBe(true);
     expect(logged(r, 'declined')).toBe(true);
     expect(r.logs.join('\n')).not.toContain('echo hi');

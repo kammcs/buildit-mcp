@@ -156,6 +156,7 @@ test/
   support/test-tools.ts stand-in tools across toolsets, for registry and transport tests
   support/fake-codex.ts a scripted fake codex app-server, validating the bridge's messages against
                         fixtures/codex/app-server-protocol.json (the vendored schema subset)
+  support/codex-replay.ts  plays a recorded real run (fixtures/codex/smoke-*.jsonl) back to the bridge
   *.test.ts             vitest
 scripts/
   codegen.ts, generate.ts  the generator (npm run generate)
@@ -169,6 +170,8 @@ scripts/
   codex-schema.ts, codex-protocol.ts  npm run codex:schema: the installed Codex's protocol schema,
                         checked against the bridge's surface and diffed with the vendored subset
   codex-smoke.ts        the bridge against the real app-server: real model turns, by hand only
+                        (--dry-run: against the fake; --preflight-only: the free checks)
+  codex-fixture.ts      a smoke run's transcript to a replay fixture (account and machine details out)
   privacy.ts            the privacy guard (npm run privacy, and privacy:pack over the packed
                         package; test/privacy.test.ts runs it too)
   conformance.ts        official conformance suite against HTTP mode, offline
