@@ -136,7 +136,27 @@ export interface ConnectOptions extends SessionCommandOptions {
   capabilities?: string[];
 }
 
-export type SessionCommand = 'connect' | 'disconnect' | 'status';
+/**
+ * `buildit-mcp codex`: the folder's session drives a Codex app-server (preview).
+ * Connects first when the folder has no session yet (with --project).
+ */
+export interface CodexOptions extends SessionCommandOptions {
+  /** Project keys for connecting first, upper-cased (none: the folder must be connected). */
+  projects: string[];
+  /** The session's name when connecting first. */
+  label: string;
+  /** connect's --yes, when connecting first. */
+  yes: boolean;
+  /** connect's --capabilities, when connecting first; also the tags the session suggests. */
+  capabilities?: string[];
+  /** The codex program (--codex-path, BUILDIT_CODEX_PATH); none: found on the PATH. */
+  codexPath?: string;
+  /** `key=value` overrides passed to `codex app-server -c` (repeatable -c / --config). */
+  codexConfig: string[];
+  logLevel: LogLevel;
+}
+
+export type SessionCommand = 'connect' | 'disconnect' | 'status' | 'codex';
 
 export type CliAction =
   | { kind: 'run'; config: Config }
@@ -144,7 +164,8 @@ export type CliAction =
   | { kind: 'version' }
   | { kind: 'connect'; options: ConnectOptions }
   | { kind: 'disconnect'; options: SessionCommandOptions }
-  | { kind: 'status'; options: SessionCommandOptions };
+  | { kind: 'status'; options: SessionCommandOptions }
+  | { kind: 'codex'; options: CodexOptions };
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -156,6 +177,7 @@ export const USAGE = `Usage: buildit-mcp [options]
        buildit-mcp connect --project <KEY> [--label <name>] [--folder <path>] [--api-url <url>]
        buildit-mcp disconnect [--folder <path>] [--api-url <url>]
        buildit-mcp status [--folder <path>] [--api-url <url>]
+       buildit-mcp codex [--project <KEY>] [--folder <path>] [-c key=value]
 
 An MCP server for buildIt.Social. By default it serves one person over stdio,
 with the personal access token in the BUILDIT_TOKEN environment variable.
@@ -170,6 +192,8 @@ Commands (run them in a terminal, in the folder where Claude Code runs):
                             saves the session token in the OS keychain
   disconnect                Forget this folder's saved session
   status                    Show this folder's session
+  codex                     Preview: connect this folder's session to Codex,
+                            through a "codex app-server" it starts
   Run "buildit-mcp <command> --help" for a command's options.
 
 Options (each also has an environment variable):
@@ -263,6 +287,34 @@ Options:
   --api-url <url>           BUILDIT_API_URL  Agent API base URL
   -h, --help                Show this help
 `,
+  codex: `Usage: buildit-mcp codex [options]
+
+Preview. Runs Codex for this folder's buildIt.Social session: it starts
+"codex app-server" (the codex program on the PATH, signed in with
+"codex login") as its only client, and the messages you send the agent in
+its direct message become Codex turns in this folder; Codex's answers are
+posted back. A message sent while Codex works joins the running turn. The
+conversation's Codex thread is resumed after a restart. Codex's own
+configuration decides the model, the sandbox and the approval policy; in
+this preview, requests for approval are declined. Stop it with Ctrl+C.
+
+Options:
+  --project <KEY>           Connect first, if the folder has no session yet:
+                            a project the session may reach (as for connect)
+  --label <name>            Connecting first: the session's name
+  --capabilities <tags>     Connecting first: the capability tags to suggest
+  --yes                     Connecting first: save without asking
+  --folder <path>           The folder (default: the working directory)
+  --api-url <url>           BUILDIT_API_URL  Agent API base URL
+  --codex-path <path>       BUILDIT_CODEX_PATH  The codex program (default: the
+                            one on the PATH; the npm package's native binary)
+  -c, --config <key=value>  A Codex configuration override for the app-server,
+                            as for "codex -c" (repeatable), for example
+                            -c model="<model>"
+  --log-level <level>       BUILDIT_LOG_LEVEL  ${LOG_LEVELS.join(', ')} (default info); logs go to
+                            stderr and never hold what people or Codex wrote
+  -h, --help                Show this help
+`,
   status: `Usage: buildit-mcp status [options]
 
 Shows the session saved for this folder: its agent, name, org and reach, and
@@ -275,7 +327,7 @@ Options:
 `,
 };
 
-const SESSION_COMMANDS: readonly SessionCommand[] = ['connect', 'disconnect', 'status'];
+const SESSION_COMMANDS: readonly SessionCommand[] = ['connect', 'disconnect', 'status', 'codex'];
 
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on']);
 const FALSE_VALUES = new Set(['0', 'false', 'no', 'off', '']);
@@ -578,12 +630,19 @@ function parseSessionCommand(
         'api-url': { type: 'string' },
         folder: { type: 'string' },
         help: { type: 'boolean', short: 'h' },
-        ...(command === 'connect'
+        ...(command === 'connect' || command === 'codex'
           ? {
               project: { type: 'string', multiple: true },
               label: { type: 'string' },
               capabilities: { type: 'string' },
               yes: { type: 'boolean' },
+            }
+          : {}),
+        ...(command === 'codex'
+          ? {
+              'codex-path': { type: 'string' },
+              config: { type: 'string', short: 'c', multiple: true },
+              'log-level': { type: 'string' },
             }
           : {}),
       },
@@ -601,6 +660,7 @@ function parseSessionCommand(
   const apiUrl = parseApiUrl(apiRaw);
   const note = apiUrlNote(apiRaw);
   const folder = folderOf(values.folder, env, cwd);
+  if (command === 'codex') return codexAction(values, env, cwd, { apiUrl, folder, apiFlag, note });
   if (command !== 'connect') {
     return {
       kind: command,
@@ -629,6 +689,54 @@ function parseSessionCommand(
       yes: values.yes === true,
       ...(capabilities === undefined ? {} : { capabilities }),
       ...(note === undefined ? {} : { apiUrlNote: note }),
+    },
+  };
+}
+
+/** `buildit-mcp codex`'s options, checked. */
+function codexAction(
+  values: Record<string, string | boolean | string[] | undefined>,
+  env: Env,
+  cwd: string,
+  base: { apiUrl: string; folder: string; apiFlag: unknown; note: string | undefined },
+): CliAction {
+  const projectFlags = values.project;
+  const projects =
+    Array.isArray(projectFlags) && projectFlags.length > 0 ? parseProjects(projectFlags) : [];
+  const label = sessionLabel(
+    typeof values.label === 'string' ? values.label : undefined,
+    base.folder,
+  );
+  const capabilities =
+    typeof values.capabilities === 'string'
+      ? capabilitiesOption(values.capabilities, '--capabilities')
+      : undefined;
+  const pathFlag = values['codex-path'];
+  const codexPath = typeof pathFlag === 'string' ? pathFlag : nonEmpty(env.BUILDIT_CODEX_PATH);
+  if (codexPath?.trim() === '') throw new ConfigError('--codex-path must not be empty.');
+  const configFlags = values.config;
+  const codexConfig = Array.isArray(configFlags) ? configFlags : [];
+  for (const c of codexConfig) {
+    if (!/^[A-Za-z0-9_.-]+=/.test(c)) {
+      throw new ConfigError('-c takes key=value, for example -c model="<model>".');
+    }
+  }
+  const levelFlag = values['log-level'];
+  const levelRaw = typeof levelFlag === 'string' ? levelFlag : nonEmpty(env.BUILDIT_LOG_LEVEL);
+  return {
+    kind: 'codex',
+    options: {
+      apiUrl: base.apiUrl,
+      folder: base.folder,
+      apiUrlFlag: typeof base.apiFlag === 'string',
+      ...(base.note === undefined ? {} : { apiUrlNote: base.note }),
+      projects,
+      label,
+      yes: values.yes === true,
+      ...(capabilities === undefined ? {} : { capabilities }),
+      ...(codexPath === undefined ? {} : { codexPath: resolve(cwd, codexPath.trim()) }),
+      codexConfig,
+      logLevel: levelRaw === undefined ? 'info' : parseLogLevel(levelRaw),
     },
   };
 }

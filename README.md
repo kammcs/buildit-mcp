@@ -546,6 +546,37 @@ Each folder and deployment has its own entry, named by a hash of the folder's re
 - **WSL:** it can't reach Windows Credential Manager, so the token goes to the file in your Linux home. Run `connect` inside WSL if Claude Code runs there.
 - **`spawn npx ENOENT` on Windows:** use `cmd /c npx` as above.
 
+## Codex (bridge mode)
+
+> **Preview.** The bridge's core only: the direct message, turns, answers, "is writing" and restarts. Tools inside Codex, approval and question cards, work items, requests and files come in later versions. Its options and behaviour may change in any release.
+
+`buildit-mcp codex` connects a folder's buildIt.Social session to [Codex](https://github.com/openai/codex) instead of Claude Code. It starts `codex app-server` (Codex's JSON-RPC server, over stdio) as its only client, and runs in a terminal until you stop it:
+
+```sh
+npm install -g @openai/codex       # then sign in once: codex login
+cd <your folder>
+npx -y @kammcs/buildit-mcp@latest codex --project DEMO
+```
+
+- **Connecting:** with `--project`, a folder that has no session yet is connected first, exactly as `connect` does (a code to approve in the app). A connected folder needs no `--project`.
+- **Messages:** what you send your agent in its direct message becomes a Codex turn in the folder, with your text. A message sent while Codex is still working joins the running turn (it is steered in) instead of waiting. The direct message is one Codex conversation, as it is for a Claude Code session.
+- **Answers:** the turn's final answer is posted in the thread of your latest message (split at 4,000 characters); Codex's progress notes are not. "Your agent is writing..." shows while the turn runs, and pauses while Codex waits on something.
+- **Restarts:** the conversation's Codex thread is resumed when the bridge starts again, so Codex keeps its context. Only the thread's id is kept, next to the folder's lock files; Codex keeps the history in its own home folder.
+- **Codex's own settings apply:** your Codex configuration decides the model, the reasoning effort, the sandbox and the approval policy. `-c key=value` (repeatable) passes an override to the app-server, as `codex -c` does, for example `-c model="<model>"`. In this preview, when Codex asks to run a command, change files or ask you something, the bridge declines (and logs it), and Codex goes on without it: cards for these come later. Choose an approval policy and sandbox that suit that.
+- **One channel per folder:** the bridge takes the folder's channel as the Claude Code plugin does, so it won't start while Claude Code's channel runs in the same folder (and vice versa).
+- **The program:** the `codex` on the `PATH` is used; when it is npm's shim, the bridge starts the native binary it wraps. `--codex-path` (or `BUILDIT_CODEX_PATH`) names another one.
+- **Logs** go to stderr (`--log-level debug` for more) and never hold what you or Codex wrote. Ctrl+C stops it: the session goes offline and the app-server exits.
+
+### Tested Codex versions
+
+The app-server protocol is marked experimental by Codex and changes often, so the bridge checks the version Codex reports when it starts: older than the minimum, it refuses to start; newer than the lines below, it starts and logs a warning.
+
+| buildit-mcp | Oldest Codex | Tested Codex lines |
+| ----------- | ------------ | ------------------ |
+| unreleased  | 0.166.0      | 0.166              |
+
+`npm run codex:schema` (in a clone) regenerates the protocol's schema from your installed Codex (`codex app-server generate-json-schema`, which runs no model and needs no sign-in) and checks every method and field the bridge uses against it: it fails when one is gone, and lists the other changes.
+
 ## HTTP mode
 
 ```sh
@@ -637,6 +668,7 @@ npm run bundle        # build the Claude Desktop bundle (.mcpb) and smoke-test i
 npm run conformance   # official MCP conformance suite, offline
 npm run generate      # regenerate src/api/generated/ from openapi/openapi.json
 npm run privacy       # check that no file holds private details (the tests run it too)
+npm run codex:schema  # check the installed Codex's app-server protocol against the bridge (no model turns)
 ```
 
 See [CLAUDE.md](CLAUDE.md) for the architecture and how to add a tool, and [docs/releasing.md](docs/releasing.md) for how a release ships. Tests never call a real buildIt.Social server. [evals/](evals/README.md) has realistic tasks a maintainer runs by hand with a real client against a test org.

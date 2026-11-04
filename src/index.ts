@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /**
  * The buildit-mcp command. stdio by default; Streamable HTTP with --http;
- * a Claude Code channel with --channel; and the session commands
- * (connect, disconnect, status), which run in a terminal.
+ * a Claude Code channel with --channel; the session commands (connect,
+ * disconnect, status), which run in a terminal; and codex (preview), which
+ * runs the folder's session through a Codex app-server.
  */
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
 import { acquireChannelLock, defaultLockDir, type ChannelLock } from './channel/lock.js';
+import { runCodex } from './cli/codex.js';
 import { runConnect, runDisconnect, runStatus, type CommandIO } from './cli/commands.js';
 import { COMMAND_USAGE, ConfigError, parseApiUrl, parseCli, USAGE } from './config.js';
 import { createLogger } from './log.js';
@@ -40,7 +42,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (action.kind === 'connect' || action.kind === 'disconnect' || action.kind === 'status') {
+  if (
+    action.kind === 'connect' ||
+    action.kind === 'disconnect' ||
+    action.kind === 'status' ||
+    action.kind === 'codex'
+  ) {
     if (action.options.apiUrlNote !== undefined) {
       process.stdout.write(`${action.options.apiUrlNote}\n`);
     }
@@ -68,6 +75,21 @@ async function main(): Promise<void> {
         }
       },
     };
+    if (action.kind === 'codex') {
+      // Stops on Ctrl+C or SIGTERM: the session goes offline, the app-server's stdin closes.
+      const stop = new Promise<void>((resolve) => {
+        process.once('SIGINT', () => {
+          resolve();
+        });
+        process.once('SIGTERM', () => {
+          resolve();
+        });
+      });
+      process.exitCode = await runCodex(action.options, io, { stop });
+      // Nothing runs once the bridge has stopped: a lingering socket must not keep the process up.
+      setTimeout(() => process.exit(), 1000).unref();
+      return;
+    }
     process.exitCode =
       action.kind === 'connect'
         ? await runConnect(action.options, io)

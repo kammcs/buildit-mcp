@@ -2,6 +2,25 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## [Unreleased]
+
+### Codex bridge (preview)
+
+- **`buildit-mcp codex`** (new, preview): the folder's buildIt.Social session drives Codex instead of Claude Code. It starts `codex app-server` over stdio (the native binary, also when the `codex` on the `PATH` is npm's shim; `--codex-path` or `BUILDIT_CODEX_PATH` for another) and is its only client. With `--project`, a folder without a session is connected first; `-c key=value` passes Codex configuration overrides to the app-server. It takes the folder's channel lock as the plugin's server does, uses the same journals, and stops on Ctrl+C (offline), when the app-server exits (exit code 1), or when the session ends.
+- **The handshake:** `initialize` with the experimental API on and the streaming delta notifications off. A Codex older than 0.166.0 is refused; one newer than the tested 0.166 line starts with a warning.
+- **The direct message:** the owner's message becomes `turn/start`, or `turn/steer` into the running turn (a refused steer starts a turn). The final answer (`agentMessage` with `phase: "final_answer"`, else the last one without a phase; never commentary) is posted when the turn completes, in the thread of the latest message that joined it, split at 4,000 characters, with message ids made from the turn and item ids so a retry never posts twice. It isn't posted when the model already replied in that thread during the turn (reply now tells the session when it posts). An interrupted or failed turn posts nothing.
+- **"is writing"** runs from `turn/started` to `turn/completed` in every thread that joined the turn, kept up by the turn's items, and pauses while the thread waits on an approval or the person's input.
+- **Threads across restarts:** the conversation's Codex thread id is kept next to the folder's lock files, for the session it belongs to, and resumed with `thread/resume` (`excludeTurns`). A thread that never had a turn, or that can't be resumed, is started fresh.
+- **Codex's requests** (command, file change and permission approvals, MCP elicitations, questions, dynamic tool calls) are declined and logged until cards for them exist; `currentTime/read` is answered; credential and attestation requests, and unknown methods, get "method not found". Nothing is ever approved.
+- **Tolerant:** unknown notifications, fields and item types are ignored, and lines that aren't JSON are skipped; logs carry methods, ids and statuses, never text.
+
+### Contract checks for Codex
+
+- **A fake app-server** for the tests (`test/support/fake-codex.ts`): a scripted JSON-RPC peer that validates every message the bridge sends against the protocol schema generated from Codex 0.166.0 (with ajv, a new dev dependency), flags fields Codex doesn't know, checks its own transcripts too, and plays turns, steering, interrupts, approvals, restarts with resume, and unknown methods and fields.
+- **`npm run codex:schema`** regenerates the schema from the installed Codex (no model turn), checks every method, field, variant and value the bridge relies on, and diffs the subset it uses against the vendored one (`--write` updates it). The README has the tested-range table.
+- **Vendored from Codex:** only the protocol types (`src/codex/protocol.ts`) and the schema subset (`test/fixtures/codex/app-server-protocol.json`) the bridge uses, with Codex's Apache-2.0 notice (`test/fixtures/codex/LICENSE-codex`).
+- **`scripts/codex-smoke.ts`:** the bridge's smoke test against the real app-server (4 turns, at most 5, on the model you name, in an empty folder), with buildIt.Social's side in process. It runs real model turns, so it runs only by hand, with `--approved`.
+
 ## [0.16.0] - 2026-11-04
 
 Built on version 1.25.0 of the agent API's contract (`openapi.json` copied from the API and regenerated; it includes 1.24.0's `get_session_card`, which `ask` already reads where it is served), and works with servers from 1.19.0 through 1.25.0. A line for another session needs 1.25.0: on an older server it is refused before any call, and everything else works as in 0.15.0.

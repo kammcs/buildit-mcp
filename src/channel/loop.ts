@@ -315,6 +315,16 @@ export class ChannelState {
    * approval then reads its state, or ends when the session is off or gone).
    */
   readonly pollFailed = new Set<(err: unknown) => void>();
+  /**
+   * Told of each post reply made, with its thread (the Codex bridge then
+   * doesn't post a turn's final answer there again).
+   */
+  readonly postedListeners = new Set<(threadId: string) => void>();
+  /** reply posted in this thread. */
+  notePosted(threadId: string | undefined): void {
+    if (threadId === undefined) return;
+    for (const listener of [...this.postedListeners]) listener(threadId);
+  }
 }
 
 /** Why the loop ended for good. */
