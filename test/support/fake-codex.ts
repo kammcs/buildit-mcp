@@ -186,6 +186,15 @@ export class FakeAppServer {
   failTurnStart: { code: number; message: string }[] = [];
   /** Never answer turn/start (tests: the app-server dies meanwhile). */
   hangTurnStart = false;
+  /**
+   * Fail to start (tests): at initialize, write these lines to stderr and
+   * exit 1 without an answer, as the real one does for a setting it refuses.
+   */
+  failStart: string[] | undefined;
+  /** What it wrote to stderr. */
+  private readonly stderrLines: string[] = [];
+  /** Whether the bridge said the handshake was done (stderr no longer kept). */
+  startedCalled = false;
   /** Answer turn/steer with these errors first (tests: the turn ended meanwhile). */
   failSteer: { code: number; message: string }[] = [];
   private readonly threads = new Map<string, FakeThread>();
@@ -279,6 +288,13 @@ export class FakeAppServer {
     stop: async () => {
       this.fromBridge.end();
       return this.exitedPromise;
+    },
+    startupStderr: async () => {
+      await Promise.race([this.exitedPromise, new Promise((r) => setTimeout(r, 1000))]);
+      return [...this.stderrLines];
+    },
+    started: () => {
+      this.startedCalled = true;
     },
   };
 
@@ -432,6 +448,11 @@ export class FakeAppServer {
       for (const e of unknownFields(ref, params)) this.violations.push(`${method} ${e}`);
     }
     const p = (params ?? {}) as Json;
+    if (method === 'initialize' && this.failStart !== undefined) {
+      this.stderrLines.push(...this.failStart);
+      this.exit(1);
+      return;
+    }
     if (method === 'initialize') {
       const info = (p.clientInfo ?? {}) as Json;
       const name = typeof info.name === 'string' ? info.name : 'client';

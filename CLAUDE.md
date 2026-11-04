@@ -141,6 +141,7 @@ src/
                         cards: the diffs from fileChange items, masking, decline unless shown in full,
                         closed on serverRequest/resolved, unassign, stop and exit
   codex/policy.ts       where Codex's config sends approvals: the warning, and the note status reads
+  codex/startup.ts      why the app-server didn't start: its first stderr line and the likely cause
   codex/server-requests.ts  the rest of the app-server's requests: declined, the clock, "method not found"
   codex/rpc.ts          the JSON-RPC connection to the app-server (stdio, one JSON object a line)
   codex/process.ts      starting and ending the app-server child

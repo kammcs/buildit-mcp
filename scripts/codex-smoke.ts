@@ -37,9 +37,11 @@
  * into the repository.
  *
  * Parity (--only parity): four turns, at most five, with Codex asking
- * before anything it runs (`approval_policy="untrusted"`,
- * `approvals_reviewer="user"`, `sandbox_mode="workspace-write"`). The
- * in-process owner answers every approval card itself (no one taps):
+ * before anything that writes (`approval_policy="on-request"`,
+ * `approvals_reviewer="user"`, `sandbox_mode="read-only"`: a write needs
+ * the sandbox lifted, which Codex asks for; Codex 0.166 refuses to start
+ * with the old `untrusted` policy). The in-process owner answers every
+ * approval card itself (no one taps):
  *   A. tools + image  an image attached; "call whoami, then post with reply" ->
  *                     a localImage input, whoami and reply over the hosted tools,
  *                     the reply in the message's own thread, no second post
@@ -156,8 +158,8 @@ const fakeSpawn: SpawnAppServer = (args, env) => {
 /** The parity prompts (the dry run's fake plays a turn for each). */
 const PARITY = {
   a: 'Call the buildit whoami tool. Then post one short message with the buildit reply tool, without thread_id or item: the word pong, and in three words or fewer what the attached image shows. Do nothing else; your final answer can be empty.',
-  b: 'Run exactly this shell command once, in this folder: echo smoke > out.txt . Then share out.txt with the buildit reply tool (its files parameter), with the text "out.txt". Do nothing else.',
-  c: 'Run exactly this shell command once, in this folder: echo declined > denied.txt . If it is not allowed, reply only with the word declined. Do nothing else.',
+  b: 'Your sandbox here is read-only, so run exactly this shell command once, in this folder, with escalated permissions (ask for approval to run it outside the sandbox): echo smoke > out.txt . Then share out.txt with the buildit reply tool (its files parameter), with the text "out.txt". Do nothing else.',
+  c: 'Your sandbox here is read-only, so run exactly this shell command once, in this folder, with escalated permissions (ask for approval to run it outside the sandbox): echo declined > denied.txt . If it is not allowed, reply only with the word declined. Do nothing else.',
   d: 'Create a file named hello.txt in this folder, containing the single line hi, with your file editing tool (apply_patch), not a shell command. Then reply only with the word done.',
 } as const;
 
@@ -368,7 +370,36 @@ async function hostedToolsCheck(): Promise<string> {
   }
 }
 
+/** Codex asks before anything that writes, and the owner answers: the parity turns' settings. */
+const PARITY_CONFIG = [
+  'approval_policy="on-request"',
+  'approvals_reviewer="user"',
+  'sandbox_mode="read-only"',
+];
+
 if (!dryRun) console.log(`Hosted tools (no turn): ${await hostedToolsCheck()}`);
+
+// Free (no turn): the parity settings start, and a thread shows them.
+if (!dryRun && parity) {
+  const shown = await freeSession([...config, ...PARITY_CONFIG], async (conn) => {
+    const r = await conn.request<{
+      approvalPolicy?: unknown;
+      approvalsReviewer?: unknown;
+      sandbox?: { type?: unknown };
+    }>('thread/start', { cwd: work, ephemeral: true });
+    return { policy: r.approvalPolicy, reviewer: r.approvalsReviewer, sandbox: r.sandbox?.type };
+  }).catch((err: unknown) => {
+    console.error(
+      `The parity settings don't start: ${err instanceof Error ? err.message : String(err)}; not running any turn.`,
+    );
+    process.exit(2);
+  });
+  console.log(`Parity settings (no turn): ${JSON.stringify(shown)}`);
+  if (shown.policy !== 'on-request' || shown.reviewer !== 'user' || shown.sandbox !== 'readOnly') {
+    console.error('The parity settings did not apply; not running any turn.');
+    process.exit(2);
+  }
+}
 if (preflightOnly) process.exit(0);
 
 // What the wire shows: new turns, their ends, the steers, the resumes, and the token usage.
@@ -536,13 +567,6 @@ async function bridgeRun(): Promise<{ bridge: CodexBridge; stop: () => Promise<n
 
 /** The `_meta` keys Codex's tool calls carried (parity), as the bridge logged them. */
 const metaKeys = new Set<string>();
-
-/** Codex asks before anything it runs, and the owner answers: the parity turns' settings. */
-const PARITY_CONFIG = [
-  'approval_policy="untrusted"',
-  'approvals_reviewer="user"',
-  'sandbox_mode="workspace-write"',
-];
 
 const report: string[] = [];
 const say = (text: string): void => {

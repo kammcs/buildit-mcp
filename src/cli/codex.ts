@@ -36,7 +36,8 @@ import {
   type CodexOptions,
 } from '../config.js';
 import { policyNotePath, writePolicyNote } from '../codex/policy.js';
-import { createLogger } from '../log.js';
+import { likelyCause, usefulLine } from '../codex/startup.js';
+import { createLogger, scrubString } from '../log.js';
 import { forgetSession, savedApiUrl, sessionKey } from '../secrets/keychain.js';
 import { hookWaitSeconds } from '../transports/stdio.js';
 import { compareVersions, SERVER_VERSION } from '../version.js';
@@ -234,12 +235,23 @@ export async function runCodex(
 
   try {
     await bridge.initialize();
+    proc.started?.();
   } catch (err) {
-    io.err(
-      err instanceof CodexVersionError
-        ? `${err.message}\n`
-        : `The Codex app-server did not start: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
+    if (err instanceof CodexVersionError) {
+      io.err(`${err.message}\n`);
+    } else {
+      // What it said while starting, to the terminal only (scrubbed), with the likely cause.
+      const said = usefulLine((await proc.startupStderr?.()) ?? []);
+      const line = said === undefined ? undefined : scrubString(said, [token, bridgeSecret]);
+      io.err(
+        [
+          `The Codex app-server did not start: ${err instanceof Error ? err.message : String(err)}`,
+          ...(line === undefined ? [] : [`It said: ${line}`]),
+          likelyCause(line, options.codexConfig),
+        ].join('\n') + '\n',
+      );
+      logger.error('the codex app-server did not start', { said_something: line !== undefined });
+    }
     await shutdown();
     return err instanceof CodexVersionError ? 2 : 1;
   }
