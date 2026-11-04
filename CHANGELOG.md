@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## [Unreleased]
+## [0.16.0] - 2026-11-04
 
 Built on version 1.25.0 of the agent API's contract (`openapi.json` copied from the API and regenerated; it includes 1.24.0's `get_session_card`, which `ask` already reads where it is served), and works with servers from 1.19.0 through 1.25.0. A line for another session needs 1.25.0: on an older server it is refused before any call, and everything else works as in 0.15.0.
 
