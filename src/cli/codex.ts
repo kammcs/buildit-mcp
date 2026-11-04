@@ -28,10 +28,12 @@ import { CodexBridge, CodexVersionError } from '../codex/bridge.js';
 import { spawnAppServer, type SpawnAppServer } from '../codex/process.js';
 import { AppServerConnection } from '../codex/rpc.js';
 import { ThreadMap } from '../codex/thread-map.js';
+import type { Worktrees } from '../codex/worktrees.js';
 import { BridgeToolServer, newBridgeSecret } from '../codex/tool-server.js';
 import {
   DEFAULT_APPROVAL_TIMEOUT_MINUTES,
   DEFAULT_ASK_TIMEOUT_MINUTES,
+  DEFAULT_MAX_PARALLEL_ITEMS,
   parseApiUrl,
   type CodexOptions,
 } from '../config.js';
@@ -62,6 +64,8 @@ export interface CodexDeps {
   onReady?: (bridge: CodexBridge, state: ChannelState) => void;
   /** For tests: the approval cards' timing (a wait in seconds, and milliseconds per second). */
   approvals?: { msPerSecond?: number; now?: () => number; waitS?: number };
+  /** For tests: the items' worktrees (false: items work in the folder). */
+  worktrees?: Worktrees | false;
 }
 
 /** Runs the bridge until it is stopped; the exit code. */
@@ -210,6 +214,9 @@ export async function runCodex(
     threads: new ThreadMap(join(lockDir, `${key}.codex-threads.json`), logger),
     folder: options.folder,
     toolServer: tools,
+    maxParallel: options.ask?.maxParallelItems ?? DEFAULT_MAX_PARALLEL_ITEMS,
+    keepPlugins: options.keepPlugins === true,
+    ...(deps.worktrees === undefined ? {} : { worktrees: deps.worktrees }),
     approvals: {
       inApp: options.approvals?.inApp ?? true,
       waitS: hookWaitSeconds(options.approvals?.timeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES),
@@ -276,6 +283,13 @@ export async function runCodex(
     },
   });
   const running = loop.start();
+  // Once the session is known, items whose work a restart cut short carry on.
+  const restoring = (async () => {
+    while (state.session === undefined && !loop.isStopped()) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (state.session !== undefined) bridge.restore();
+  })();
   deps.onReady?.(bridge, state);
   io.out(
     'buildit-mcp codex (preview): messages to your agent in buildIt.Social now go to Codex in this folder. Press Ctrl+C to stop.\n',
@@ -288,6 +302,7 @@ export async function runCodex(
   ]);
   if (outcome === 'exited') logger.error('the codex app-server exited; stopping');
   await loop.stop();
+  await restoring;
   await shutdown();
   if (outcome === 'stopped') return 0;
   if (outcome === 'loop' && !status.ended && !connection.closed) return 0;

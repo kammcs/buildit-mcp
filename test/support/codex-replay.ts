@@ -91,6 +91,8 @@ const COMPARED = ['threadId', 'expectedTurnId', 'turnId', 'excludeTurns'] as con
  */
 export const NEWER_REQUESTS: Readonly<Record<string, unknown>> = {
   'config/read': { config: { approval_policy: null, approvals_reviewer: null }, origins: {} },
+  'skills/extraRoots/set': {},
+  'skills/list': { data: [] },
 };
 
 export class ReplayAppServer {

@@ -60,7 +60,7 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     },
     'thread/resume': {
       result: 'v2/ThreadResumeResponse',
-      sends: ['threadId', 'excludeTurns', 'config'],
+      sends: ['threadId', 'excludeTurns', 'cwd', 'config'],
       reads: ['thread.id', 'approvalPolicy', 'approvalsReviewer'],
     },
     'turn/start': {
@@ -77,6 +77,20 @@ export const BRIDGE_SURFACE: BridgeSurface = {
       result: 'v2/TurnInterruptResponse',
       sends: ['threadId', 'turnId'],
     },
+    'thread/unsubscribe': {
+      result: 'v2/ThreadUnsubscribeResponse',
+      sends: ['threadId'],
+      reads: ['status'],
+    },
+    'skills/extraRoots/set': {
+      result: 'v2/SkillsExtraRootsSetResponse',
+      sends: ['extraRoots'],
+    },
+    'skills/list': {
+      result: 'v2/SkillsListResponse',
+      sends: ['cwds', 'forceReload'],
+      reads: ['data'],
+    },
     'config/read': {
       result: 'v2/ConfigReadResponse',
       sends: ['cwd'],
@@ -85,6 +99,9 @@ export const BRIDGE_SURFACE: BridgeSurface = {
   },
   clientNotifications: ['initialized'],
   serverNotifications: {
+    'thread/started': {
+      reads: ['thread.id', 'thread.parentThreadId', 'thread.agentNickname', 'thread.agentRole'],
+    },
     'turn/started': { reads: ['threadId', 'turn.id'] },
     'turn/completed': {
       reads: ['threadId', 'turn.id', 'turn.status', 'turn.error', 'turn.items'],
@@ -156,6 +173,15 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     { ref: 'v2/MessagePhase', values: ['commentary', 'final_answer'] },
     { ref: 'v2/UserInput', variant: 'text', fields: ['text', 'text_elements'] },
     { ref: 'v2/UserInput', variant: 'localImage', fields: ['path'] },
+    { ref: 'v2/UserInput', variant: 'skill', fields: ['name', 'path'] },
+    {
+      ref: 'v2/ThreadItem',
+      variant: 'collabAgentToolCall',
+      fields: ['senderThreadId', 'receiverThreadIds'],
+    },
+    { ref: 'v2/ThreadItem', variant: 'subAgentActivity', fields: ['agentThreadId', 'agentPath'] },
+    { ref: 'v2/SkillsListEntry', fields: ['skills'] },
+    { ref: 'v2/SkillMetadata', fields: ['name', 'path', 'enabled'] },
     { ref: 'v2/TurnError', fields: ['message', 'codexErrorInfo'] },
     { ref: 'CommandExecutionApprovalDecision', values: ['accept', 'decline'] },
     { ref: 'FileChangeApprovalDecision', values: ['accept', 'decline'] },

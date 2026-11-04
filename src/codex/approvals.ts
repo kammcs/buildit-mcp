@@ -30,6 +30,10 @@
  *   approvals journal). Each of those answers decline when an answer is
  *   still owed.
  *
+ * A Codex subagent's request (its thread spawned by a conversation's turn)
+ * goes to that conversation's thread, with a first field naming the
+ * subagent.
+ *
  * Anything else Codex asks (questions, other elicitations, dynamic tools,
  * the old v1 approvals, unknown methods) goes to the fallback router,
  * which declines it safely.
@@ -314,6 +318,8 @@ export interface CodexApprovalsOptions {
   folder?: string;
   /** The buildIt.Social thread a Codex thread's cards go in (undefined: the direct message, new). */
   threadFor: (codexThreadId: string | undefined) => string | undefined;
+  /** A subagent's name when the Codex thread is one (its cards name it); undefined otherwise. */
+  subagentOf?: (codexThreadId: string | undefined) => string | undefined;
   /** Milliseconds per second of waiting (tests). */
   msPerSecond?: number;
   now?: () => number;
@@ -420,6 +426,9 @@ export class CodexApprovals implements ServerRequestRouter {
         break;
     }
     if (spec === undefined) return this.options.fallback.handle(request);
+    // A Codex subagent's request: its card goes to the parent's thread, and says whose it is.
+    const subagent = this.options.subagentOf?.(str(p.threadId));
+    if (subagent !== undefined) spec = { ...spec, input: { subagent, ...spec.input } };
     return this.ask(request.id, p, spec);
   }
 

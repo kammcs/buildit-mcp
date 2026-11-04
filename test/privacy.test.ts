@@ -147,6 +147,25 @@ describe('the privacy guard over the published package', () => {
     ]);
   });
 
+  it("passes the plugin's skills, and nothing else of the plugin", () => {
+    const { findings } = scanPackage(
+      gzipSync(
+        tar({
+          ...clean,
+          'package/plugin/skills/buildit-requests/SKILL.md': '# Requests',
+          'package/plugin/skills/buildit-requests/notes.txt': '',
+          'package/plugin/hooks/hooks.json': '{}',
+          'package/plugin/agents/buildit-item-worker.md': '',
+        }),
+      ),
+    );
+    expect(findings.filter((f) => f.rule === 'pack-contents').map((f) => f.file)).toEqual([
+      'plugin/agents/buildit-item-worker.md',
+      'plugin/hooks/hooks.json',
+      'plugin/skills/buildit-requests/notes.txt',
+    ]);
+  });
+
   it('flags a package without the built server', () => {
     const unbuilt: Record<string, string> = { ...clean };
     delete unbuilt['package/dist/index.js'];

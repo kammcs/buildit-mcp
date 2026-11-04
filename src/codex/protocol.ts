@@ -72,6 +72,21 @@ export interface Thread {
   status?: ThreadStatus;
   cwd?: string;
   cliVersion?: string;
+  /** Set on a subagent's thread: the thread that spawned it. */
+  parentThreadId?: string | null;
+  /** A spawned subagent's nickname and role, when Codex gave it one. */
+  agentNickname?: string | null;
+  agentRole?: string | null;
+}
+
+/** thread/started: a thread the server started (a subagent's too). */
+export interface ThreadStartedNotification {
+  thread: Thread;
+}
+
+/** thread/unsubscribe: this client stops following a thread (it may unload). */
+export interface ThreadUnsubscribeParams {
+  threadId: string;
 }
 
 export interface ThreadStartParams {
@@ -106,6 +121,8 @@ export interface ConfigReadResponse {
 
 export interface ThreadResumeParams {
   threadId: string;
+  /** The folder the resumed thread works in (an item's worktree, made again). */
+  cwd?: string | null;
   /** Leave `thread.turns` empty: the bridge never reads the history. */
   excludeTurns?: boolean;
   /** Config overrides for the resumed thread (the hosted tools' URL is new each run). */
@@ -114,9 +131,33 @@ export interface ThreadResumeParams {
 
 export type ThreadResumeResponse = ThreadStartResponse;
 
-/** One input item of a turn. The bridge sends text (files and images come later). */
+/** One input item of a turn: text, an image on disk, or a skill Codex lists (its SKILL.md). */
 export type UserInput =
-  { type: 'text'; text: string; text_elements: unknown[] } | { type: 'localImage'; path: string };
+  | { type: 'text'; text: string; text_elements: unknown[] }
+  | { type: 'localImage'; path: string }
+  | { type: 'skill'; name: string; path: string };
+
+/** skills/extraRoots/set: more folders Codex reads skills from (absolute paths). */
+export interface SkillsExtraRootsSetParams {
+  extraRoots: string[];
+}
+
+/** skills/list: the skills for these folders (forceReload: read the roots again). */
+export interface SkillsListParams {
+  cwds?: string[];
+  forceReload?: boolean;
+}
+
+/** A collaboration mode (experimental): `plan`, or `default`. */
+export interface CollaborationMode {
+  mode: 'plan' | 'default';
+  settings: {
+    model: string;
+    reasoning_effort: string | null;
+    /** null: the mode's built-in instructions. */
+    developer_instructions: string | null;
+  };
+}
 
 export type TurnStatus = 'completed' | 'interrupted' | 'failed' | 'inProgress';
 
@@ -135,6 +176,8 @@ export interface Turn {
 export interface TurnStartParams {
   threadId: string;
   input: UserInput[];
+  /** Experimental: the turn's collaboration mode (plan, or back to default); it stays for later turns. */
+  collaborationMode?: CollaborationMode | null;
 }
 
 export interface TurnStartResponse {

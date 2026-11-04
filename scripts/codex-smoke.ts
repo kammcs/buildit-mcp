@@ -14,6 +14,9 @@
  *   npx tsx scripts/codex-smoke.ts --approved --only parity --model <id> --cwd <empty folder>
  *                                   (the hosted tools, approvals and files: 4 turns, at most 5;
  *                                   see "Parity" below)
+ *   npx tsx scripts/codex-smoke.ts --approved --only threads --model <id> --cwd <empty folder>
+ *                                   (work items in their own threads and worktrees: 3 turns, at
+ *                                   most 4; see "Threads" below)
  *
  * Four turns, at most five (the script stops before a sixth):
  *   1. reply      "Reply with the single word pong."  -> a post
@@ -51,7 +54,19 @@
  *   D. file change    a file made with Codex's edit tool -> a file_change card
  *                     with its diff, approved -> the file written
  * This one writes in the folder (out.txt, hello.txt): give it a throwaway one.
+ *
+ * Threads (--only threads): three turns, at most four, on two work items
+ * (the fake API's DEMO-44 and DEMO-45). The empty folder becomes a git
+ * repository with one empty commit, so each item gets its own worktree in
+ * `.buildit/worktrees/`; the in-process owner denies any card:
+ *   A. two at once  a mention in each item's thread, posted together ("reply with
+ *                   the single word one", "... two") -> two Codex threads, each in its
+ *                   own worktree on a branch named for its item, the person's plugins
+ *                   off; the turns overlap; each word in its own item's thread
+ *   B. unassign     a slow count in DEMO-44's thread, then the item is unassigned ->
+ *                   turn/interrupt, thread/unsubscribe, nothing more in its thread
  */
+import { execFileSync } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
@@ -98,16 +113,18 @@ const { values } = parseArgs({
 });
 
 const preflightOnly = values['preflight-only'] === true;
-if (values.only !== undefined && values.only !== 'steer' && values.only !== 'parity') {
+const ONLY = ['steer', 'parity', 'threads', 'questions', 'requests'] as const;
+if (values.only !== undefined && !(ONLY as readonly string[]).includes(values.only)) {
   console.error(
-    '--only takes "steer" (the steer step alone: 1 turn) or "parity" (tools, approvals, files: 4 turns).',
+    '--only takes "steer" (the steer step alone: 1 turn), "parity" (tools, approvals, files: 4 turns), "threads" (work items: 3 turns), "questions" (ask and plan mode: 3 turns) or "requests" (a catch-up and a thread to items: 2 turns).',
   );
   process.exit(2);
 }
 const only = values.only === 'steer';
 const parity = values.only === 'parity';
-/** Turns allowed: the 4 steps' turns plus one spare (1 plus one spare for --only steer). */
-const maxTurns = only ? 2 : 5;
+const threadsStep = values.only === 'threads';
+/** Turns allowed: each run's turns plus one spare. */
+const maxTurns = only ? 2 : threadsStep ? 4 : 5;
 if (
   (values.approved !== true && !preflightOnly && values['dry-run'] !== true) ||
   values.model === undefined ||
@@ -123,6 +140,20 @@ if (readdirSync(work).length > 0) {
   console.error(`${work} is not empty; give an empty throwaway folder.`);
   process.exit(2);
 }
+/** The runs whose items need worktrees: the folder becomes a repository with one empty commit. */
+const needsRepo = threadsStep;
+if (needsRepo) {
+  const git = (...args: string[]) =>
+    execFileSync(
+      'git',
+      ['-c', 'user.name=codex smoke', '-c', 'user.email=smoke@example.com', ...args],
+      { cwd: work, stdio: 'ignore' },
+    );
+  git('init', '-q');
+  git('commit', '-q', '--allow-empty', '-m', 'smoke');
+}
+/** What the folder holds besides the repository and its worktrees. */
+const contents = (): string[] => readdirSync(work).filter((n) => n !== '.git' && n !== '.buildit');
 const out = resolve(values.out ?? join(tmpdir(), 'codex-smoke'));
 mkdirSync(out, { recursive: true });
 const transcript = join(out, `transcript-${Date.now()}.jsonl`);
@@ -141,6 +172,17 @@ const fakeSpawn: SpawnAppServer = (args, env) => {
     const said = (ctx.inputs[0]?.[0] as { text?: unknown } | undefined)?.text;
     const first = typeof said === 'string' ? said : '';
     if (await fakeParityTurn(fake, ctx, first)) return;
+    if (first.includes(THREADS.one) || first.includes(THREADS.two)) {
+      ctx.agentMessage(first.includes(THREADS.one) ? 'one' : 'two', 'final_answer');
+      // Both run a while, so they overlap as the real ones do.
+      await sleep(300);
+      ctx.complete();
+      return;
+    }
+    if (first.includes(THREADS.count)) {
+      await ctx.interrupted();
+      return;
+    }
     if (first.startsWith('Count slowly from 1 to 30')) {
       await ctx.inputsReach(2);
       ctx.agentMessage('steered', 'final_answer');
@@ -154,6 +196,13 @@ const fakeSpawn: SpawnAppServer = (args, env) => {
   };
   return fake.spawn(args, env);
 };
+
+/** The threads run's prompts, each the owner's mention in an item's thread. */
+const THREADS = {
+  one: 'Reply with the single word one, and do nothing else.',
+  two: 'Reply with the single word two, and do nothing else.',
+  count: 'Count slowly from 1 to 200, one number per line, and do nothing else.',
+} as const;
 
 /** The parity prompts (the dry run's fake plays a turn for each). */
 const PARITY = {
@@ -416,6 +465,13 @@ const wire = {
   serverRequests: new Map<unknown, { method: string; answer: string | undefined }>(),
   /** The MCP tool calls Codex made (server/tool), from the items. */
   toolCalls: [] as string[],
+  /** thread/start's params; turn/interrupt's and thread/unsubscribe's threads; each turn's thread. */
+  threadStarts: [] as Record<string, unknown>[],
+  interrupts: [] as string[],
+  unsubscribes: [] as string[],
+  turnThread: new Map<string, string>(),
+  /** When each turn started and ended (ms), by turn id. */
+  turnTimes: new Map<string, { start: number; end?: number }>(),
 };
 const tapped =
   (inner: SpawnAppServer): SpawnAppServer =>
@@ -434,9 +490,19 @@ const tapped =
           error?: unknown;
           params?: { tokenUsage?: unknown; turn?: { id?: string; status?: string } };
         };
-        if (m.method === 'turn/started') wire.turns++;
+        if (m.method === 'turn/started') {
+          wire.turns++;
+          const id = m.params?.turn?.id;
+          const thread = (m.params as { threadId?: unknown } | undefined)?.threadId;
+          if (id !== undefined) {
+            wire.turnTimes.set(id, { start: Date.now() });
+            if (typeof thread === 'string') wire.turnThread.set(id, thread);
+          }
+        }
         if (m.method === 'turn/completed' && m.params?.turn?.id !== undefined) {
           wire.completed.set(m.params.turn.id, m.params.turn.status ?? 'unknown');
+          const t = wire.turnTimes.get(m.params.turn.id);
+          if (t !== undefined) t.end = Date.now();
         }
         if (m.method === 'thread/tokenUsage/updated') wire.usage.push(m.params?.tokenUsage);
         if (m.method !== undefined && m.id !== undefined) {
@@ -483,6 +549,9 @@ const tapped =
         const input = (m.params?.input ?? []) as { type?: string }[];
         wire.inputs.push(input.map((i) => String(i.type)));
       }
+      if (m.method === 'thread/start') wire.threadStarts.push(m.params ?? {});
+      if (m.method === 'turn/interrupt') wire.interrupts.push(String(m.params?.threadId));
+      if (m.method === 'thread/unsubscribe') wire.unsubscribes.push(String(m.params?.threadId));
       const asked = m.method === undefined ? wire.serverRequests.get(m.id) : undefined;
       if (asked !== undefined) {
         const r = (m as { result?: unknown }).result;
@@ -681,10 +750,123 @@ async function parityRun(): Promise<void> {
   }
 }
 
+/** A fake API item by its number (the made-up DEMO project), as item events name it. */
+function storeItem(n: number): { id: string; key: string; title: string } {
+  const i = api.store.items.find((x) => x.project === 'DEMO' && x.number === n);
+  if (i === undefined) throw new Error(`no DEMO-${n} in the fake API`);
+  return { id: i.id, key: `DEMO-${n}`, title: i.title };
+}
+
+/** The owner denies every approval card while a run lasts (unless `answers` says otherwise). */
+function owner(answers: () => Record<string, 'approve' | 'deny'> = () => ({})): () => void {
+  const decided = new Set<string>();
+  const timer = setInterval(() => {
+    for (const card of api.sessions.approvals(SESSION_TOKENS.first)) {
+      if (card.status !== 'open' || decided.has(card.id)) continue;
+      decided.add(card.id);
+      api.sessions.decideApproval(
+        SESSION_TOKENS.first,
+        card.id,
+        answers()[card.toolName] ?? 'deny',
+      );
+    }
+  }, 100);
+  return () => { clearInterval(timer); };
+}
+
+/** The text posts in a thread (not the approval cards). */
+function textPostsIn(thread: string | null): string[] {
+  const cards = new Set(api.sessions.approvals(SESSION_TOKENS.first).map((c) => c.id));
+  return s.messages.filter((m) => m.thread_id === thread && !cards.has(m.id)).map((m) => m.text);
+}
+
+/** Work items in their own threads and worktrees, then an unassign that interrupts one. */
+async function threadsRun(): Promise<void> {
+  const token = SESSION_TOKENS.first;
+  const run = await bridgeRun();
+  await until(() => s.heartbeats.includes('online'), 30_000, 'online');
+  const stopOwner = owner();
+  const one = storeItem(44);
+  const two = storeItem(45);
+  try {
+    // A. two items at once
+    api.sessions.itemMessage(token, one, THREADS.one, { mention: true });
+    api.sessions.itemMessage(token, two, THREADS.two, { mention: true });
+    await until(
+      () =>
+        wire.started.length >= 2 &&
+        idle(run)() &&
+        textPostsIn(one.id).length >= 1 &&
+        textPostsIn(two.id).length >= 1,
+      180_000,
+      'turns A',
+    );
+    await run.bridge.idle();
+    const cwds = wire.threadStarts.map((p) => String(p.cwd));
+    const inWorktrees =
+      cwds.length === 2 &&
+      cwds.every((c) => c.includes(join('.buildit', 'worktrees'))) &&
+      cwds[0] !== cwds[1];
+    const pluginsOff = wire.threadStarts.every(
+      (p) => (p.config as Record<string, unknown> | undefined)?.['features.plugins'] === false,
+    );
+    const times = [...wire.turnTimes.values()].slice(0, 2);
+    const [t1, t2] = times;
+    const overlap =
+      t1?.end !== undefined && t2?.end !== undefined && t1.start < t2.end && t2.start < t1.end;
+    const branches = execFileSync('git', ['branch', '--list'], { cwd: work, encoding: 'utf8' })
+      .split('\n')
+      .map((b) => b.replace(/^[*+]?\s*/, '').trim())
+      .filter((b) => b !== '');
+    check(
+      'A two at once',
+      inWorktrees &&
+        pluginsOff &&
+        overlap &&
+        /one/i.test(textPostsIn(one.id).join(' ')) &&
+        /two/i.test(textPostsIn(two.id).join(' ')) &&
+        branches.some((b) => b.startsWith('demo-44')) &&
+        branches.some((b) => b.startsWith('demo-45')),
+      `cwds ${JSON.stringify(cwds.map((c) => c.slice(work.length)))}, plugins off ${String(pluginsOff)}, turns overlapped ${String(overlap)}, posts ${JSON.stringify([textPostsIn(one.id), textPostsIn(two.id)])}, branches ${JSON.stringify(branches)}`,
+    );
+
+    // B. an unassign interrupts one item
+    const before = textPostsIn(one.id).length;
+    const place = `item:${one.id}`;
+    api.sessions.itemMessage(token, one, THREADS.count, { mention: true });
+    await until(() => run.bridge.runningTurn(place) !== undefined, 60_000, 'turn B running');
+    const turnB = run.bridge.runningTurn(place) ?? '';
+    const threadOne = wire.turnThread.get(turnB) ?? '';
+    await sleep(1500);
+    api.sessions.unassignItem(token, one);
+    await until(() => wire.unsubscribes.length >= 1, 60_000, 'unsubscribe');
+    await until(() => wire.completed.has(turnB), 60_000, 'turn B ended');
+    await sleep(1000);
+    check(
+      'B unassign',
+      wire.interrupts.includes(threadOne) &&
+        wire.unsubscribes.includes(threadOne) &&
+        wire.completed.get(turnB) === 'interrupted' &&
+        textPostsIn(one.id).length === before,
+      `interrupt ${JSON.stringify(wire.interrupts)}, unsubscribe ${JSON.stringify(wire.unsubscribes)}, status ${String(wire.completed.get(turnB))}, posts after ${textPostsIn(one.id).length} (expected ${before})`,
+    );
+  } finally {
+    stopOwner();
+    await run.stop();
+  }
+}
+
+/** An extra run is over (its steps reported): the main steps are skipped. */
+class RunDone extends Error {}
+
 try {
   if (parity) {
     await parityRun();
     throw new ParityDone();
+  }
+  if (threadsStep) {
+    await threadsRun();
+    throw new RunDone();
   }
   let run = await bridgeRun();
   await until(() => s.heartbeats.includes('online'), 30_000, 'online');
@@ -748,7 +930,7 @@ try {
   }
   await run.stop();
 } catch (err) {
-  if (!(err instanceof ParityDone)) {
+  if (!(err instanceof ParityDone) && !(err instanceof RunDone)) {
     report.push(`FAILED: ${err instanceof Error ? err.message : String(err)}`);
     process.exitCode = 1;
   }
@@ -760,7 +942,7 @@ try {
   report.push(
     parity
       ? `folder now holds: ${readdirSync(work).join(', ') || 'nothing'}`
-      : `folder still empty: ${readdirSync(work).length === 0}`,
+      : `folder still empty (the repository and its worktrees aside): ${contents().length === 0}`,
     `transcript: ${transcript}`,
   );
   console.log(report.join('\n'));

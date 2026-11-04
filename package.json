@@ -24,6 +24,7 @@
   "main": "dist/index.js",
   "files": [
     "dist",
+    "plugin/skills/*/SKILL.md",
     "README.md",
     "LICENSE",
     "SECURITY.md",
