@@ -5,6 +5,8 @@
  * in-process fake API (nothing reaches a real buildIt.Social server).
  *
  *   npx tsx scripts/codex-smoke.ts --approved --model <id> --cwd <empty folder>
+ *   npx tsx scripts/codex-smoke.ts --preflight-only --model <id> --cwd <empty folder>
+ *                                   (the free checks below, then stop: no turn)
  *
  * Four turns, at most five (the script stops before a sixth):
  *   1. reply      "Reply with the single word pong."  -> a post
@@ -13,9 +15,13 @@
  *   4. resume     the bridge restarts (a new app-server); a question about turn 1 ->
  *                 thread/resume {excludeTurns: true}, then a post
  *
- * With `-c model=<id>`, `model_reasoning_effort="low"` and
- * `model_reasoning_summary="none"`. Before any turn it checks, for free
- * (initialize and model/list), that the model exists. The folder must be
+ * Lean threads: `-c model=<id>`, `model_reasoning_effort="low"`,
+ * `model_reasoning_summary="none"`, `features.plugins=false`,
+ * `features.apps=false`, and `mcp_servers.<name>.enabled=false` for each
+ * MCP server still configured. Before any turn it checks, for free
+ * (initialize, model/list, an ephemeral thread/start, mcpServerStatus/list
+ * and skills/list), that the model exists and no MCP tool is left; it
+ * stops otherwise. The folder must be
  * empty and stay so (the turns ask for nothing that writes). The JSON-RPC
  * transcript and a report go to --out (default <tmp>/codex-smoke), never
  * into the repository.
@@ -47,10 +53,16 @@ const { values } = parseArgs({
     cwd: { type: 'string' },
     out: { type: 'string' },
     'codex-path': { type: 'string' },
+    'preflight-only': { type: 'boolean' },
   },
 });
 
-if (values.approved !== true || values.model === undefined || values.cwd === undefined) {
+const preflightOnly = values['preflight-only'] === true;
+if (
+  (values.approved !== true && !preflightOnly) ||
+  values.model === undefined ||
+  values.cwd === undefined
+) {
   console.error(
     "This runs real Codex model turns (4, at most 5) on your plan. Run it only with the plan owner's yes:\n  npx tsx scripts/codex-smoke.ts --approved --model <id from model/list> --cwd <empty folder>",
   );
@@ -66,30 +78,87 @@ mkdirSync(out, { recursive: true });
 const transcript = join(out, `transcript-${Date.now()}.jsonl`);
 const binary = findCodex(values['codex-path']);
 const logger = createLogger({ level: 'info' });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Lean threads: the cheap model at low effort, and none of the person's plugins, apps or MCP servers. */
 const config = [
   `model="${values.model}"`,
   'model_reasoning_effort="low"',
   'model_reasoning_summary="none"',
+  'features.plugins=false',
+  'features.apps=false',
 ];
 
-// Free: the model exists (initialize and model/list cost no turn).
-{
-  const spawn = spawnAppServer(binary, { cwd: work, logger });
-  const proc = spawn(config.flatMap((c) => ['-c', c]));
+/** A TOML key for -c: bare when it can be, else quoted. */
+const tomlKey = (name: string): string =>
+  /^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name);
+
+interface McpStatus {
+  name: string;
+  tools?: Record<string, unknown>;
+}
+
+/** A free app-server session (no turn): initialize, then `use`, then it ends. */
+async function freeSession<T>(
+  args: string[],
+  use: (conn: AppServerConnection) => Promise<T>,
+): Promise<T> {
+  const proc = spawnAppServer(binary, { cwd: work, logger })(args.flatMap((c) => ['-c', c]));
   const conn = new AppServerConnection(proc.stdout, proc.stdin, { logger });
-  await conn.request('initialize', {
-    clientInfo: { name: 'buildit_mcp_smoke', title: null, version: '0.0.0' },
-    capabilities: { experimentalApi: true },
-  });
-  conn.notify('initialized');
+  try {
+    await conn.request('initialize', {
+      clientInfo: { name: 'buildit_mcp_smoke', title: null, version: '0.0.0' },
+      capabilities: { experimentalApi: true },
+    });
+    conn.notify('initialized');
+    return await use(conn);
+  } finally {
+    conn.close();
+    await proc.stop();
+  }
+}
+
+/** The MCP servers a thread would load, with their tools (an ephemeral thread: never saved). */
+async function mcpServers(conn: AppServerConnection): Promise<McpStatus[]> {
+  await conn.request('thread/start', { cwd: work, ephemeral: true });
+  let servers: McpStatus[] = [];
+  for (let i = 0; i < 10; i++) {
+    await sleep(1000);
+    servers = (await conn.request<{ data?: McpStatus[] }>('mcpServerStatus/list', {})).data ?? [];
+    if (servers.every((m) => m.tools !== undefined)) break;
+  }
+  return servers;
+}
+
+const toolCount = (servers: McpStatus[]): number =>
+  servers.reduce((n, m) => n + Object.keys(m.tools ?? {}).length, 0);
+
+// Free (no turn): the model exists, and the person's own MCP servers are turned off too.
+const before = await freeSession([], async (conn) => {
   const list = await conn.request<{ data: { id: string }[] }>('model/list', {});
-  conn.close();
-  await proc.stop();
   if (!list.data.some((m) => m.id === values.model)) {
     console.error(`No model ${values.model}: ${list.data.map((m) => m.id).join(', ')}`);
     process.exit(2);
   }
+  return mcpServers(conn);
+});
+const leftOn = await freeSession(config, mcpServers);
+for (const m of leftOn) config.push(`mcp_servers.${tomlKey(m.name)}.enabled=false`);
+const after = await freeSession(config, async (conn) => {
+  const servers = await mcpServers(conn);
+  const skills = await conn.request<{ data?: { skills?: unknown[] }[] }>('skills/list', {
+    cwds: [work],
+  });
+  return { servers, skills: (skills.data ?? []).reduce((n, e) => n + (e.skills ?? []).length, 0) };
+});
+console.log(
+  `Lean threads: MCP tools ${toolCount(before)} -> ${toolCount(after.servers)}, skills ${after.skills}; sending ${config.map((c) => `-c ${c}`).join(' ')}`,
+);
+if (toolCount(after.servers) > 0) {
+  console.error('MCP tools are still loaded; not running any turn.');
+  process.exit(2);
 }
+if (preflightOnly) process.exit(0);
 
 // The turn ledger, from the wire: new turns started, and their token usage.
 let turns = 0;
@@ -135,7 +204,6 @@ const io: CommandIO = {
   store,
   logger,
 };
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(check: () => boolean, ms: number, what: string): Promise<void> {
   const end = Date.now() + ms;
   while (!check()) {

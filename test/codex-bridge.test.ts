@@ -17,14 +17,22 @@ import { acquireChannelLock } from '../src/channel/lock.js';
 import type { ChannelState } from '../src/channel/loop.js';
 import { runCodex, type CodexDeps } from '../src/cli/codex.js';
 import type { CommandIO } from '../src/cli/commands.js';
-import { answerOf, splitText, stableUuid, type CodexBridge } from '../src/codex/bridge.js';
+import {
+  answerOf,
+  ITEMS_NOTICE,
+  noticeFor,
+  REQUESTS_NOTICE,
+  splitText,
+  stableUuid,
+  type CodexBridge,
+} from '../src/codex/bridge.js';
 import { DirectMessageRouter } from '../src/codex/router.js';
 import type { CodexOptions } from '../src/config.js';
 import { createLogger } from '../src/log.js';
 import { FileTokenStore, sessionKey } from '../src/secrets/keychain.js';
 import { FakeApi } from './support/fake-api.js';
 import { CodexHome, FakeAppServer, replyWith, type Received } from './support/fake-codex.js';
-import { SESSION_TOKENS } from './support/fake-sessions.js';
+import { demoItem, SESSION_TOKENS } from './support/fake-sessions.js';
 
 let api: FakeApi;
 let dir: string;
@@ -494,22 +502,90 @@ describe('buildit-mcp codex: "is writing" and server requests', () => {
     expect(r.logs.join('\n')).not.toContain('this is not json');
   });
 
-  it("drops events it doesn't handle yet without starting a turn", async () => {
+  it("tells the owner once per item thread that it can't take work items yet, and starts no turn", async () => {
     const s = api.sessions.open(token, 'demo-folder');
     const codex = fake();
     const r = await start(codex);
     await waitFor(() => s.heartbeats.includes('online'));
-    await r.bridge().handle({
-      content: 'An item was assigned.',
-      meta: {
-        event: 'item_assigned',
-        thread_id: '00000000-0000-4000-8000-000000000002',
-        item: 'DEMO-1',
-      },
-    });
+    const one = demoItem(1);
+    const two = demoItem(2);
+    api.sessions.assignItem(token, one);
+    await waitFor(() => posts().length === 1);
+    expect(posts()[0]).toMatchObject({ text: ITEMS_NOTICE, thread_id: one.id });
+    // More in the same thread: no second notice. A mention in another item's thread: one there.
+    api.sessions.itemMessage(token, one, 'Any news?');
+    api.sessions.itemMessage(token, two, 'Can you look at this?', { mention: true });
+    await waitFor(() => s.acked === 3);
+    await waitFor(() => posts().length === 2);
+    expect(posts()[1]).toMatchObject({ text: ITEMS_NOTICE, thread_id: two.id });
     expect(codex.requests('thread/start')).toHaveLength(0);
     expect(codex.requests('turn/start')).toHaveLength(0);
     expect(logged(r, 'not handled by the Codex bridge')).toBe(true);
+    expect(r.logs.join('\n')).not.toContain('Any news?');
+
+    // The next run tells it again.
+    await r.stop();
+    const again = fake();
+    await start(again);
+    await waitFor(() => s.heartbeats.filter((h) => h === 'online').length === 2);
+    api.sessions.itemMessage(token, one, 'Still there?');
+    await waitFor(() => posts().length === 3);
+    expect(posts()[2]).toMatchObject({ text: ITEMS_NOTICE, thread_id: one.id });
+  });
+
+  it("tells the owner once, in the direct message, that it can't take requests yet", async () => {
+    const s = api.sessions.open(token, 'demo-folder');
+    const codex = fake();
+    await start(codex);
+    await waitFor(() => s.heartbeats.includes('online'));
+    api.sessions.pushRequest(token, { kind: 'catch_up' });
+    api.sessions.pushRequest(token, { kind: 'catch_up' });
+    await waitFor(() => s.acked === 2);
+    await waitFor(() => posts().length === 1);
+    // A new message of the direct message: a note about the request, not its result.
+    expect(posts()[0]).toMatchObject({ text: REQUESTS_NOTICE, thread_id: null });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(posts()).toHaveLength(1);
+    expect(codex.requests('turn/start')).toHaveLength(0);
+  });
+
+  it('acknowledges the event when the notice is refused, and gives other dropped events none', async () => {
+    const s = api.sessions.open(token, 'demo-folder');
+    const codex = fake();
+    const r = await start(codex);
+    await waitFor(() => s.heartbeats.includes('online'));
+    const elsewhere = '00000000-0000-4000-8000-000000000003';
+    api.sessions.otherSessionThreads.add(elsewhere);
+    await r.bridge().handle({
+      content: 'An item was assigned.',
+      meta: { event: 'item_assigned', thread_id: elsewhere, item: 'DEMO-9' },
+    });
+    expect(logged(r, 'notice not posted')).toBe(true);
+    for (const event of ['plan_resolved', 'item_unassigned', 'child_done', 'handoff_resolved']) {
+      await r.bridge().handle({
+        content: 'x',
+        meta: { event, thread_id: '00000000-0000-4000-8000-000000000004' },
+      });
+    }
+    expect(posts()).toHaveLength(0);
+    expect(codex.requests('turn/start')).toHaveLength(0);
+  });
+
+  it('routes notices: item events in their thread, requests to the direct message, nothing else', () => {
+    expect(noticeFor({ content: '', meta: { event: 'mention', thread_id: 't' } })).toEqual({
+      key: 'thread:t',
+      text: ITEMS_NOTICE,
+      threadId: 't',
+    });
+    expect(noticeFor({ content: '', meta: { event: 'request', thread_id: 't' } })).toEqual({
+      key: 'requests',
+      text: REQUESTS_NOTICE,
+      threadId: undefined,
+    });
+    expect(noticeFor({ content: '', meta: { event: 'item_unassigned', thread_id: 't' } })).toBe(
+      undefined,
+    );
+    expect(noticeFor({ content: '', meta: { event: 'message' } })).toBe(undefined);
   });
 });
 
