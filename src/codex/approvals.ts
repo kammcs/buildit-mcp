@@ -264,36 +264,67 @@ export function fileChangeCard(
     ...(unseen ? { unchecked: 'not_shown' as const } : {}),
     accept: acceptDecision,
     decline: declineDecision,
-    // Codex's "these files, for the rest of the session".
-    acceptForSession: sessionDecision,
+    // Codex's "these files, for the rest of the session"; never with write access under a
+    // folder (grantRoot), which would reach past the files shown.
+    ...(root === undefined ? { acceptForSession: sessionDecision } : {}),
   };
 }
 
-/** item/permissions/requestApproval: granted for this turn only, exactly as asked. */
+/** The permissions' keys a card shows (and grants): the network's, and the file system's. */
+const SHOWN_NETWORK = ['enabled'] as const;
+const SHOWN_FILE_SYSTEM = ['read', 'write', 'entries'] as const;
+
+/** The keys of `o` with a value (not null) that aren't in `shown`. */
+function keysBeyond(o: Record<string, unknown>, shown: readonly string[]): string[] {
+  return Object.keys(o).filter((k) => !shown.includes(k) && o[k] !== null && o[k] !== undefined);
+}
+
+/** Only `keys` of `o`, those it has. */
+function only(o: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
+}
+
+/**
+ * item/permissions/requestApproval: granted for this turn only, exactly
+ * what the card shows. A permission the card can't show (any other key,
+ * such as the file system's `globScanMaxDepth` or one a newer Codex adds)
+ * makes it `not_shown`: it can only be denied, and offers no session.
+ */
 export function permissionsCard(p: Record<string, unknown>): CardSpec {
   const asked = record(p.permissions);
+  const networkAsked = asked.network !== null && asked.network !== undefined;
+  const fileSystemAsked = asked.fileSystem !== null && asked.fileSystem !== undefined;
   const network = record(asked.network);
   const fs = record(asked.fileSystem);
   const input: Record<string, unknown> = {};
   const granted: Record<string, unknown> = {};
-  if (asked.network !== null && asked.network !== undefined) {
-    input.network = network.enabled === true ? 'enabled' : JSON.stringify(network);
-    granted.network = asked.network;
+  const beyond = [
+    ...keysBeyond(asked, ['network', 'fileSystem']),
+    ...(networkAsked ? keysBeyond(network, SHOWN_NETWORK).map((k) => `network.${k}`) : []),
+    ...(fileSystemAsked ? keysBeyond(fs, SHOWN_FILE_SYSTEM).map((k) => `fileSystem.${k}`) : []),
+  ];
+  if (networkAsked) {
+    input.network =
+      network.enabled === true ? 'enabled' : JSON.stringify(only(network, SHOWN_NETWORK));
+    granted.network = only(network, SHOWN_NETWORK);
   }
-  if (asked.fileSystem !== null && asked.fileSystem !== undefined) {
+  if (fileSystemAsked) {
     if (Array.isArray(fs.read) && fs.read.length > 0) input.read = fs.read.join('\n');
     if (Array.isArray(fs.write) && fs.write.length > 0) input.write = fs.write.join('\n');
     if (Array.isArray(fs.entries) && fs.entries.length > 0) input.entries = fs.entries;
-    granted.fileSystem = asked.fileSystem;
+    granted.fileSystem = only(fs, SHOWN_FILE_SYSTEM);
   }
   if (str(p.cwd) !== undefined) input.cwd = p.cwd;
   const empty = Object.keys(granted).length === 0;
   if (empty) input.permissions = '(Codex asked for nothing it named)';
+  if (beyond.length > 0) {
+    input.not_shown = `(Codex asked for more than this card shows: ${beyond.join(', ')})`;
+  }
   return {
     toolName: 'permissions',
     description: describe(str(p.reason)),
     input,
-    ...(empty ? { unchecked: 'not_shown' as const } : {}),
+    ...(empty || beyond.length > 0 ? { unchecked: 'not_shown' as const } : {}),
     accept: { permissions: granted, scope: 'turn' },
     decline: { permissions: {}, scope: 'turn' },
     // Exactly as asked, for the rest of the session (never more than shown).

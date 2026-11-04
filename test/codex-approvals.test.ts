@@ -209,6 +209,77 @@ describe('codex approvals: Allow for this session', () => {
     });
   });
 
+  it("a permission the card can't show: declined, no session rule, nothing beyond granted", async () => {
+    codexSession();
+    const codex = bench.fake();
+    const { answer } = await oneRequest(codex, 'item/permissions/requestApproval', {
+      itemId: 'perm-glob',
+      startedAtMs: Date.now(),
+      environmentId: null,
+      cwd: '/tmp/work',
+      reason: 'Scan the tree',
+      permissions: { network: null, fileSystem: { read: ['/tmp/work/**'], globScanMaxDepth: 8 } },
+    });
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toBeUndefined();
+    expect(field('not_shown')).toContain('fileSystem.globScanMaxDepth');
+    api.sessions.decideApproval(token, cards()[0]!.id, 'approve');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ permissions: {}, scope: 'turn' });
+  });
+
+  it('permissions grant only the keys the card shows', () => {
+    const card = permissionsCard({
+      cwd: '/tmp/work',
+      permissions: {
+        network: { enabled: true },
+        fileSystem: { read: null, write: ['/tmp/out'], entries: null },
+      },
+    });
+    expect(card.unchecked).toBeUndefined();
+    expect(card.acceptForSession).toEqual({
+      permissions: {
+        network: { enabled: true },
+        fileSystem: { read: null, write: ['/tmp/out'], entries: null },
+      },
+      scope: 'session',
+    });
+    for (const permissions of [
+      { network: { enabled: true, proxy: 'http://example.com' } },
+      { fileSystem: { write: ['/tmp/out'], globScanMaxDepth: 2 } },
+      { fileSystem: { write: ['/tmp/out'] }, devices: ['camera'] },
+    ]) {
+      const c = permissionsCard({ cwd: '/tmp/work', permissions });
+      expect(c.unchecked, JSON.stringify(permissions)).toBe('not_shown');
+      expect(JSON.stringify(c.accept)).not.toMatch(/proxy|globScanMaxDepth|devices/);
+      expect(JSON.stringify(c.acceptForSession)).not.toMatch(/proxy|globScanMaxDepth|devices/);
+    }
+    // A key without a value isn't asked for.
+    expect(
+      permissionsCard({ permissions: { fileSystem: { write: ['/x'], globScanMaxDepth: null } } })
+        .unchecked,
+    ).toBeUndefined();
+  });
+
+  it('a file change with write access under a folder (grantRoot): no session rule', async () => {
+    codexSession();
+    const codex = bench.fake();
+    const { answer } = await oneRequest(
+      codex,
+      'item/fileChange/requestApproval',
+      { itemId: 'patch-s', startedAtMs: Date.now(), grantRoot: '/tmp/work' },
+      fileChangeTurn(codex),
+    );
+    await waitFor(() => cards().length === 1);
+    expect(field('write_access_under')).toBe('/tmp/work');
+    expect(cards()[0]!.posted.suggestion).toBeUndefined();
+    tap('approve');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ decision: 'accept' });
+    expect(fileChangeCard({ grantRoot: '/tmp/work' }, []).acceptForSession).toBeUndefined();
+    expect(fileChangeCard({}, []).acceptForSession).toEqual({ decision: 'acceptForSession' });
+  });
+
   it("never for an MCP tool's approval", async () => {
     codexSession();
     const codex = bench.fake();
