@@ -17,6 +17,12 @@
  *   npx tsx scripts/codex-smoke.ts --approved --only threads --model <id> --cwd <empty folder>
  *                                   (work items in their own threads and worktrees: 3 turns, at
  *                                   most 4; see "Threads" below)
+ *   npx tsx scripts/codex-smoke.ts --approved --only questions --model <id> --cwd <empty folder>
+ *                                   (ask, and plan mode: 3 turns, at most 4)
+ *   npx tsx scripts/codex-smoke.ts --approved --only requests --model <id> --cwd <empty folder>
+ *                                   (a catch-up and a thread to items: 2 turns, at most 3)
+ *   (threads, questions and requests first make the empty folder a git repository with
+ *   one empty commit.)
  *
  * Four turns, at most five (the script stops before a sixth):
  *   1. reply      "Reply with the single word pong."  -> a post
@@ -65,6 +71,24 @@
  *                   off; the turns overlap; each word in its own item's thread
  *   B. unassign     a slow count in DEMO-44's thread, then the item is unassigned ->
  *                   turn/interrupt, thread/unsubscribe, nothing more in its thread
+ *
+ * Questions (--only questions): three turns, at most four. The in-process
+ * owner answers each question card with its first option and approves the
+ * plan's card; work items plan first (--plan-items):
+ *   A. ask          "call the buildit ask tool once" in the direct message -> a question
+ *                   card, answered "red" -> the answer posted
+ *   B. plan mode    a mention in DEMO-44's thread: plan a one-word reply, asking first
+ *                   with request_user_input -> Codex's question on the card ("yes"), the
+ *                   plan's Approve/Deny card, approved -> the next turn in default mode
+ *                   carries it out ("yes" posted)
+ *
+ * Requests (--only requests): two turns, at most three, on the fake API's
+ * tiny #general (three messages):
+ *   A. catch-up         its own thread (ephemeral, read-only, no shell, plugins off)
+ *                       with two skill inputs -> its result in the direct message only;
+ *                       the thread unsubscribed after
+ *   B. thread to items  the same for a thread -> its result (the card or a note) in
+ *                       that thread only
  */
 import { execFileSync } from 'node:child_process';
 import {
@@ -90,13 +114,15 @@ import { runCodex } from '../src/cli/codex.js';
 import type { CommandIO } from '../src/cli/commands.js';
 import { findCodex } from '../src/codex/binary.js';
 import type { CodexBridge } from '../src/codex/bridge.js';
+import { PLUGINS_OFF, REQUEST_THREAD_CONFIG } from '../src/codex/bridge.js';
 import { PLAN_APPROVED } from '../src/codex/plans.js';
+import { BRIDGE_SKILLS, listedSkills, SKILLS_ROOT } from '../src/codex/skills.js';
 import { spawnAppServer, type SpawnAppServer } from '../src/codex/process.js';
 import { AppServerConnection } from '../src/codex/rpc.js';
 import { BRIDGE_MCP_SERVER, BridgeToolServer } from '../src/codex/tool-server.js';
 import { createLogger } from '../src/log.js';
 import { FileTokenStore, sessionKey } from '../src/secrets/keychain.js';
-import { FakeApi } from '../test/support/fake-api.js';
+import { CHANNELS, FakeApi, MESSAGES } from '../test/support/fake-api.js';
 import { CodexHome, FakeAppServer } from '../test/support/fake-codex.js';
 import { SESSION_TOKENS } from '../test/support/fake-sessions.js';
 
@@ -187,6 +213,7 @@ const fakeSpawn: SpawnAppServer = (args, env) => {
       return;
     }
     if (await fakeQuestionsTurn(fake, ctx, first)) return;
+    if (await fakeRequestTurn(fake, ctx, first)) return;
     if (first.startsWith('Count slowly from 1 to 30')) {
       await ctx.inputsReach(2);
       ctx.agentMessage('steered', 'final_answer');
@@ -262,6 +289,29 @@ async function fakeQuestionsTurn(
   } else {
     return false;
   }
+  ctx.complete();
+  return true;
+}
+
+/** The dry run's stand-in for Codex in a request's turn: the result through reply, with the request. */
+async function fakeRequestTurn(
+  fake: FakeAppServer,
+  ctx: Parameters<FakeAppServer['onTurn']>[0],
+  first: string,
+): Promise<boolean> {
+  const kind = /Use the (buildit-[a-z-]+) skill\./.exec(first)?.[1];
+  const request = /request="([0-9a-f-]{36})"/.exec(first)?.[1];
+  if (kind === undefined || request === undefined) return false;
+  const client = await fake.mcp(ctx.threadId);
+  await client.callTool({
+    name: 'reply',
+    arguments: {
+      text:
+        kind === 'buildit-catch-up' ? 'A quiet day: a release on Friday.' : 'No items to draft.',
+      request,
+    },
+  });
+  ctx.agentMessage('Posted.', 'final_answer');
   ctx.complete();
   return true;
 }
@@ -489,6 +539,33 @@ const PARITY_CONFIG = [
 ];
 
 if (!dryRun) console.log(`Hosted tools (no turn): ${await hostedToolsCheck()}`);
+
+/**
+ * Free (no turn): the plugin's skills reach Codex (skills/extraRoots/set,
+ * then skills/list names them, at their own files), and a request's
+ * thread starts as the bridge starts it (ephemeral, read-only, no shell).
+ */
+async function skillsAndRequestThreadCheck(): Promise<string> {
+  return freeSession(config, async (conn) => {
+    await conn.request('skills/extraRoots/set', { extraRoots: [SKILLS_ROOT] });
+    const listed = listedSkills(
+      await conn.request('skills/list', { cwds: [work], forceReload: true }),
+    );
+    const started = await conn.request<{ sandbox?: { type?: unknown } }>('thread/start', {
+      cwd: work,
+      ephemeral: true,
+      sandbox: 'read-only',
+      config: { ...PLUGINS_OFF, ...REQUEST_THREAD_CONFIG },
+    });
+    const ok = listed.size === BRIDGE_SKILLS.length && started.sandbox?.type === 'readOnly';
+    return `${ok ? 'OK' : 'FAIL'}, ${listed.size} of ${BRIDGE_SKILLS.length} buildit skills listed (${[...listed.values()].map((s) => s.name).join(', ')}); a request's thread starts, sandbox ${String(started.sandbox?.type)}`;
+  });
+}
+if (!dryRun && (threadsStep || questionsStep || requestsStep)) {
+  const said = await skillsAndRequestThreadCheck();
+  console.log(`Skills and a request's thread (no turn): ${said}`);
+  if (!said.startsWith('OK')) process.exit(2);
+}
 
 // Free (no turn): the parity settings start, and a thread shows them.
 if (!dryRun && parity) {
@@ -995,6 +1072,75 @@ async function questionsRun(): Promise<void> {
   }
 }
 
+/** A catch-up and a thread to items, each in its own read-only thread with its skills. */
+async function requestsRun(): Promise<void> {
+  const token = SESSION_TOKENS.first;
+  const run = await bridgeRun();
+  await until(() => s.heartbeats.includes('online'), 30_000, 'online');
+  const stopOwner = owner();
+  const general = { id: CHANNELS.general, name: 'general' };
+  const postsOf = (request: string) =>
+    api.sessions.requestPosts.filter((r) => r.request.toLowerCase() === request.toLowerCase());
+  try {
+    // A. a catch-up: its result in the direct message only
+    const a = api.sessions.pushRequest(token, {
+      kind: 'catch_up',
+      project: null,
+      context: {
+        type: 'channel',
+        channel: general,
+        from: '2026-10-06T00:00:00.000Z',
+        to: '2026-10-08T00:00:00.000Z',
+      },
+    });
+    await until(
+      () => wire.started.length >= 1 && idle(run)() && postsOf(a.requestId).length >= 1,
+      180_000,
+      'request A',
+    );
+    await run.bridge.idle();
+    await until(() => wire.unsubscribes.length >= 1, 30_000, 'request A unsubscribed');
+    const startA = wire.threadStarts[0] ?? {};
+    const configA = (startA.config ?? {}) as Record<string, unknown>;
+    const lean =
+      startA.ephemeral === true &&
+      startA.sandbox === 'read-only' &&
+      configA['features.shell_tool'] === false &&
+      configA['features.plugins'] === false;
+    check(
+      'A catch-up',
+      lean &&
+        (wire.inputs[0] ?? []).filter((t) => t === 'skill').length === 2 &&
+        postsOf(a.requestId).every((r) => r.thread_id === null) &&
+        textPostsIn(null).length >= 1,
+      `thread ${JSON.stringify({ ephemeral: startA.ephemeral, sandbox: startA.sandbox, shell: configA['features.shell_tool'], plugins: configA['features.plugins'] })}, inputs ${JSON.stringify(wire.inputs[0])}, result posts ${JSON.stringify(postsOf(a.requestId).map((r) => r.thread_id))}, DM posts ${JSON.stringify(textPostsIn(null))}, tool calls ${JSON.stringify(wire.toolCalls)}`,
+    );
+
+    // B. a thread to items: its card (or note) in that thread only
+    const b = api.sessions.pushRequest(token, {
+      kind: 'thread_to_items',
+      place: 'thread',
+      context: { type: 'thread', channel: { ...general, dm: false }, thread_id: MESSAGES.root },
+    });
+    await until(
+      () => wire.started.length >= 2 && idle(run)() && postsOf(b.requestId).length >= 1,
+      180_000,
+      'request B',
+    );
+    await run.bridge.idle();
+    check(
+      'B thread to items',
+      postsOf(b.requestId).every(
+        (r) => r.thread_id?.toLowerCase() === MESSAGES.root.toLowerCase(),
+      ) && (wire.inputs[1] ?? []).filter((t) => t === 'skill').length === 2,
+      `inputs ${JSON.stringify(wire.inputs[1])}, result posts ${JSON.stringify(postsOf(b.requestId).map((r) => r.thread_id))}, tool calls ${JSON.stringify(wire.toolCalls)}`,
+    );
+  } finally {
+    stopOwner();
+    await run.stop();
+  }
+}
+
 /** The approval cards' message ids (not question cards). */
 function cardIdsOf(): Set<string> {
   return new Set(api.sessions.approvals(SESSION_TOKENS.first).map((c) => c.id));
@@ -1014,6 +1160,10 @@ try {
   }
   if (questionsStep) {
     await questionsRun();
+    throw new RunDone();
+  }
+  if (requestsStep) {
+    await requestsRun();
     throw new RunDone();
   }
   let run = await bridgeRun();

@@ -38,7 +38,13 @@ import {
 } from '../secrets/keychain.js';
 
 /** The name a session's client shows in buildIt.Social ("Claude Code on <machine>"). */
-export const CONNECT_CLIENT = 'Claude Code';
+export const CONNECT_CLIENT = 'Claude Code' as const;
+
+/**
+ * What `buildit-mcp codex` connects as (agent API 1.26.0: "Codex on
+ * <machine>", and the server offers it the requests a Codex session takes).
+ */
+export const CODEX_CLIENT = 'codex' as const;
 
 export interface CommandIO {
   out(text: string): void;
@@ -300,7 +306,7 @@ export async function runConnect(options: ConnectOptions, io: CommandIO): Promis
   const capabilities =
     options.capabilities ?? (await detectCapabilities(io.detection).catch(() => []));
   const body = {
-    client: CONNECT_CLIENT,
+    client: options.client === 'codex' ? CODEX_CLIENT : CONNECT_CLIENT,
     machine: io.machine ?? machineName(),
     label: options.label,
     projects: options.projects,

@@ -78,6 +78,8 @@ export interface RouterHost {
   parentOf(itemId: string): Promise<{ id: string; key: string } | null | undefined>;
   /** Whether a thread is a work item's (its id is the item's). */
   isItemThread(threadId: string): boolean;
+  /** Whether a thread is a known request's place (its thread, or one of its items'). */
+  isRequestThread(threadId: string): boolean;
 }
 
 /** The interface the bridge takes (tests give their own). */
@@ -157,11 +159,11 @@ export class SessionRouter implements CodexRouter {
         if (inItem) {
           const place = await this.itemConversation({ key: '', id: threadId }, false);
           if (place !== undefined) return { ...place, threadId, messageId, event };
-        } else if (this.host.has(DM_ROUTE)) {
+        } else if (!this.host.isRequestThread(threadId)) {
           // A card the direct message's conversation posted, in its thread.
           return toDm(threadId);
         }
-        // A card no conversation works on now (a request's, say): only trouble is told, in the DM.
+        // A request's card, or one no conversation works on now: only trouble is told, in the DM.
         return PLAN_TROUBLE.has(m.outcome ?? '')
           ? toDm(undefined)
           : { dropped: 'plan_resolved_no_conversation' };

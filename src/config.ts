@@ -134,6 +134,8 @@ export interface ConnectOptions extends SessionCommandOptions {
   yes: boolean;
   /** --capabilities: the tags to suggest instead of detecting them ([] for "none"). */
   capabilities?: string[];
+  /** What connects: Claude Code (the default), or Codex (`buildit-mcp codex`, agent API 1.26.0). */
+  client?: 'claude-code' | 'codex';
 }
 
 /**

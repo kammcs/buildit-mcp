@@ -57,14 +57,15 @@ import { isAbsolute } from 'node:path';
 
 import { ApiError, type ApiClient } from '../api/client.js';
 import { callOperation } from '../api/operations.js';
-import { itemWorkerText } from '../agent-text.js';
+import { itemWorkerText, requestWorkerText } from '../agent-text.js';
 import { postSessionMessage } from '../channel/api.js';
 import type {
   ChannelNotificationParams,
   ChannelState,
   NotificationExtra,
 } from '../channel/loop.js';
-import { isItemThread } from '../channel/threads.js';
+import { handlesKind, REQUEST_KINDS } from '../channel/requests.js';
+import { dmThread, isItemThread } from '../channel/threads.js';
 import { DEFAULT_MAX_PARALLEL_ITEMS } from '../config.js';
 import type { Logger } from '../log.js';
 import type { AskOptions } from '../tools/ask.js';
@@ -106,7 +107,7 @@ import { RpcClosedError, RpcError, type AppServerConnection, type RpcNotificatio
 import { DecliningServerRequests, type ServerRequestRouter } from './server-requests.js';
 import { planCard, PLAN_APPROVED, planUpdateText } from './plans.js';
 import { CodexQuestions } from './questions.js';
-import { BridgeSkills } from './skills.js';
+import { BridgeSkills, type BridgeSkill } from './skills.js';
 import type { ThreadMap } from './thread-map.js';
 import { splitText, stableUuid } from './text.js';
 import { checkCodexVersion, versionFromUserAgent, type VersionVerdict } from './version.js';
@@ -131,8 +132,20 @@ export const ITEM_DEVELOPER_INSTRUCTIONS = [
   itemWorkerText('codex'),
 ].join('\n');
 
-/** What the owner is told when the bridge gets work it can't take yet (static text). */
-export const REQUESTS_NOTICE = "This Codex session (preview) can't take requests yet.";
+/** What a request's Codex thread is told (static text): where it is, then the request worker's text. */
+export const REQUEST_DEVELOPER_INSTRUCTIONS = [
+  'You are connected to buildIt.Social, a team chat app, through buildit-mcp: its tools are the buildit MCP server\'s. Your one message is a request the person who owns this session made there (event="request"), written by buildit-mcp from its fields. You can\'t change files here, and you need no command: read only through the buildit tools.',
+  '',
+  requestWorkerText('codex'),
+].join('\n');
+
+/** What the owner is told when the bridge gets a kind of request it can't take (static text). */
+export const REQUESTS_NOTICE = "This Codex session can't take this kind of request yet.";
+
+/** Turned off in a request's thread: the shell (a request reads only through the buildit tools). */
+export const REQUEST_THREAD_CONFIG: Readonly<Record<string, boolean>> = {
+  'features.shell_tool': false,
+};
 
 /** The note a restarted bridge carries an item's work on with (static text). */
 export const RESUMED_NOTE =
@@ -146,14 +159,15 @@ export const PLUGINS_OFF: Readonly<Record<string, boolean>> = {
 
 /**
  * Where a notice for a dropped event goes, and its once-per-run key: a
- * request in the direct message (a note about a request goes there, never
- * as its result). Other dropped events get none.
+ * request of a kind this version can't take, in the direct message (a note
+ * about a request goes there, never as its result), once per kind. Other
+ * dropped events get none.
  */
 export function noticeFor(
   n: ChannelNotificationParams,
 ): { key: string; text: string; threadId: string | undefined } | undefined {
-  if (n.meta.event === 'request') {
-    return { key: 'requests', text: REQUESTS_NOTICE, threadId: undefined };
+  if (n.meta.event === 'request' && !handlesKind(n.meta.kind ?? '')) {
+    return { key: `request:${n.meta.kind ?? ''}`, text: REQUESTS_NOTICE, threadId: undefined };
   }
   return undefined;
 }
@@ -401,6 +415,7 @@ export class CodexBridge {
         },
         parentOf: (id) => this.parentOf(id),
         isItemThread: (threadId) => isItemThread(options.state, threadId),
+        isRequestThread: (threadId) => isRequestThread(options.state, threadId),
       });
     this.worktrees =
       options.worktrees === false
@@ -593,8 +608,17 @@ export class CodexBridge {
     }
     if ('stop' in routed) return this.stop(routed, n.content);
     if (routed.place.kind === 'request') {
-      // W6 takes requests in their own conversations; until then, a note.
-      return this.notice(n);
+      const kind = routed.place.requestKind;
+      const skill = Object.hasOwn(REQUEST_KINDS, kind) ? REQUEST_KINDS[kind]?.skill : undefined;
+      // A kind this version can't take: a note in the direct message, no turn.
+      if (!handlesKind(kind) || skill === undefined) return this.notice(n);
+      // One conversation per request, ended with its turn; a repeat is the same request.
+      if (this.conversations.has(routed.key)) return;
+      const conv = this.conversation(routed.key, routed.place);
+      return this.enqueue(conv, routed, [
+        { type: 'text', text: n.content, text_elements: [] },
+        ...(this.skills?.inputs(['buildit-requests', skill as BridgeSkill]) ?? []),
+      ]);
     }
     const conv = this.conversation(routed.key, routed.place);
     if (extra?.item !== undefined && extra.item.id.toLowerCase() === itemIdOf(conv)) {
@@ -848,7 +872,12 @@ export class CodexBridge {
   private nameOf(key: string): string {
     const place = this.conversations.get(key)?.place;
     if (place?.kind === 'item') return sanitizeLabel(place.item.key, 40);
-    if (place?.kind === 'request') return 'a request';
+    if (place?.kind === 'request') {
+      const kind = place.requestKind;
+      return Object.hasOwn(REQUEST_KINDS, kind)
+        ? (REQUEST_KINDS[kind]?.name ?? 'a request')
+        : 'a request';
+    }
     return 'other work';
   }
 
@@ -858,9 +887,10 @@ export class CodexBridge {
     this.options.threads.note(conv.key, { item: conv.place.item, queued });
   }
 
-  /** The queued line, once per wait, in the item's thread. */
+  /** The queued line, once per wait: in the item's thread, or a request's in the direct message. */
   private async postQueued(conv: Conversation, holders: string[]): Promise<void> {
-    if (conv.place.kind !== 'item') return;
+    if (conv.place.kind === 'dm') return;
+    const thread = conv.place.kind === 'item' ? conv.place.item.id : dmThread(this.options.state);
     const n = (this.queuedTimes.get(conv.key) ?? 0) + 1;
     this.queuedTimes.set(conv.key, n);
     const session = this.options.state.session?.session.id ?? 'session';
@@ -870,7 +900,7 @@ export class CodexBridge {
         {
           id: stableUuid(`${session}:${this.runId}:queued:${conv.key}:${n}`),
           text: queuedLine(holders),
-          thread_id: conv.place.item.id,
+          ...(thread === undefined ? {} : { thread_id: thread }),
         },
         { tool: 'reply', signal: AbortSignal.timeout(30_000) },
       );
@@ -1045,7 +1075,8 @@ export class CodexBridge {
       return;
     }
     conv.hadTurn = true;
-    this.options.threads.set(conv.key, threadId, true);
+    // A request's thread is ephemeral: nothing to resume, nothing to keep.
+    if (conv.place.kind !== 'request') this.options.threads.set(conv.key, threadId, true);
     if (conv.place.kind === 'item') this.options.threads.note(conv.key, { running: true });
     const turnId = str(record(response.turn).id);
     if (turnId === undefined) {
@@ -1167,12 +1198,25 @@ export class CodexBridge {
         threads.forgetThread(conv.key);
       }
     }
+    const request = conv.place.kind === 'request';
+    const config = this.threadConfig(conv.key);
     const params: ThreadStartParams = {
       cwd,
       serviceName: CODEX_CLIENT_NAME,
       developerInstructions:
-        conv.place.kind === 'item' ? ITEM_DEVELOPER_INSTRUCTIONS : DEVELOPER_INSTRUCTIONS,
-      ...this.threadConfig(conv.key),
+        conv.place.kind === 'item'
+          ? ITEM_DEVELOPER_INSTRUCTIONS
+          : request
+            ? REQUEST_DEVELOPER_INSTRUCTIONS
+            : DEVELOPER_INSTRUCTIONS,
+      // A request reads only: a read-only sandbox, no shell, and a thread Codex doesn't keep.
+      ...(request
+        ? {
+            ephemeral: true,
+            sandbox: 'read-only' as const,
+            config: { ...(config.config ?? {}), ...REQUEST_THREAD_CONFIG },
+          }
+        : config),
     };
     const r = await connection.request<ThreadStartResponse>('thread/start', params);
     const id = str(record(record(r).thread).id);
@@ -1185,7 +1229,7 @@ export class CodexBridge {
     this.register(conv, id);
     conv.model = str(record(r).model) ?? conv.model;
     conv.hadTurn = false;
-    threads.set(conv.key, id, false);
+    if (!request) threads.set(conv.key, id, false);
     logger.info('codex thread started', { place: conv.key, codex_thread: id });
     return id;
   }
@@ -1367,12 +1411,38 @@ export class CodexBridge {
     this.turnEnded(conv);
   }
 
-  /** A conversation's turn is over: its slot frees, and the map says it no longer runs. */
+  /**
+   * A conversation's turn is over: its slot frees, and the map says it no
+   * longer runs. A request's conversation ends with it: the bridge
+   * unsubscribes from its (ephemeral) thread, once its cards are answered.
+   */
   private turnEnded(conv: Conversation): void {
     this.release(conv);
     if (conv.place.kind === 'item' && this.loadThreads()) {
       this.options.threads.note(conv.key, { running: false });
     }
+    if (conv.place.kind === 'request') this.endRequest(conv);
+  }
+
+  /** A request's conversation ends: forgotten, and its thread unsubscribed. */
+  private endRequest(conv: Conversation): void {
+    if (this.conversations.get(conv.key) !== conv) return;
+    this.conversations.delete(conv.key);
+    const codexThread = conv.codexThreadId;
+    this.forgetThread(conv);
+    for (const [id, sub] of this.subagents) if (sub.conv === conv) this.subagents.delete(id);
+    if (codexThread === undefined || this.closed) return;
+    const params: ThreadUnsubscribeParams = { threadId: codexThread };
+    const job = this.options.connection.request('thread/unsubscribe', params).then(
+      () => {
+        this.options.logger.info('request done: its codex thread unsubscribed', {
+          place: conv.key,
+        });
+      },
+      () => undefined,
+    );
+    this.work.add(job);
+    void job.finally(() => this.work.delete(job));
   }
 
   private remember(conv: Conversation, turnId: string): void {
@@ -1572,6 +1642,16 @@ export class CodexBridge {
     }
     this.options.logger.info('codex answer posted', { turn: turnId, parts: parts.length });
   }
+}
+
+/** Whether a thread is a request's place this session knows (its thread, or one of its items'). */
+function isRequestThread(state: ChannelState, threadId: string): boolean {
+  const id = threadId.toLowerCase();
+  for (const r of state.requests.values()) {
+    if (r.thread?.toLowerCase() === id) return true;
+    if ((r.items ?? []).some((i) => i.id.toLowerCase() === id)) return true;
+  }
+  return false;
 }
 
 /** A conversation's item id (lower case), when it is an item's. */

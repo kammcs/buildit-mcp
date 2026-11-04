@@ -46,6 +46,12 @@ import { hookWaitSeconds } from '../transports/stdio.js';
 import { compareVersions, SERVER_VERSION } from '../version.js';
 import { runConnect, type CommandIO } from './commands.js';
 
+/** The agent API version that knows Codex as a client (connect's `client: "codex"`). */
+export const CODEX_CLIENT_API = '1.26.0';
+
+/** A plain release version: what the server takes requests to a Codex session from. */
+const PLAIN_VERSION = /^\d+\.\d+\.\d+$/;
+
 export interface CodexDeps {
   /** Resolves when the person stops it (index.ts: SIGINT or SIGTERM). */
   stop: Promise<void>;
@@ -92,6 +98,7 @@ export async function runCodex(
   }
   const key = sessionKey(options.folder, apiUrl);
   let token = await io.store.get(key);
+  let connectedNow = false;
   if (token === undefined) {
     if (options.projects.length === 0) {
       io.err(
@@ -107,10 +114,13 @@ export async function runCodex(
         label: options.label,
         yes: options.yes,
         ...(options.capabilities === undefined ? {} : { capabilities: options.capabilities }),
+        // As Codex: a server before agent API 1.26.0 shows it as the text it was sent.
+        client: 'codex',
       },
       io,
     );
     if (code !== 0) return code;
+    connectedNow = true;
     token = await io.store.get(key);
     if (token === undefined) return 1;
   }
@@ -161,9 +171,11 @@ export async function runCodex(
     logger,
     ...(io.fetch ? { fetch: io.fetch } : {}),
   });
+  let apiVersion: string | undefined;
   await api
     .getMeta()
     .then((meta) => {
+      apiVersion = meta.api_version;
       if (meta.min_mcp_version && compareVersions(SERVER_VERSION, meta.min_mcp_version) < 0) {
         logger.warn('this buildit-mcp is older than the API supports; update it', {
           version: SERVER_VERSION,
@@ -172,6 +184,22 @@ export async function runCodex(
       }
     })
     .catch(() => undefined);
+  if (
+    connectedNow &&
+    apiVersion !== undefined &&
+    compareVersions(apiVersion, CODEX_CLIENT_API) < 0
+  ) {
+    io.err(
+      `This buildIt.Social server runs agent API ${apiVersion}, older than ${CODEX_CLIENT_API}: it shows this session's client as the text "codex", and offers it requests as it does Claude Code's.\n`,
+    );
+  }
+  // The server takes requests to a Codex session only from a release (never a prerelease).
+  if (!PLAIN_VERSION.test(SERVER_VERSION)) {
+    logger.warn(
+      'this buildit-mcp is not a release: buildIt.Social sends a Codex session no requests from it',
+      { version: SERVER_VERSION },
+    );
+  }
 
   const state = new ChannelState();
   state.folder = options.folder;
@@ -308,7 +336,16 @@ export async function runCodex(
     while (state.session === undefined && !loop.isStopped()) {
       await new Promise((r) => setTimeout(r, 50));
     }
-    if (state.session !== undefined) bridge.restore();
+    if (state.session === undefined) return;
+    bridge.restore();
+    // A session connected by `connect` (as Claude Code) gets Claude Code's requests.
+    const clientKey = (state.session.session as { client_key?: unknown }).client_key;
+    if (clientKey !== undefined && clientKey !== 'codex') {
+      logger.warn(
+        'this folder\'s session was connected as Claude Code: buildIt.Social labels it so and offers it the requests Claude Code takes. To show it as Codex, run "buildit-mcp disconnect", then "buildit-mcp codex --project <KEY>"',
+        { client: typeof clientKey === 'string' ? clientKey : 'unknown' },
+      );
+    }
   })();
   deps.onReady?.(bridge, state);
   io.out(

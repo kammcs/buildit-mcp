@@ -129,6 +129,16 @@ function options(extra: Partial<ConnectOptions> = {}): ConnectOptions {
 }
 
 describe('connect', () => {
+  it('connects as Codex for buildit-mcp codex (agent API 1.26.0), as Claude Code otherwise', async () => {
+    const h = harness((n) => {
+      if (n === 1) api.sessions.approve();
+    }, 'y');
+    expect(await runConnect(options({ client: 'codex' }), h.io)).toBe(0);
+    expect(api.sessions.grants[0]).toMatchObject({ client: 'codex' });
+    const sent = api.requests.find((r) => r.path === '/v1/connect/start');
+    expect((sent?.body as { client?: unknown } | undefined)?.client).toBe('codex');
+  });
+
   it('shows the code and link, polls until approved, and saves the token for the folder', async () => {
     const h = harness((n) => {
       if (n === 2) api.sessions.approve();

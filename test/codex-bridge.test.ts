@@ -537,22 +537,6 @@ describe('buildit-mcp codex: "is writing" and server requests', () => {
     expect(r.logs.join('\n')).not.toContain('this is not json');
   });
 
-  it("tells the owner once, in the direct message, that it can't take requests yet", async () => {
-    const s = api.sessions.open(token, 'demo-folder');
-    const codex = fake();
-    await start(codex);
-    await waitFor(() => s.heartbeats.includes('online'));
-    api.sessions.pushRequest(token, { kind: 'catch_up' });
-    api.sessions.pushRequest(token, { kind: 'catch_up' });
-    await waitFor(() => s.acked === 2);
-    await waitFor(() => posts().length === 1);
-    // A new message of the direct message: a note about the request, not its result.
-    expect(posts()[0]).toMatchObject({ text: REQUESTS_NOTICE, thread_id: null });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(posts()).toHaveLength(1);
-    expect(codex.requests('turn/start')).toHaveLength(0);
-  });
-
   it('gives events no conversation takes no post and no turn', async () => {
     const s = api.sessions.open(token, 'demo-folder');
     const codex = fake();
@@ -560,7 +544,8 @@ describe('buildit-mcp codex: "is writing" and server requests', () => {
     await waitFor(() => s.heartbeats.includes('online'));
     const elsewhere = '00000000-0000-4000-8000-000000000004';
     const metas: Record<string, string>[] = [
-      { event: 'plan_resolved', thread_id: elsewhere, outcome: 'applied' },
+      // A mention without its item, an item's unassign it never had, and so on.
+      { event: 'mention', thread_id: elsewhere },
       { event: 'item_unassigned', thread_id: elsewhere, item: 'DEMO-9' },
       { event: 'child_done', thread_id: elsewhere },
       { event: 'something_new', thread_id: elsewhere },
@@ -575,8 +560,12 @@ describe('buildit-mcp codex: "is writing" and server requests', () => {
 
   it('routes notices: requests to the direct message, nothing else', () => {
     expect(noticeFor({ content: '', meta: { event: 'mention', thread_id: 't' } })).toBe(undefined);
-    expect(noticeFor({ content: '', meta: { event: 'request', thread_id: 't' } })).toEqual({
-      key: 'requests',
+    // Only a kind this version can't take: the ones it takes run in their own threads.
+    expect(noticeFor({ content: '', meta: { event: 'request', kind: 'catch_up' } })).toBe(
+      undefined,
+    );
+    expect(noticeFor({ content: '', meta: { event: 'request', kind: 'x' } })).toEqual({
+      key: 'request:x',
       text: REQUESTS_NOTICE,
       threadId: undefined,
     });
@@ -790,6 +779,7 @@ describe('the bridge parts', () => {
       has: () => false,
       parentOf: () => Promise.resolve(null),
       isItemThread: () => false,
+      isRequestThread: () => false,
     });
     expect(await router.route({ content: 'x', meta: { thread_id: 't', message_id: 'm' } })).toEqual(
       { key: 'dm', place: { kind: 'dm' }, threadId: 't', messageId: 'm', event: undefined },

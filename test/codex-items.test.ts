@@ -82,7 +82,13 @@ class Turns {
       this.started.push(ctx);
       await new Promise<void>((resolve) => {
         this.gates.set(ctx.threadId, resolve);
-        ctx.signal.addEventListener('abort', () => { resolve(); }, { once: true });
+        ctx.signal.addEventListener(
+          'abort',
+          () => {
+            resolve();
+          },
+          { once: true },
+        );
       });
       if (ctx.signal.aborted) return;
       await during?.(ctx);
@@ -345,6 +351,7 @@ describe('codex items: routing in code', () => {
       has: (key) => key === itemPlace('E') || key === 'dm',
       parentOf: (id) => Promise.resolve(id === 'S' ? { id: 'E', key: 'DEMO-1' } : null),
       isItemThread: (t) => t === 'E' || t === 'S' || t === 'X',
+      isRequestThread: (t) => t === 'X' || t === 'R',
     });
     const route = (meta: Record<string, string>) => router.route({ content: '', meta });
     expect(await route({ event: 'assignment_resolved', thread_id: 'S' })).toMatchObject({
@@ -361,7 +368,10 @@ describe('codex items: routing in code', () => {
     expect(
       await route({ event: 'plan_resolved', thread_id: 'D', outcome: 'applied' }),
     ).toMatchObject({ key: 'dm', threadId: 'D' });
-    // A request's card in an item's thread no conversation works on: only trouble is told.
+    // A request's card (in an item's thread, or a channel thread): only trouble is told.
+    expect(await route({ event: 'plan_resolved', thread_id: 'R', outcome: 'applied' })).toEqual({
+      dropped: 'plan_resolved_no_conversation',
+    });
     expect(await route({ event: 'plan_resolved', thread_id: 'X', outcome: 'applied' })).toEqual({
       dropped: 'plan_resolved_no_conversation',
     });

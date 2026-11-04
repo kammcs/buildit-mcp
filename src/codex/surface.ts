@@ -55,7 +55,7 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     },
     'thread/start': {
       result: 'v2/ThreadStartResponse',
-      sends: ['cwd', 'serviceName', 'developerInstructions', 'config'],
+      sends: ['cwd', 'serviceName', 'developerInstructions', 'config', 'ephemeral', 'sandbox'],
       reads: ['thread.id', 'approvalPolicy', 'approvalsReviewer'],
     },
     'thread/resume': {
