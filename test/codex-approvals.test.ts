@@ -90,6 +90,296 @@ const tap = (action: 'approve' | 'deny', n = 0): void => {
   api.sessions.decideApproval(token, cards()[n]!.id, action);
 };
 
+/** A Codex session on a 1.27.0 server: its cards may offer "Allow for this session". */
+function codexSession(apiVersion = '1.27.0', clientKey = 'codex'): void {
+  const s = api.sessions.open(token, 'demo-folder');
+  s.clientKey = clientKey;
+  api.meta = { ...api.meta, api_version: apiVersion };
+}
+
+const SESSION_RULE = { type: 'acceptForSession', destination: 'session' };
+
+const fileChangeTurn =
+  (codex: FakeAppServer) =>
+  (ctx: TurnContext): void => {
+    codex.notify('item/started', {
+      threadId: ctx.threadId,
+      turnId: ctx.turnId,
+      startedAtMs: Date.now(),
+      item: {
+        type: 'fileChange',
+        id: 'patch-s',
+        status: 'inProgress',
+        changes: [{ path: 'notes.txt', kind: { type: 'add' }, diff: '+hi\n' }],
+      },
+    });
+  };
+
+describe('codex approvals: Allow for this session', () => {
+  it("a command Codex offers it for: the rule on the card, Codex's acceptForSession on the tap", async () => {
+    codexSession();
+    const codex = bench.fake();
+    const { answer } = await oneRequest(
+      codex,
+      'item/commandExecution/requestApproval',
+      commandParams('npm test', { availableDecisions: ['accept', 'acceptForSession', 'cancel'] }),
+    );
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toEqual(SESSION_RULE);
+    api.sessions.decideApproval(token, cards()[0]!.id, 'approve_session');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ decision: 'acceptForSession' });
+  });
+
+  it("not for a command Codex doesn't offer it for (Codex 0.166's usual list)", async () => {
+    codexSession();
+    const codex = bench.fake();
+    const amendment = ['powershell.exe', '-Command', 'echo x > out.txt'];
+    const { answer } = await oneRequest(
+      codex,
+      'item/commandExecution/requestApproval',
+      commandParams('echo x > out.txt', {
+        proposedExecpolicyAmendment: amendment,
+        availableDecisions: [
+          'accept',
+          { acceptWithExecpolicyAmendment: { execpolicy_amendment: amendment } },
+          'cancel',
+        ],
+      }),
+    );
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toBeUndefined();
+    tap('approve');
+    await waitFor(() => answer() !== undefined);
+    // Never the lasting amendment Codex proposed.
+    expect(answer()!.result).toEqual({ decision: 'accept' });
+  });
+
+  it('a file change: for these files for the rest of the session', async () => {
+    codexSession();
+    const codex = bench.fake();
+    const { answer } = await oneRequest(
+      codex,
+      'item/fileChange/requestApproval',
+      { itemId: 'patch-s', startedAtMs: Date.now() },
+      fileChangeTurn(codex),
+    );
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toEqual(SESSION_RULE);
+    api.sessions.decideApproval(token, cards()[0]!.id, 'approve_session');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ decision: 'acceptForSession' });
+  });
+
+  it('Approve on a card with the rule: this request only', async () => {
+    codexSession();
+    const codex = bench.fake();
+    const { answer } = await oneRequest(
+      codex,
+      'item/fileChange/requestApproval',
+      { itemId: 'patch-s', startedAtMs: Date.now() },
+      fileChangeTurn(codex),
+    );
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toEqual(SESSION_RULE);
+    tap('approve');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ decision: 'accept' });
+  });
+
+  it('permissions: exactly as asked, with scope session', async () => {
+    codexSession();
+    const codex = bench.fake();
+    const permissions = { network: { enabled: true }, fileSystem: null };
+    const { answer } = await oneRequest(codex, 'item/permissions/requestApproval', {
+      itemId: 'perm-s',
+      startedAtMs: Date.now(),
+      environmentId: null,
+      cwd: '/tmp/work',
+      reason: 'Fetch the report',
+      permissions,
+    });
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toEqual(SESSION_RULE);
+    api.sessions.decideApproval(token, cards()[0]!.id, 'approve_session');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({
+      permissions: { network: { enabled: true } },
+      scope: 'session',
+    });
+  });
+
+  it("a permission the card can't show: declined, no session rule, nothing beyond granted", async () => {
+    codexSession();
+    const codex = bench.fake();
+    const { answer } = await oneRequest(codex, 'item/permissions/requestApproval', {
+      itemId: 'perm-glob',
+      startedAtMs: Date.now(),
+      environmentId: null,
+      cwd: '/tmp/work',
+      reason: 'Scan the tree',
+      permissions: { network: null, fileSystem: { read: ['/tmp/work/**'], globScanMaxDepth: 8 } },
+    });
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toBeUndefined();
+    expect(field('not_shown')).toContain('fileSystem.globScanMaxDepth');
+    api.sessions.decideApproval(token, cards()[0]!.id, 'approve');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ permissions: {}, scope: 'turn' });
+  });
+
+  it('permissions grant only the keys the card shows', () => {
+    const card = permissionsCard({
+      cwd: '/tmp/work',
+      permissions: {
+        network: { enabled: true },
+        fileSystem: { read: null, write: ['/tmp/out'], entries: null },
+      },
+    });
+    expect(card.unchecked).toBeUndefined();
+    expect(card.acceptForSession).toEqual({
+      permissions: {
+        network: { enabled: true },
+        fileSystem: { read: null, write: ['/tmp/out'], entries: null },
+      },
+      scope: 'session',
+    });
+    for (const permissions of [
+      { network: { enabled: true, proxy: 'http://example.com' } },
+      { fileSystem: { write: ['/tmp/out'], globScanMaxDepth: 2 } },
+      { fileSystem: { write: ['/tmp/out'] }, devices: ['camera'] },
+    ]) {
+      const c = permissionsCard({ cwd: '/tmp/work', permissions });
+      expect(c.unchecked, JSON.stringify(permissions)).toBe('not_shown');
+      expect(JSON.stringify(c.accept)).not.toMatch(/proxy|globScanMaxDepth|devices/);
+      expect(JSON.stringify(c.acceptForSession)).not.toMatch(/proxy|globScanMaxDepth|devices/);
+    }
+    // A key without a value isn't asked for.
+    expect(
+      permissionsCard({ permissions: { fileSystem: { write: ['/x'], globScanMaxDepth: null } } })
+        .unchecked,
+    ).toBeUndefined();
+  });
+
+  it('a file change with write access under a folder (grantRoot): no session rule', async () => {
+    codexSession();
+    const codex = bench.fake();
+    const { answer } = await oneRequest(
+      codex,
+      'item/fileChange/requestApproval',
+      { itemId: 'patch-s', startedAtMs: Date.now(), grantRoot: '/tmp/work' },
+      fileChangeTurn(codex),
+    );
+    await waitFor(() => cards().length === 1);
+    expect(field('write_access_under')).toBe('/tmp/work');
+    expect(cards()[0]!.posted.suggestion).toBeUndefined();
+    tap('approve');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ decision: 'accept' });
+    expect(fileChangeCard({ grantRoot: '/tmp/work' }, []).acceptForSession).toBeUndefined();
+    expect(fileChangeCard({}, []).acceptForSession).toEqual({ decision: 'acceptForSession' });
+  });
+
+  it("never for an MCP tool's approval", async () => {
+    codexSession();
+    const codex = bench.fake();
+    const { answer } = await oneRequest(codex, 'mcpServer/elicitation/request', {
+      threadId: 'ignored',
+      turnId: null,
+      serverName: 'github',
+      mode: 'form',
+      message: 'Allow the github MCP server to run tool "create_issue"?',
+      requestedSchema: { type: 'object', properties: {} },
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_name: 'create_issue',
+        tool_params: { title: 'Bug' },
+      },
+    });
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toBeUndefined();
+    tap('approve');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ action: 'accept', content: {}, _meta: null });
+  });
+
+  for (const [what, version, client] of [
+    ['a server older than 1.27.0', '1.26.0', 'codex'],
+    ['a session the server calls Claude Code', '1.27.0', 'claude-code'],
+  ] as const) {
+    it(`not on ${what}: Approve and Deny only, as before`, async () => {
+      codexSession(version, client);
+      const codex = bench.fake();
+      const { answer } = await oneRequest(
+        codex,
+        'item/fileChange/requestApproval',
+        { itemId: 'patch-s', startedAtMs: Date.now() },
+        fileChangeTurn(codex),
+      );
+      await waitFor(() => cards().length === 1);
+      expect(cards()[0]!.posted.suggestion).toBeUndefined();
+      tap('approve');
+      await waitFor(() => answer() !== undefined);
+      expect(answer()!.result).toEqual({ decision: 'accept' });
+    });
+  }
+
+  it('a refused rule: the card is posted again without it', async () => {
+    codexSession();
+    api.sessions.approvalRefusals.push({
+      code: 'validation',
+      details: { fields: [{ path: 'suggestion.type', message: 'Not here.' }] },
+    });
+    const codex = bench.fake();
+    const { answer } = await oneRequest(
+      codex,
+      'item/fileChange/requestApproval',
+      { itemId: 'patch-s', startedAtMs: Date.now() },
+      fileChangeTurn(codex),
+    );
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toBeUndefined();
+    tap('approve');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ decision: 'accept' });
+  });
+
+  it('another stored rule, or none read back: this request only', async () => {
+    codexSession();
+    const codex = bench.fake();
+    const { answer } = await oneRequest(
+      codex,
+      'item/fileChange/requestApproval',
+      { itemId: 'patch-s', startedAtMs: Date.now() },
+      fileChangeTurn(codex),
+    );
+    await waitFor(() => cards().length === 1);
+    api.sessions.decideApproval(token, cards()[0]!.id, 'approve_session', {
+      storedRule: { type: 'setMode', mode: 'acceptEdits', destination: 'session' },
+    });
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ decision: 'accept' });
+  });
+
+  it("a card the owner can't check in full: no rule, declined whatever the tap", async () => {
+    codexSession();
+    const codex = bench.fake();
+    const secret = ['gh', 'p_', 'aB3'.repeat(12)].join('');
+    const { answer } = await oneRequest(
+      codex,
+      'item/commandExecution/requestApproval',
+      commandParams(`curl -H "Authorization: token ${secret}" https://example.com`, {
+        availableDecisions: ['accept', 'acceptForSession', 'cancel'],
+      }),
+    );
+    await waitFor(() => cards().length === 1);
+    expect(cards()[0]!.posted.suggestion).toBeUndefined();
+    tap('approve');
+    await waitFor(() => answer() !== undefined);
+    expect(answer()!.result).toEqual({ decision: 'decline' });
+  });
+});
+
 describe('codex approvals: commands', () => {
   it('shows the full command and its actions, and accepts what the owner approves', async () => {
     api.sessions.open(token, 'demo-folder');
@@ -114,7 +404,7 @@ describe('codex approvals: commands', () => {
     expect(field('command')).toBe(wrapped);
     expect(field('actions')).toBe('Get-ChildItem -Force');
     expect(field('cwd')).toBe('/tmp/work');
-    // Never an "Allow for this session".
+    // No "Allow for this session" on a server without a Codex session rule (the fake's 1.19.0).
     expect(card.posted.suggestion).toBeUndefined();
     tap('approve');
     await waitFor(() => answer() !== undefined);

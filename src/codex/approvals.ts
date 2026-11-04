@@ -19,10 +19,21 @@
  * - **Only what the owner can see in full is approved:** a card with a cut
  *   or left-out field, a hidden (masked) value, or a change Codex didn't
  *   show, is answered `decline` whatever the tap.
- * - **Never a lasting rule:** the answers are `accept` and `decline` only
- *   (`scope: "turn"` for permissions). This version never sends
- *   `acceptForSession`, `acceptWithExecpolicyAmendment` or
- *   `applyNetworkPolicyAmendment`, and offers no "Allow for this session".
+ * - **"Allow for this session", never a lasting rule:** a card also offers
+ *   "Allow for this session" when Codex can accept the request for the rest
+ *   of its session (a command whose `availableDecisions` lists
+ *   `acceptForSession`, a file change, a permissions request), the server
+ *   takes a Codex session's rule (agent API 1.27.0, read from /v1/meta) and
+ *   this session is a Codex one (`client_key`). Then the post carries the
+ *   rule `{"type": "acceptForSession", "destination": "session"}` and the
+ *   owner's "Allow for this session" is answered with Codex's own
+ *   `acceptForSession` (`scope: "session"` for permissions), which Codex
+ *   keeps in memory for that session only. Otherwise the answers are
+ *   `accept` and `decline` (`scope: "turn"`), as on an older server, where
+ *   the button never shows. This bridge never sends
+ *   `acceptWithExecpolicyAmendment` or `applyNetworkPolicyAmendment`
+ *   (they write lasting rules), and an MCP tool's approval never offers
+ *   the session.
  * - **Cards close** when Codex says the request is resolved
  *   (`serverRequest/resolved`, whoever answered: then nothing is sent),
  *   when the item's thread is taken from the session (unassigned), when
@@ -53,6 +64,7 @@ import {
   REDACTED,
   type ApprovalDetails,
 } from '../channel/mask.js';
+import { canonicalJson } from '../channel/tool-ring.js';
 import { CardInbox, eventMessageId } from '../channel/waiters.js';
 import type { Logger } from '../log.js';
 import {
@@ -63,9 +75,16 @@ import {
   type Final,
 } from '../tools/approve.js';
 import { uuidV5 } from '../tools/ask.js';
+import { apiAtLeast } from '../tools/shared.js';
 import type { RequestId } from './protocol.js';
 import type { RpcNotification, RpcServerRequest, ServerRequestAnswer } from './rpc.js';
 import type { ServerRequestRouter } from './server-requests.js';
+
+/** The agent API that takes a Codex session's rule (acceptForSession). */
+export const CODEX_SESSION_RULE_API = '1.27.0';
+
+/** The session rule a Codex card offers: accept this kind of request for the rest of the session. */
+export const CODEX_SESSION_RULE = { type: 'acceptForSession', destination: 'session' } as const;
 
 /** The server requests this module turns into cards. */
 export const CARD_METHODS = [
@@ -90,6 +109,12 @@ export interface CardSpec {
   /** The JSON-RPC result for accept and for decline. */
   accept: unknown;
   decline: unknown;
+  /**
+   * The JSON-RPC result for "Allow for this session": Codex's own session
+   * acceptance. Undefined: Codex doesn't offer it for this request, so the
+   * card doesn't either.
+   */
+  acceptForSession?: unknown;
 }
 
 const TOOL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/;
@@ -116,6 +141,7 @@ export function describe(text: string | undefined): string | undefined {
 
 const declineDecision = { decision: 'decline' };
 const acceptDecision = { decision: 'accept' };
+const sessionDecision = { decision: 'acceptForSession' };
 
 /** item/commandExecution/requestApproval: a command, input to a running one, or a network request. */
 export function commandCard(p: Record<string, unknown>): CardSpec {
@@ -153,6 +179,10 @@ export function commandCard(p: Record<string, unknown>): CardSpec {
         : {}),
     accept: acceptDecision,
     decline: declineDecision,
+    // For the session only when Codex lists it for this request (it doesn't for every command).
+    ...(offered?.includes('acceptForSession') === true
+      ? { acceptForSession: sessionDecision }
+      : {}),
   };
 }
 
@@ -234,36 +264,71 @@ export function fileChangeCard(
     ...(unseen ? { unchecked: 'not_shown' as const } : {}),
     accept: acceptDecision,
     decline: declineDecision,
+    // Codex's "these files, for the rest of the session"; never with write access under a
+    // folder (grantRoot), which would reach past the files shown.
+    ...(root === undefined ? { acceptForSession: sessionDecision } : {}),
   };
 }
 
-/** item/permissions/requestApproval: granted for this turn only, exactly as asked. */
+/** The permissions' keys a card shows (and grants): the network's, and the file system's. */
+const SHOWN_NETWORK = ['enabled'] as const;
+const SHOWN_FILE_SYSTEM = ['read', 'write', 'entries'] as const;
+
+/** The keys of `o` with a value (not null) that aren't in `shown`. */
+function keysBeyond(o: Record<string, unknown>, shown: readonly string[]): string[] {
+  return Object.keys(o).filter((k) => !shown.includes(k) && o[k] !== null && o[k] !== undefined);
+}
+
+/** Only `keys` of `o`, those it has. */
+function only(o: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
+}
+
+/**
+ * item/permissions/requestApproval: granted for this turn only, exactly
+ * what the card shows. A permission the card can't show (any other key,
+ * such as the file system's `globScanMaxDepth` or one a newer Codex adds)
+ * makes it `not_shown`: it can only be denied, and offers no session.
+ */
 export function permissionsCard(p: Record<string, unknown>): CardSpec {
   const asked = record(p.permissions);
+  const networkAsked = asked.network !== null && asked.network !== undefined;
+  const fileSystemAsked = asked.fileSystem !== null && asked.fileSystem !== undefined;
   const network = record(asked.network);
   const fs = record(asked.fileSystem);
   const input: Record<string, unknown> = {};
   const granted: Record<string, unknown> = {};
-  if (asked.network !== null && asked.network !== undefined) {
-    input.network = network.enabled === true ? 'enabled' : JSON.stringify(network);
-    granted.network = asked.network;
+  const beyond = [
+    ...keysBeyond(asked, ['network', 'fileSystem']),
+    ...(networkAsked ? keysBeyond(network, SHOWN_NETWORK).map((k) => `network.${k}`) : []),
+    ...(fileSystemAsked ? keysBeyond(fs, SHOWN_FILE_SYSTEM).map((k) => `fileSystem.${k}`) : []),
+  ];
+  if (networkAsked) {
+    input.network =
+      network.enabled === true ? 'enabled' : JSON.stringify(only(network, SHOWN_NETWORK));
+    granted.network = only(network, SHOWN_NETWORK);
   }
-  if (asked.fileSystem !== null && asked.fileSystem !== undefined) {
+  if (fileSystemAsked) {
     if (Array.isArray(fs.read) && fs.read.length > 0) input.read = fs.read.join('\n');
     if (Array.isArray(fs.write) && fs.write.length > 0) input.write = fs.write.join('\n');
     if (Array.isArray(fs.entries) && fs.entries.length > 0) input.entries = fs.entries;
-    granted.fileSystem = asked.fileSystem;
+    granted.fileSystem = only(fs, SHOWN_FILE_SYSTEM);
   }
   if (str(p.cwd) !== undefined) input.cwd = p.cwd;
   const empty = Object.keys(granted).length === 0;
   if (empty) input.permissions = '(Codex asked for nothing it named)';
+  if (beyond.length > 0) {
+    input.not_shown = `(Codex asked for more than this card shows: ${beyond.join(', ')})`;
+  }
   return {
     toolName: 'permissions',
     description: describe(str(p.reason)),
     input,
-    ...(empty ? { unchecked: 'not_shown' as const } : {}),
+    ...(empty || beyond.length > 0 ? { unchecked: 'not_shown' as const } : {}),
     accept: { permissions: granted, scope: 'turn' },
     decline: { permissions: {}, scope: 'turn' },
+    // Exactly as asked, for the rest of the session (never more than shown).
+    acceptForSession: { permissions: granted, scope: 'session' },
   };
 }
 
@@ -291,6 +356,21 @@ export function mcpToolCard(p: Record<string, unknown>): CardSpec {
     accept: { action: 'accept', content: {}, _meta: null },
     decline: { action: 'decline', content: null, _meta: null },
   };
+}
+
+/** Whether the server's stored rule (card.closed's) is the Codex session rule this bridge sends. */
+function sameRule(stored: unknown): boolean {
+  return canonicalJson(stored) === canonicalJson(CODEX_SESSION_RULE);
+}
+
+/** A 422 for the post's suggestion: the server doesn't take this rule here. */
+function refusedRule(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.code !== 'validation') return false;
+  const fields = (err.details as { fields?: { path?: unknown }[] } | undefined)?.fields;
+  return (
+    Array.isArray(fields) &&
+    fields.some((f) => typeof f.path === 'string' && f.path.startsWith('suggestion'))
+  );
 }
 
 /** Why the details can't be approved in the app: cut, left out, or hidden. */
@@ -325,8 +405,8 @@ export interface CodexApprovalsOptions {
   now?: () => number;
 }
 
-/** How a card's wait ended. */
-type Outcome = 'accept' | 'decline' | 'none';
+/** How a card's wait ended (accept_session: "Allow for this session"). */
+type Outcome = 'accept' | 'accept_session' | 'decline' | 'none';
 
 interface OpenCard {
   codexThread: string | undefined;
@@ -445,7 +525,7 @@ export class CodexApprovals implements ServerRequestRouter {
     try {
       const outcome = await this.card(key, codexThread, { threadId: codexThread }, spec);
       this.options.logger.info('codex card decided', { tool: spec.toolName, outcome });
-      return outcome === 'accept' ? 'accept' : 'decline';
+      return outcome === 'accept' || outcome === 'accept_session' ? 'accept' : 'decline';
     } catch (err) {
       this.options.logger.warn('codex card failed; taken as denied', {
         code: err instanceof ApiError ? err.code : 'error',
@@ -477,7 +557,27 @@ export class CodexApprovals implements ServerRequestRouter {
       codex_thread: codexThread,
     });
     if (outcome === 'none') return { none: true };
-    return { result: outcome === 'accept' ? spec.accept : spec.decline };
+    return {
+      result:
+        outcome === 'accept_session' && spec.acceptForSession !== undefined
+          ? spec.acceptForSession
+          : outcome === 'accept' || outcome === 'accept_session'
+            ? spec.accept
+            : spec.decline,
+    };
+  }
+
+  /**
+   * Whether this card offers "Allow for this session": Codex offers it for
+   * the request, the owner can check the card in full, the server takes a
+   * Codex session's rule (1.27.0 or newer, as /v1/meta said) and this
+   * session is a Codex one.
+   */
+  private offersSession(spec: CardSpec, unchecked: Unchecked | undefined): boolean {
+    if (spec.acceptForSession === undefined || unchecked !== undefined) return false;
+    if (apiAtLeast(this.options.api, CODEX_SESSION_RULE_API) !== true) return false;
+    const session = this.options.state.session?.session as { client_key?: unknown } | undefined;
+    return session?.client_key === 'codex';
   }
 
   private async card(
@@ -533,8 +633,9 @@ export class CodexApprovals implements ServerRequestRouter {
       settle,
     });
     const closer = apiApprovalCloser(api, logger);
+    let rule = this.offersSession(spec, unchecked);
     try {
-      const post = (where: string | undefined) =>
+      const send = (where: string | undefined) =>
         postSessionApproval(
           api,
           {
@@ -544,10 +645,25 @@ export class CodexApprovals implements ServerRequestRouter {
             ...(spec.description === undefined ? {} : { description: spec.description }),
             fields: details.fields,
             ...(details.more_fields === undefined ? {} : { more_fields: details.more_fields }),
+            ...(rule ? { suggestion: { ...CODEX_SESSION_RULE } } : {}),
             wait_s: this.options.waitS,
           },
           { tool: 'approve', signal: AbortSignal.timeout(30_000) },
         );
+      const post = async (where: string | undefined) => {
+        try {
+          return await send(where);
+        } catch (err) {
+          // The server refused the rule (it doesn't take this session's or this kind's):
+          // the card without it, Approve and Deny only. Nothing was stored.
+          if (!rule || !refusedRule(err)) throw err;
+          rule = false;
+          logger.warn('codex approval: the session rule was refused; posted without it', {
+            tool: spec.toolName,
+          });
+          return await send(where);
+        }
+      };
       let posted: Awaited<ReturnType<typeof post>>;
       try {
         posted = await post(thread);
@@ -568,8 +684,10 @@ export class CodexApprovals implements ServerRequestRouter {
         message_id: id,
         tool: spec.toolName,
         checked: unchecked === undefined,
+        session_rule: rule,
       });
-      if (posted.approval.status !== 'open') return this.verdict(posted.approval, unchecked);
+      const verdict = (final: Final): Outcome => this.verdict(final, unchecked, rule);
+      if (posted.approval.status !== 'open') return verdict(posted.approval);
 
       let nextPoll = this.clock() + POLL_EVERY_S * scale;
       for (;;) {
@@ -590,13 +708,13 @@ export class CodexApprovals implements ServerRequestRouter {
           } catch {
             // Expired either way.
           }
-          return this.verdict(final, unchecked);
+          return verdict(final);
         }
         if (now >= nextPoll) {
           nextPoll = now + POLL_EVERY_S * scale;
           try {
             const r = await getSessionApproval(api, id, { tool: 'approve' });
-            if (r.approval.status !== 'open') return this.verdict(r.approval, unchecked);
+            if (r.approval.status !== 'open') return verdict(r.approval);
           } catch (err) {
             logger.info('codex approval state not read', {
               code: err instanceof ApiError ? err.code : 'error',
@@ -623,7 +741,7 @@ export class CodexApprovals implements ServerRequestRouter {
             nextPoll = 0;
             continue;
           }
-          return this.verdict(final, unchecked);
+          return verdict(final);
         } finally {
           done();
         }
@@ -644,8 +762,13 @@ export class CodexApprovals implements ServerRequestRouter {
     }
   }
 
-  /** The answer for how the card ended: accept only an approval the owner could check. */
-  private verdict(final: Final, unchecked: Unchecked | undefined): Outcome {
+  /**
+   * The answer for how the card ended: accept only an approval the owner
+   * could check; for the session only when this card offered the rule and
+   * the server says it stored that same rule (card.closed's rule; a state
+   * read by get or close carries none, so that's this request only).
+   */
+  private verdict(final: Final, unchecked: Unchecked | undefined, rule: boolean): Outcome {
     if (final.status === 'approved' || final.status === 'approved_session') {
       if (unchecked !== undefined) {
         this.options.logger.warn(
@@ -653,6 +776,12 @@ export class CodexApprovals implements ServerRequestRouter {
           { reason: unchecked },
         );
         return 'decline';
+      }
+      if (final.status === 'approved_session') {
+        if (rule && sameRule(final.rule)) return 'accept_session';
+        this.options.logger.warn('codex approval allowed for the session; accepted once', {
+          reason: rule ? 'rule_mismatch' : 'not_offered',
+        });
       }
       return 'accept';
     }

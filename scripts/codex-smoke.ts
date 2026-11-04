@@ -27,6 +27,13 @@
  *   npx tsx scripts/codex-smoke.ts --approved --only plan --model <id> --cwd <empty folder>
  *                                   (questions' plan step alone, asking nothing: 2 turns, at
  *                                   most 4: a question Codex asks anyway takes one more)
+ *   npx tsx scripts/codex-smoke.ts --approved --only allowsession --model <id> --cwd <empty folder>
+ *                                   ("Allow for this session": 2 turns, 3 when Codex doesn't
+ *                                   offer it for the command, at most 4; see below)
+ *   --fake-no-session               (with --dry-run --only allowsession: the fake leaves
+ *                                   acceptForSession out of the command's decisions, as Codex
+ *                                   0.166 did for an escalated command, so the file-change
+ *                                   steps run)
  *   (threads, unassign, questions, plan and requests first make the empty folder a git
  *   repository with one empty commit.)
  *
@@ -90,6 +97,25 @@
  *                   plan's Approve/Deny card, approved -> the next turn in default mode
  *                   carries it out ("yes" posted)
  *
+ * Allow for this session (--only allowsession): two turns (three when Codex
+ * doesn't offer acceptForSession for the command), at most four, with
+ * parity's approval settings; the fake API is a 1.27.0 server and the
+ * session a Codex one. The in-process owner taps "Allow for this session"
+ * on every card that offers it and denies any other:
+ *   A. command      a shell command (it appends to allow.txt) with escalated
+ *                   permissions -> a command card with the session rule, Allow for
+ *                   this session -> the bridge answers Codex's acceptForSession, the
+ *                   command ran
+ *   B. again        the same command once more in the same Codex thread -> no second
+ *                   card (Codex's session cache), the command ran again
+ *   When Codex lists no acceptForSession for A's command (0.166 offers an exec
+ *   policy amendment instead, which the bridge never sends), A is denied and
+ *   reported, and the same two steps run with a file change:
+ *   C. file change  allow-file.txt made with apply_patch -> a file_change card with the
+ *                   rule, Allow for this session -> acceptForSession, the file written
+ *   D. again        the same file changed -> no second card, the file changed
+ * This one writes in the folder (allow.txt, allow-file.txt): give it a throwaway one.
+ *
  * Requests (--only requests): two turns, at most three, on the fake API's
  * tiny #general (three messages):
  *   A. catch-up         its own thread (ephemeral, read-only, no shell, plugins off)
@@ -143,15 +169,25 @@ const { values } = parseArgs({
     'codex-path': { type: 'string' },
     'preflight-only': { type: 'boolean' },
     'dry-run': { type: 'boolean' },
+    'fake-no-session': { type: 'boolean' },
     only: { type: 'string' },
   },
 });
 
 const preflightOnly = values['preflight-only'] === true;
-const ONLY = ['steer', 'parity', 'threads', 'unassign', 'questions', 'plan', 'requests'] as const;
+const ONLY = [
+  'steer',
+  'parity',
+  'threads',
+  'unassign',
+  'questions',
+  'plan',
+  'requests',
+  'allowsession',
+] as const;
 if (values.only !== undefined && !(ONLY as readonly string[]).includes(values.only)) {
   console.error(
-    '--only takes "steer" (the steer step alone: 1 turn), "parity" (tools, approvals, files: 4 turns), "threads" (work items: 3 turns), "unassign" (its step B alone: 1 turn), "questions" (ask and plan mode: 3 turns), "plan" (its plan step alone: 2 turns) or "requests" (a catch-up and a thread to items: 2 turns).',
+    '--only takes "steer" (the steer step alone: 1 turn), "parity" (tools, approvals, files: 4 turns), "threads" (work items: 3 turns), "unassign" (its step B alone: 1 turn), "questions" (ask and plan mode: 3 turns), "plan" (its plan step alone: 2 turns), "requests" (a catch-up and a thread to items: 2 turns) or "allowsession" (Allow for this session: 2 turns, 3 when Codex doesn\'t offer it for the command).',
   );
   process.exit(2);
 }
@@ -163,9 +199,14 @@ const planStep = values.only === 'plan';
 const threadsStep = values.only === 'threads' || unassignStep;
 const questionsStep = values.only === 'questions' || planStep;
 const requestsStep = values.only === 'requests';
+/** --only allowsession: "Allow for this session" on a command (or, failing that, a file change). */
+const allowSession = values.only === 'allowsession';
+/** The runs with Codex asking before anything that writes (the owner answers the cards). */
+const approvalsRun = parity || allowSession;
 /** Turns allowed: each run's turns plus one spare. */
 // questions and plan: one turn more when Codex asks without waiting (the answer is a turn).
-const maxTurns = only || unassignStep ? 2 : requestsStep ? 3 : planStep || threadsStep ? 4 : 5;
+const maxTurns =
+  only || unassignStep ? 2 : requestsStep ? 3 : planStep || threadsStep || allowSession ? 4 : 5;
 if (
   (values.approved !== true && !preflightOnly && values['dry-run'] !== true) ||
   values.model === undefined ||
@@ -213,6 +254,7 @@ const fakeSpawn: SpawnAppServer = (args, env) => {
     const said = (ctx.inputs[0]?.[0] as { text?: unknown } | undefined)?.text;
     const first = typeof said === 'string' ? said : '';
     if (await fakeParityTurn(fake, ctx, first)) return;
+    if (await fakeAllowSessionTurn(fake, ctx, first)) return;
     if (first.includes(THREADS.one) || first.includes(THREADS.two)) {
       ctx.agentMessage(first.includes(THREADS.one) ? 'one' : 'two', 'final_answer');
       // Both run a while (longer than the second worktree takes to make), so they overlap as the real ones do.
@@ -398,6 +440,97 @@ async function fakeParityTurn(
   ctx.complete();
   return true;
 }
+/** The allowsession prompts (the dry run's fake plays a turn for each). */
+const ALLOW = {
+  a: 'Your sandbox here is read-only, so run exactly this shell command once, in this folder, with escalated permissions (ask for approval to run it outside the sandbox): echo allow >> allow.txt . Then reply only with the word ran. Do nothing else.',
+  b: 'Run exactly the same shell command once more, in this folder, with escalated permissions as before: echo allow >> allow.txt . Then reply only with the word again. Do nothing else.',
+  c: 'Create a file named allow-file.txt in this folder, containing the single line one, with your file editing tool (apply_patch), not a shell command. Then reply only with the word done.',
+  d: 'Change allow-file.txt in this folder so that its single line is two, with your file editing tool (apply_patch), not a shell command. Then reply only with the word changed.',
+} as const;
+
+/**
+ * The dry run's stand-in for Codex's session-scoped approval cache: what
+ * an acceptForSession let through, per thread (a command by its text, a
+ * file change by its file), so a second identical request isn't asked.
+ */
+const fakeSessionCache = new Set<string>();
+
+/** The dry run's stand-in for Codex in the allowsession turns; false: not one of its prompts. */
+async function fakeAllowSessionTurn(
+  fake: FakeAppServer,
+  ctx: Parameters<FakeAppServer['onTurn']>[0],
+  first: string,
+): Promise<boolean> {
+  const decision = (r: { result?: unknown }): unknown =>
+    (r.result as { decision?: unknown } | undefined)?.decision;
+  if (first === ALLOW.a || first === ALLOW.b) {
+    const command = 'echo allow >> allow.txt';
+    const key = `${ctx.threadId}:command:${command}`;
+    let run = fakeSessionCache.has(key);
+    if (!run) {
+      const amendment = ['powershell.exe', '-Command', command];
+      const r = await ctx.request('item/commandExecution/requestApproval', {
+        itemId: `exec-${Date.now()}`,
+        startedAtMs: Date.now(),
+        environmentId: 'local',
+        command,
+        cwd: work,
+        commandActions: [{ type: 'unknown', command }],
+        proposedExecpolicyAmendment: amendment,
+        availableDecisions:
+          values['fake-no-session'] === true
+            ? [
+                'accept',
+                { acceptWithExecpolicyAmendment: { execpolicy_amendment: amendment } },
+                'cancel',
+              ]
+            : ['accept', 'acceptForSession', 'cancel'],
+      });
+      if (decision(r) === 'acceptForSession') fakeSessionCache.add(key);
+      run = decision(r) === 'accept' || decision(r) === 'acceptForSession';
+    }
+    if (run) appendFileSync(join(work, 'allow.txt'), 'allow\n');
+    ctx.agentMessage(run ? (first === ALLOW.a ? 'ran' : 'again') : 'declined', 'final_answer');
+  } else if (first === ALLOW.c || first === ALLOW.d) {
+    const path = join(work, 'allow-file.txt');
+    const key = `${ctx.threadId}:file:${path}`;
+    const line = first === ALLOW.c ? 'one' : 'two';
+    let write = fakeSessionCache.has(key);
+    if (!write) {
+      const itemId = `patch-${Date.now()}`;
+      fake.notify('item/started', {
+        threadId: ctx.threadId,
+        turnId: ctx.turnId,
+        startedAtMs: Date.now(),
+        item: {
+          type: 'fileChange',
+          id: itemId,
+          status: 'inProgress',
+          changes: [
+            {
+              path,
+              kind: first === ALLOW.c ? { type: 'add' } : { type: 'update', move_path: null },
+              diff: first === ALLOW.c ? '+one\n' : '-one\n+two\n',
+            },
+          ],
+        },
+      });
+      const r = await ctx.request('item/fileChange/requestApproval', {
+        itemId,
+        startedAtMs: Date.now(),
+      });
+      if (decision(r) === 'acceptForSession') fakeSessionCache.add(key);
+      write = decision(r) === 'accept' || decision(r) === 'acceptForSession';
+    }
+    if (write) writeFileSync(path, `${line}\n`);
+    ctx.agentMessage(write ? (first === ALLOW.c ? 'done' : 'changed') : 'declined', 'final_answer');
+  } else {
+    return false;
+  }
+  ctx.complete();
+  return true;
+}
+
 const logger = createLogger({ level: 'info' });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** The parity run is over (its steps reported): the main steps are skipped. */
@@ -585,8 +718,8 @@ if (!dryRun && (threadsStep || questionsStep || requestsStep)) {
   if (!said.startsWith('OK')) process.exit(2);
 }
 
-// Free (no turn): the parity settings start, and a thread shows them.
-if (!dryRun && parity) {
+// Free (no turn): the parity settings start, and a thread shows them (allowsession's too).
+if (!dryRun && approvalsRun) {
   const shown = await freeSession([...config, ...PARITY_CONFIG], async (conn) => {
     const r = await conn.request<{
       approvalPolicy?: unknown;
@@ -619,7 +752,10 @@ const wire = {
   usage: [] as unknown[],
   /** Each turn/start's input item types, and the server requests with the bridge's answers. */
   inputs: [] as string[][],
-  serverRequests: new Map<unknown, { method: string; answer: string | undefined }>(),
+  serverRequests: new Map<
+    unknown,
+    { method: string; answer: string | undefined; params?: Record<string, unknown> }
+  >(),
   /** The MCP tool calls Codex made (server/tool), from the items. */
   toolCalls: [] as string[],
   /** thread/start's params; turn/interrupt's and thread/unsubscribe's threads; each turn's thread. */
@@ -665,7 +801,11 @@ const tapped =
         }
         if (m.method === 'thread/tokenUsage/updated') wire.usage.push(m.params?.tokenUsage);
         if (m.method !== undefined && m.id !== undefined) {
-          wire.serverRequests.set(m.id, { method: m.method, answer: undefined });
+          wire.serverRequests.set(m.id, {
+            method: m.method,
+            answer: undefined,
+            params: m.params ?? {},
+          });
         }
         const item = (
           m.params as { item?: { type?: string; server?: string; tool?: string } } | undefined
@@ -762,7 +902,7 @@ async function bridgeRun(): Promise<{ bridge: CodexBridge; stop: () => Promise<n
       label: 'codex-smoke',
       yes: false,
       capabilities: [],
-      codexConfig: parity ? [...config, ...PARITY_CONFIG] : config,
+      codexConfig: approvalsRun ? [...config, ...PARITY_CONFIG] : config,
       // Parity: debug, for the `_meta` keys of Codex's tool calls (names only; the report lists them).
       logLevel: parity ? 'debug' : 'info',
       // The questions run: work items plan first.
@@ -1186,6 +1326,151 @@ async function requestsRun(): Promise<void> {
   }
 }
 
+/**
+ * "Allow for this session": a command allowed for the session, then the
+ * same command with no second card; when Codex doesn't offer it for the
+ * command, the same with a file change. The fake API is a 1.27.0 server
+ * and the session a Codex one, so the bridge offers the rule.
+ */
+async function allowSessionRun(): Promise<void> {
+  const token = SESSION_TOKENS.first;
+  s.clientKey = 'codex';
+  api.meta = { ...api.meta, api_version: '1.27.0' };
+  const run = await bridgeRun();
+  await until(() => s.heartbeats.includes('online'), 30_000, 'online');
+  // The owner: Allow for this session where the card offers it, Deny otherwise.
+  const decided = new Set<string>();
+  const ownerTimer = setInterval(() => {
+    for (const card of api.sessions.approvals(token)) {
+      if (card.status !== 'open' || decided.has(card.id)) continue;
+      decided.add(card.id);
+      api.sessions.decideApproval(
+        token,
+        card.id,
+        card.posted.suggestion !== undefined ? 'approve_session' : 'deny',
+      );
+    }
+  }, 100);
+  const cardsSince = (n: number) => api.sessions.approvals(token).slice(n);
+  const requestsSince = (n: number) => [...wire.serverRequests.values()].slice(n);
+  const linesOf = (name: string): string[] =>
+    existsSync(join(work, name))
+      ? readFileSync(join(work, name), 'utf8')
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter((l) => l !== '')
+      : [];
+  const turn = async (n: number, what: string): Promise<void> => {
+    await until(() => wire.started.length >= n && idle(run)(), 180_000, what);
+    await run.bridge.idle();
+  };
+  const allowed = (cards: ReturnType<typeof cardsSince>, tool: string) =>
+    cards.some((c) => c.toolName === tool && c.status === 'approved_session');
+  const answeredForSession = (since: number, method: string) =>
+    requestsSince(since).some(
+      (r) => r.method === method && (r.answer ?? '').includes('"acceptForSession"'),
+    );
+  const lasting = () =>
+    [...wire.serverRequests.values()].some((r) => /Amendment/.test(r.answer ?? ''));
+  const pair = async (
+    first: { prompt: string; step: string; tool: string; method: string; check: () => boolean },
+    again: { prompt: string; step: string; check: () => boolean },
+    turns: number,
+  ): Promise<void> => {
+    const beforeCards = api.sessions.approvals(token).length;
+    const beforeRequests = wire.serverRequests.size;
+    say(first.prompt);
+    await turn(turns + 1, first.step);
+    const cardsA = cardsSince(beforeCards);
+    check(
+      first.step,
+      allowed(cardsA, first.tool) &&
+        answeredForSession(beforeRequests, first.method) &&
+        first.check(),
+      `cards ${JSON.stringify(cardsA.map((c) => `${c.toolName}:${c.status}:${c.posted.suggestion === undefined ? 'no rule' : 'rule'}`))}, acceptForSession sent ${String(answeredForSession(beforeRequests, first.method))}`,
+    );
+    const beforeAgain = api.sessions.approvals(token).length;
+    const requestsAgain = wire.serverRequests.size;
+    say(again.prompt);
+    await turn(turns + 2, again.step);
+    const asked = requestsSince(requestsAgain).filter((r) => r.method === first.method);
+    check(
+      again.step,
+      cardsSince(beforeAgain).length === 0 && asked.length === 0 && again.check(),
+      `new cards ${cardsSince(beforeAgain).length}, Codex asked ${asked.length} time(s)`,
+    );
+  };
+  try {
+    // A. a command, allowed for the session (when Codex offers it for this command)
+    const beforeRequests = wire.serverRequests.size;
+    const beforeCards = api.sessions.approvals(token).length;
+    say(ALLOW.a);
+    await turn(1, 'turn A');
+    const cardsA = cardsSince(beforeCards);
+    const commandRequest = requestsSince(beforeRequests).find(
+      (r) => r.method === 'item/commandExecution/requestApproval',
+    );
+    const offered = commandRequest?.params?.availableDecisions;
+    const offersSession = Array.isArray(offered) && offered.includes('acceptForSession');
+    if (offersSession) {
+      check(
+        'A command for the session',
+        allowed(cardsA, 'command') &&
+          answeredForSession(beforeRequests, 'item/commandExecution/requestApproval') &&
+          linesOf('allow.txt').length === 1,
+        `cards ${JSON.stringify(cardsA.map((c) => `${c.toolName}:${c.status}`))}, allow.txt lines ${linesOf('allow.txt').length}`,
+      );
+      // B. the same command again: no second card
+      const beforeAgain = api.sessions.approvals(token).length;
+      const requestsAgain = wire.serverRequests.size;
+      say(ALLOW.b);
+      await turn(2, 'turn B');
+      const asked = requestsSince(requestsAgain).filter(
+        (r) => r.method === 'item/commandExecution/requestApproval',
+      );
+      check(
+        'B again, no card',
+        cardsSince(beforeAgain).length === 0 &&
+          asked.length === 0 &&
+          linesOf('allow.txt').length === 2,
+        `new cards ${cardsSince(beforeAgain).length}, Codex asked ${asked.length} time(s), allow.txt lines ${linesOf('allow.txt').length}`,
+      );
+    } else {
+      // Codex didn't offer it for this command: its card had no rule, and was denied.
+      check(
+        'A command (not offered)',
+        commandRequest !== undefined &&
+          cardsA.every((c) => c.posted.suggestion === undefined && c.status === 'denied') &&
+          !existsSync(join(work, 'allow.txt')),
+        `Codex's decisions for the command: ${JSON.stringify(offered ?? null)}; cards ${JSON.stringify(cardsA.map((c) => `${c.toolName}:${c.status}`))}; the file-change steps instead`,
+      );
+      await pair(
+        {
+          prompt: ALLOW.c,
+          step: 'C file change for the session',
+          tool: 'file_change',
+          method: 'item/fileChange/requestApproval',
+          check: () => linesOf('allow-file.txt').join() === 'one',
+        },
+        {
+          prompt: ALLOW.d,
+          step: 'D again, no card',
+          check: () => linesOf('allow-file.txt').join() === 'two',
+        },
+        1,
+      );
+    }
+    check(
+      'never a lasting rule',
+      !lasting(),
+      'no acceptWithExecpolicyAmendment or applyNetworkPolicyAmendment sent',
+    );
+  } finally {
+    clearInterval(ownerTimer);
+    await run.stop();
+  }
+}
+
 /** The approval cards' message ids (not question cards). */
 function cardIdsOf(): Set<string> {
   return new Set(api.sessions.approvals(SESSION_TOKENS.first).map((c) => c.id));
@@ -1209,6 +1494,10 @@ try {
   }
   if (requestsStep) {
     await requestsRun();
+    throw new RunDone();
+  }
+  if (allowSession) {
+    await allowSessionRun();
     throw new RunDone();
   }
   let run = await bridgeRun();
@@ -1283,7 +1572,7 @@ try {
     `token usage: ${JSON.stringify(wire.usage.at(-1) ?? null)}`,
   );
   report.push(
-    parity
+    approvalsRun
       ? `folder now holds: ${readdirSync(work).join(', ') || 'nothing'}`
       : `folder still empty (the repository and its worktrees aside): ${contents().length === 0}`,
     `transcript: ${transcript}`,
