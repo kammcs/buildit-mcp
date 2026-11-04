@@ -9,8 +9,12 @@
  * session's threads and turns, in order, with the time since the first.
  * Left out: notifications about the Codex account and this computer
  * (account/*, remoteControl/*, moderation metadata). Rewritten: the
- * working folder and Codex's home (to /tmp paths) and the user agent's
- * platform. It fails when any string still looks like a local user path,
+ * working folder and Codex's home (to /tmp paths), the user agent's
+ * platform, the hosted tools' URL (its port and per-thread token), the
+ * tools' random idempotency keys (fixed ones), and
+ * config/read's answer, cut to the two approval settings the bridge reads
+ * (the rest is the person's whole Codex config: their MCP servers, their
+ * paths). It fails when any string still looks like a local user path,
  * so nothing from the computer or the account reaches the repository; the
  * texts kept are the smoke's own test prompts and the model's answers.
  */
@@ -22,6 +26,21 @@ import { parseArgs } from 'node:util';
 const DROPPED = [/^account\//, /^remoteControl\//, /^turn\/moderationMetadata$/];
 const WORK = '/tmp/codex-smoke-work';
 const HOME = '/tmp/codex-home';
+/** The hosted tools' per-run URL, as the fixture writes it. */
+const TOOLS_URL = 'http://127.0.0.1:0/mcp/thread-token';
+
+/** config/read's answer, cut to what the bridge reads. */
+function configAnswer(result: unknown): Record<string, unknown> {
+  const config = ((result ?? {}) as { config?: Record<string, unknown> }).config ?? {};
+  return {
+    config: {
+      approval_policy: config.approval_policy ?? null,
+      approvals_reviewer: config.approvals_reviewer ?? null,
+    },
+    origins: {},
+    layers: null,
+  };
+}
 
 export interface FixtureRecord {
   dir: 'in' | 'out';
@@ -47,12 +66,22 @@ export function fixtureOf(lines: readonly string[]): FixtureRecord[] {
     const result = m.result as Record<string, unknown> | undefined;
     if (typeof result?.codexHome === 'string') home ??= result.codexHome;
   }
+  const keys = new Map<string, string>();
+  const fixedKey = (key: string): string => {
+    let fixed = keys.get(key);
+    if (fixed === undefined) {
+      fixed = `00000000-0000-4000-8000-${String(keys.size + 1).padStart(12, '0')}`;
+      keys.set(key, fixed);
+    }
+    return fixed;
+  };
   const scrub = (v: unknown): unknown => {
     if (typeof v === 'string') {
       let s = v;
       if (work !== undefined) s = s.split(work).join(WORK);
       if (home !== undefined) s = s.split(home).join(HOME);
       s = s.replace(/^\\\\\?\\/, '');
+      s = s.replace(/http:\/\/127\.0\.0\.1:\d+\/mcp\/[A-Za-z0-9_-]+/g, TOOLS_URL);
       if (/^[^/\s]+\/\d+\.\d+\.\d+ \(/.test(s)) {
         s = s.replace(/\(([^)]*)\)/, '(Test OS; x86_64)').replace(/\) \S+ \(/, ') test (');
       }
@@ -63,13 +92,24 @@ export function fixtureOf(lines: readonly string[]): FixtureRecord[] {
     }
     if (Array.isArray(v)) return v.map(scrub);
     if (v !== null && typeof v === 'object') {
-      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrub(x)]));
+      return Object.fromEntries(
+        Object.entries(v).map(([k, x]) => [
+          k,
+          // A tool's random idempotency keys: fixed ones (secret scanners read random ones as keys).
+          k === 'idempotency_key' && typeof x === 'string' ? fixedKey(x) : scrub(x),
+        ]),
+      );
     }
     return v;
   };
+  const configReads = new Set<unknown>();
   for (const e of parsed) {
     const m = JSON.parse(e.line) as Record<string, unknown>;
     if (typeof m.method === 'string' && DROPPED.some((r) => r.test(m.method as string))) continue;
+    if (e.dir === 'out' && m.method === 'config/read') configReads.add(m.id);
+    if (e.dir === 'in' && m.method === undefined && configReads.has(m.id) && 'result' in m) {
+      m.result = configAnswer(m.result);
+    }
     first ??= e.t;
     out.push({ dir: e.dir, ms: e.t - first, msg: scrub(m) as Record<string, unknown> });
   }

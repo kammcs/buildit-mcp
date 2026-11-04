@@ -164,7 +164,8 @@ test/
   support/test-tools.ts stand-in tools across toolsets, for registry and transport tests
   support/fake-codex.ts a scripted fake codex app-server, validating the bridge's messages against
                         fixtures/codex/app-server-protocol.json (the vendored schema subset)
-  support/codex-replay.ts  plays a recorded real run (fixtures/codex/smoke-*.jsonl) back to the bridge
+  support/codex-replay.ts  plays a recorded real run (fixtures/codex/smoke-*.jsonl, parity-*.jsonl) back
+                        to the bridge
   support/codex-run.ts  runCodex in process against the fakes, for the Codex tests
   *.test.ts             vitest
 scripts/

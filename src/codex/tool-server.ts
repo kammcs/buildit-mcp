@@ -21,7 +21,11 @@
  *   that thread's config (`thread/start`'s and `thread/resume`'s
  *   `config`). The bridge knows the caller from the path alone: nothing
  *   the model writes (arguments) or Codex adds (`_meta`) is trusted for
- *   it. A path nobody was given answers 404.
+ *   it. A path nobody was given answers 404. (Codex 0.166 does put the
+ *   caller in each tools/call's `_meta`: `threadId`, `sessionId`,
+ *   `itemId`, `callId`, `windowId` and `x-codex-turn-metadata`, seen in a
+ *   real run. That is a cross-check at most: undocumented, and it may
+ *   change; the path stays the source of truth.)
  * - **Stateless:** a fresh MCP server per request, as in HTTP mode; the
  *   token's identity (GET /v1/me) is read at most every minute.
  *
