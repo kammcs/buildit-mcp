@@ -604,6 +604,15 @@ export class FakeAppServer {
         this.answer(id, method, { data: cwds.map((cwd) => ({ cwd, skills, errors: [] })) });
         return;
       }
+      case 'collaborationMode/list':
+        // As Codex 0.166 lists them.
+        this.answer(id, method, {
+          data: [
+            { name: 'Plan', mode: 'plan', model: null, reasoning_effort: 'medium' },
+            { name: 'Default', mode: 'default', model: null, reasoning_effort: null },
+          ],
+        });
+        return;
       case 'config/read':
         this.answer(id, method, { config: { ...this.userConfig }, origins: {}, layers: null });
         return;

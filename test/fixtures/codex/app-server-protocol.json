@@ -44,6 +44,10 @@
         "params": "#/definitions/v2/SkillsListParams",
         "result": "#/definitions/v2/SkillsListResponse"
       },
+      "collaborationMode/list": {
+        "params": "#/definitions/v2/CollaborationModeListParams",
+        "result": "#/definitions/v2/CollaborationModeListResponse"
+      },
       "config/read": {
         "params": "#/definitions/v2/ConfigReadParams",
         "result": "#/definitions/v2/ConfigReadResponse"
@@ -1270,6 +1274,35 @@
           "settings": { "$ref": "#/definitions/v2/Settings" }
         },
         "required": ["mode", "settings"],
+        "type": "object"
+      },
+      "CollaborationModeListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "CollaborationModeListParams",
+        "type": "object"
+      },
+      "CollaborationModeListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": { "items": { "$ref": "#/definitions/v2/CollaborationModeMask" }, "type": "array" }
+        },
+        "required": ["data"],
+        "title": "CollaborationModeListResponse",
+        "type": "object"
+      },
+      "CollaborationModeMask": {
+        "properties": {
+          "mode": { "anyOf": [{ "$ref": "#/definitions/v2/ModeKind" }, { "type": "null" }] },
+          "model": { "type": ["string", "null"] },
+          "name": { "type": "string" },
+          "reasoning_effort": {
+            "anyOf": [
+              { "anyOf": [{ "$ref": "#/definitions/v2/ReasoningEffort" }, { "type": "null" }] },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": ["name"],
         "type": "object"
       },
       "CommandAction": {

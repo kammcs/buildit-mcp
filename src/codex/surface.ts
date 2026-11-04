@@ -91,6 +91,10 @@ export const BRIDGE_SURFACE: BridgeSurface = {
       sends: ['cwds', 'forceReload'],
       reads: ['data'],
     },
+    'collaborationMode/list': {
+      result: 'v2/CollaborationModeListResponse',
+      reads: ['data'],
+    },
     'config/read': {
       result: 'v2/ConfigReadResponse',
       sends: ['cwd'],
@@ -199,6 +203,7 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     { ref: 'v2/TurnPlanStepStatus', values: ['pending', 'inProgress', 'completed'] },
     { ref: 'v2/CollaborationMode', fields: ['mode', 'settings'] },
     { ref: 'v2/ModeKind', values: ['plan', 'default'] },
+    { ref: 'v2/CollaborationModeMask', fields: ['mode', 'reasoning_effort'] },
     { ref: 'v2/Settings', fields: ['model', 'reasoning_effort', 'developer_instructions'] },
     { ref: 'v2/SkillMetadata', fields: ['name', 'path', 'enabled'] },
     { ref: 'v2/TurnError', fields: ['message', 'codexErrorInfo'] },

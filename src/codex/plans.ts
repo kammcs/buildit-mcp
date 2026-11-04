@@ -26,6 +26,16 @@ export const PLAN_FIELDS_MAX = 3;
 export const PLAN_DESCRIPTION = "Codex's plan for this item. Approve to let Codex carry it out.";
 export const PLAN_ABOVE = 'The plan is in the messages just above this card, in full.';
 
+/**
+ * What a planning turn is told after its input (static text): Codex's own
+ * plan-mode rules forbid changing the repository, but a model may still
+ * carry the work out through buildIt.Social's tools (a reply that does what
+ * was asked), and the plan must come as a `<proposed_plan>` block to be a
+ * plan item, which the bridge turns into the card.
+ */
+export const PLAN_MODE_NOTE =
+  "(buildit-mcp: plan mode is on for this item. Plan only: don't carry anything out yet, in the repository or in buildIt.Social; a reply that does what was asked is carrying it out. When the plan is ready, give it in a <proposed_plan> block in your final answer: buildIt.Social shows it to the person as a card, and their Approve ends plan mode.)";
+
 /** What Codex is told when the person approves its plan (static text). */
 export const PLAN_APPROVED =
   'The person approved your plan in buildIt.Social. Carry it out now, step by step, and keep them up to date in the thread.';

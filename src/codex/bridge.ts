@@ -105,7 +105,7 @@ import {
 } from './router.js';
 import { RpcClosedError, RpcError, type AppServerConnection, type RpcNotification } from './rpc.js';
 import { DecliningServerRequests, type ServerRequestRouter } from './server-requests.js';
-import { planCard, PLAN_APPROVED, planUpdateText } from './plans.js';
+import { planCard, PLAN_APPROVED, PLAN_MODE_NOTE, planUpdateText } from './plans.js';
 import {
   asyncAnswersText,
   asyncCardQuestions,
@@ -415,6 +415,8 @@ export class CodexBridge {
   private threadsLoadedFor: string | undefined;
   /** The approval settings last logged. */
   private policySeen: string | undefined;
+  /** Codex's collaboration mode presets, by mode (plan mode on). */
+  private readonly presets = new Map<'plan' | 'default', { reasoningEffort: string | null }>();
   private closed = false;
   private readonly unsubscribe: () => void;
   private readonly onPosted = (threadId: string): void => {
@@ -562,6 +564,7 @@ export class CodexBridge {
     }
     await this.readPolicy();
     await this.skills?.register(this.options.connection, this.options.folder);
+    if (this.options.planItems === true) await this.readPresets();
     return { verdict, userAgent };
   }
 
@@ -1072,7 +1075,7 @@ export class CodexBridge {
       return;
     }
     this.noteQueued(conv, false);
-    const input = this.firstTurnInput(conv, withNotes);
+    const input = this.firstTurnInput(conv, this.planNote(conv, withNotes));
     let response: TurnStartResponse | undefined;
     for (let attempt = 0; attempt < 2 && response === undefined; attempt++) {
       conv.starting = route.threadId;
@@ -1536,6 +1539,20 @@ export class CodexBridge {
     void job.finally(() => this.work.delete(job));
   }
 
+  /**
+   * A planning turn's input: the plan-mode note after its first text
+   * (Codex's own plan-mode rules don't count buildIt.Social's tools as doing
+   * the work, and the person approves the plan on a card).
+   */
+  private planNote(conv: Conversation, input: UserInput[]): UserInput[] {
+    if (!this.planning(conv)) return input;
+    const first = input.findIndex((i) => i.type === 'text');
+    if (first < 0) return [{ type: 'text', text: PLAN_MODE_NOTE, text_elements: [] }, ...input];
+    return input.map((i, n) =>
+      n === first && i.type === 'text' ? { ...i, text: `${i.text}\n\n${PLAN_MODE_NOTE}` } : i,
+    );
+  }
+
   /** Whether a conversation's turns plan first: an item's, with plan mode on, until approved. */
   private planning(conv: Conversation): boolean {
     return this.options.planItems === true && conv.place.kind === 'item' && conv.mode === 'plan';
@@ -1552,10 +1569,45 @@ export class CodexBridge {
       this.options.logger.warn("plan mode needs the thread's model, which codex didn't say");
       return undefined;
     }
+    // As Codex's own clients do: the listed preset's settings, on the thread's model, with the
+    // mode's built-in instructions (null).
+    const preset = this.presets.get(conv.mode);
     return {
       mode: conv.mode,
-      settings: { model: conv.model, reasoning_effort: null, developer_instructions: null },
+      settings: {
+        model: conv.model,
+        reasoning_effort: preset?.reasoningEffort ?? null,
+        developer_instructions: null,
+      },
     };
+  }
+
+  /**
+   * Codex's collaboration mode presets (collaborationMode/list, no turn),
+   * read once at startup with plan mode on: the Plan preset's reasoning
+   * effort (medium on 0.166) is what plan turns run at. A Codex that can't
+   * list them gets null (the thread's own effort), logged.
+   */
+  private async readPresets(): Promise<void> {
+    try {
+      const r = await this.options.connection.request('collaborationMode/list', {});
+      const data = record(r).data;
+      for (const m of Array.isArray(data) ? data : []) {
+        const mask = record(m);
+        const mode = mask.mode;
+        if (mode !== 'plan' && mode !== 'default') continue;
+        const effort = str(mask.reasoning_effort);
+        this.presets.set(mode, { reasoningEffort: effort ?? null });
+      }
+      this.options.logger.info('codex collaboration modes read', {
+        plan_effort: this.presets.get('plan')?.reasoningEffort ?? null,
+      });
+    } catch (err) {
+      if (err instanceof RpcClosedError) throw err;
+      this.options.logger.info("codex's collaboration modes could not be read", {
+        code: err instanceof RpcError ? err.code : 'error',
+      });
+    }
   }
 
   /**

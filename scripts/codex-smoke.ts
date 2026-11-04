@@ -251,8 +251,9 @@ const THREADS = {
 const QUESTIONS = {
   ask: 'Call the buildit ask tool once, with one question: "Pick a colour", header "Colour", options "red" and "blue". Then reply with the chosen colour only, and do nothing else.',
   plan: 'Plan how to reply in this thread with one word. Before you plan, ask me which word with your request_user_input tool: one question, header "Word", options "yes" and "no". Then propose a one-step plan: reply with that word. Do nothing else.',
+  // The first real run replied "yes" at once instead (luna, plan mode on): planning, not doing, is said plainly.
   planOnly:
-    'Propose a one-step plan, without asking me anything: reply in this thread with the single word yes. Do nothing else.',
+    "Plan this, don't do it yet: the work is to reply in this thread with the single word yes. Don't ask me anything. Give the one-step plan in a <proposed_plan> block, and reply only after I approve it.",
 } as const;
 
 /** The dry run's stand-in for Codex in the questions run; false: not one of its prompts. */

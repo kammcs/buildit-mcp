@@ -120,6 +120,12 @@ export const NEWER_REQUESTS: Readonly<Record<string, unknown>> = {
   'config/read': { config: { approval_policy: null, approvals_reviewer: null }, origins: {} },
   'skills/extraRoots/set': {},
   'skills/list': { data: [] },
+  'collaborationMode/list': {
+    data: [
+      { name: 'Plan', mode: 'plan', model: null, reasoning_effort: 'medium' },
+      { name: 'Default', mode: 'default', model: null, reasoning_effort: null },
+    ],
+  },
 };
 
 export class ReplayAppServer {

@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   PLAN_ABOVE,
   PLAN_APPROVED,
+  PLAN_MODE_NOTE,
   planCard,
   planParts,
   planUpdateText,
@@ -225,8 +226,13 @@ describe('codex plan mode', () => {
     const first = codex.requests('turn/start')[0]!;
     expect(first.collaborationMode).toEqual({
       mode: 'plan',
-      settings: { model: 'test-model', reasoning_effort: null, developer_instructions: null },
+      // The listed Plan preset's effort, on the thread's model, with plan mode's own instructions.
+      settings: { model: 'test-model', reasoning_effort: 'medium', developer_instructions: null },
     });
+    // The planning turn's first text ends with the plan-mode note; its paragraph before it stays.
+    const firstText = String((first.input as Json[])[0]!.text);
+    expect(firstText.endsWith(`\n\n${PLAN_MODE_NOTE}`)).toBe(true);
+    expect(firstText.split('\n\n')[0]).toContain('DEMO-1');
     expect(textsIn(one.id)).toEqual(['Here is my plan.']);
     const card = api.sessions.approvals(token)[0]!;
     expect(card.toolName).toBe('plan');
@@ -235,8 +241,16 @@ describe('codex plan mode', () => {
     api.sessions.decideApproval(token, card.id, 'approve');
     await waitFor(() => turns.length === 2);
     const second = codex.requests('turn/start')[1]!;
-    expect((second.collaborationMode as Json).mode).toBe('default');
-    expect((second.input as Json[])[0]).toMatchObject({ text: PLAN_APPROVED });
+    expect(second.collaborationMode).toEqual({
+      mode: 'default',
+      settings: { model: 'test-model', reasoning_effort: null, developer_instructions: null },
+    });
+    // Out of plan mode: no note.
+    expect((second.input as Json[])[0]).toEqual({
+      type: 'text',
+      text: PLAN_APPROVED,
+      text_elements: [],
+    });
     await waitFor(() => textsIn(one.id).includes('Carried out.'));
     // Plan updates stay off by default.
     expect(textsIn(one.id).some((t) => t.includes('[~] Look'))).toBe(false);
@@ -309,8 +323,9 @@ describe('codex plan mode', () => {
     api.sessions.answerCard(token, card.id, { inputs: { q1: 'o1' } });
     await waitFor(() => turns.length === 2);
     const next = codex.requests('turn/start')[1]!;
+    // The answers, then (still planning) the plan-mode note.
     expect((next.input as Json[])[0]).toMatchObject({
-      text: asyncAnswersText([{ question: 'Which word should I use?', answer: 'yes' }]),
+      text: `${asyncAnswersText([{ question: 'Which word should I use?', answer: 'yes' }])}\n\n${PLAN_MODE_NOTE}`,
     });
     expect((next.collaborationMode as Json).mode).toBe('plan');
     await waitFor(() => api.sessions.approvals(token).some((c) => c.toolName === 'plan'));
