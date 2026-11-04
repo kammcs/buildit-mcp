@@ -67,8 +67,16 @@ import { servedTools, StdioIdentity } from '../transports/stdio.js';
 export const BRIDGE_MCP_SERVER = 'buildit';
 /** The environment variable that carries the run's secret to the Codex child. */
 export const BRIDGE_SECRET_ENV = 'BUILDIT_MCP_BRIDGE_SECRET';
-/** How long Codex lets one of these tools run (ask waits up to an hour). */
+/** The longest Codex lets one of these tools run (ask waits up to an hour). */
 export const BRIDGE_TOOL_TIMEOUT_S = 3600;
+
+/**
+ * How long Codex lets a hosted tool run: the question wait (ask's, the
+ * plugin's question wait) and a minute more, at most an hour.
+ */
+export function toolTimeoutSeconds(askWaitS: number): number {
+  return Math.min(BRIDGE_TOOL_TIMEOUT_S, Math.max(60, Math.ceil(askWaitS) + 60));
+}
 /** The path prefix of the per-thread endpoints. */
 export const BRIDGE_MCP_PATH = '/mcp';
 
@@ -205,8 +213,8 @@ export class BridgeToolServer {
   /**
    * The config a place's Codex thread starts or resumes with: the buildit
    * MCP server entry, replaced whole (so the person's own `buildit` entry,
-   * if any, never mixes with it), approved without asking, with an hour
-   * per call.
+   * if any, never mixes with it), approved without asking, with the
+   * question wait and a minute per call (an hour at most).
    */
   threadConfig(place: string): ThreadToolsConfig {
     return {
@@ -214,7 +222,9 @@ export class BridgeToolServer {
         url: this.urlFor(place),
         bearer_token_env_var: BRIDGE_SECRET_ENV,
         default_tools_approval_mode: 'approve',
-        tool_timeout_sec: BRIDGE_TOOL_TIMEOUT_S,
+        tool_timeout_sec: toolTimeoutSeconds(
+          this.options.ask.toolMaxWaitS ?? this.options.ask.hookWaitS,
+        ),
         startup_timeout_sec: 30,
       },
     };

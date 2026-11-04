@@ -55,17 +55,17 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     },
     'thread/start': {
       result: 'v2/ThreadStartResponse',
-      sends: ['cwd', 'serviceName', 'developerInstructions', 'config'],
+      sends: ['cwd', 'serviceName', 'developerInstructions', 'config', 'ephemeral', 'sandbox'],
       reads: ['thread.id', 'approvalPolicy', 'approvalsReviewer'],
     },
     'thread/resume': {
       result: 'v2/ThreadResumeResponse',
-      sends: ['threadId', 'excludeTurns', 'config'],
+      sends: ['threadId', 'excludeTurns', 'cwd', 'config'],
       reads: ['thread.id', 'approvalPolicy', 'approvalsReviewer'],
     },
     'turn/start': {
       result: 'v2/TurnStartResponse',
-      sends: ['threadId', 'input'],
+      sends: ['threadId', 'input', 'collaborationMode'],
       reads: ['turn.id'],
     },
     'turn/steer': {
@@ -77,6 +77,24 @@ export const BRIDGE_SURFACE: BridgeSurface = {
       result: 'v2/TurnInterruptResponse',
       sends: ['threadId', 'turnId'],
     },
+    'thread/unsubscribe': {
+      result: 'v2/ThreadUnsubscribeResponse',
+      sends: ['threadId'],
+      reads: ['status'],
+    },
+    'skills/extraRoots/set': {
+      result: 'v2/SkillsExtraRootsSetResponse',
+      sends: ['extraRoots'],
+    },
+    'skills/list': {
+      result: 'v2/SkillsListResponse',
+      sends: ['cwds', 'forceReload'],
+      reads: ['data'],
+    },
+    'collaborationMode/list': {
+      result: 'v2/CollaborationModeListResponse',
+      reads: ['data'],
+    },
     'config/read': {
       result: 'v2/ConfigReadResponse',
       sends: ['cwd'],
@@ -85,7 +103,11 @@ export const BRIDGE_SURFACE: BridgeSurface = {
   },
   clientNotifications: ['initialized'],
   serverNotifications: {
+    'thread/started': {
+      reads: ['thread.id', 'thread.parentThreadId', 'thread.agentNickname', 'thread.agentRole'],
+    },
     'turn/started': { reads: ['threadId', 'turn.id'] },
+    'turn/plan/updated': { reads: ['threadId', 'turnId', 'explanation', 'plan'] },
     'turn/completed': {
       reads: ['threadId', 'turn.id', 'turn.status', 'turn.error', 'turn.items'],
     },
@@ -131,7 +153,7 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     },
     'item/tool/requestUserInput': {
       result: 'ToolRequestUserInputResponse',
-      reads: ['threadId'],
+      reads: ['threadId', 'itemId', 'questions'],
       sends: ['answers'],
     },
     'item/tool/call': {
@@ -149,13 +171,41 @@ export const BRIDGE_SURFACE: BridgeSurface = {
   },
   optedOut: DELTA_NOTIFICATIONS,
   types: [
-    { ref: 'v2/ThreadItem', variant: 'agentMessage', fields: ['id', 'text', 'phase'] },
+    {
+      ref: 'v2/ThreadItem',
+      variant: 'agentMessage',
+      fields: ['id', 'text', 'phase', 'delivery', 'questions'],
+    },
+    { ref: 'v2/AsyncUserInputQuestion', fields: ['title', 'options'] },
+    { ref: 'v2/AgentMessageDelivery', values: ['async'] },
     { ref: 'v2/ThreadStatus', variant: 'active', fields: ['activeFlags'] },
     { ref: 'v2/ThreadActiveFlag', values: ['waitingOnApproval', 'waitingOnUserInput'] },
     { ref: 'v2/TurnStatus', values: ['completed', 'interrupted', 'failed'] },
     { ref: 'v2/MessagePhase', values: ['commentary', 'final_answer'] },
     { ref: 'v2/UserInput', variant: 'text', fields: ['text', 'text_elements'] },
     { ref: 'v2/UserInput', variant: 'localImage', fields: ['path'] },
+    { ref: 'v2/UserInput', variant: 'skill', fields: ['name', 'path'] },
+    {
+      ref: 'v2/ThreadItem',
+      variant: 'collabAgentToolCall',
+      fields: ['senderThreadId', 'receiverThreadIds'],
+    },
+    { ref: 'v2/ThreadItem', variant: 'subAgentActivity', fields: ['agentThreadId', 'agentPath'] },
+    { ref: 'v2/SkillsListEntry', fields: ['skills'] },
+    { ref: 'v2/ThreadItem', variant: 'plan', fields: ['id', 'text'] },
+    {
+      ref: 'ToolRequestUserInputQuestion',
+      fields: ['id', 'header', 'question', 'isOther', 'isSecret', 'options'],
+    },
+    { ref: 'ToolRequestUserInputOption', fields: ['label', 'description'] },
+    { ref: 'ToolRequestUserInputAnswer', fields: ['answers'] },
+    { ref: 'v2/TurnPlanStep', fields: ['step', 'status'] },
+    { ref: 'v2/TurnPlanStepStatus', values: ['pending', 'inProgress', 'completed'] },
+    { ref: 'v2/CollaborationMode', fields: ['mode', 'settings'] },
+    { ref: 'v2/ModeKind', values: ['plan', 'default'] },
+    { ref: 'v2/CollaborationModeMask', fields: ['mode', 'reasoning_effort'] },
+    { ref: 'v2/Settings', fields: ['model', 'reasoning_effort', 'developer_instructions'] },
+    { ref: 'v2/SkillMetadata', fields: ['name', 'path', 'enabled'] },
     { ref: 'v2/TurnError', fields: ['message', 'codexErrorInfo'] },
     { ref: 'CommandExecutionApprovalDecision', values: ['accept', 'decline'] },
     { ref: 'FileChangeApprovalDecision', values: ['accept', 'decline'] },

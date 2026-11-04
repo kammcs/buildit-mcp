@@ -292,6 +292,8 @@ export function selfTest(rules: readonly Rule[] = RULES): string[] {
 /** The only files a release may ship (paths inside the tarball, without its `package/` folder). */
 export const PACKED_ALLOWED: RegExp[] = [
   /^dist\/[\w./-]+\.js$/,
+  // The plugin's skills, which the Codex bridge gives its threads (src/codex/skills.ts): SKILL.md only.
+  /^plugin\/skills\/buildit-[a-z-]+\/SKILL\.md$/,
   /^(README|CHANGELOG|SECURITY)\.md$/,
   /^LICENSE$/,
   /^package\.json$/,

@@ -341,6 +341,12 @@ export interface NotificationExtra {
    * images to the model as images.
    */
   files: { path: string; kind: string; type: string }[];
+  /**
+   * A work item's event: the item as the event names it (the Codex bridge
+   * names the item's branch from its key and title; the title is
+   * people-written, and only letters and digits of it are used).
+   */
+  item?: { key: string; id: string; title: string };
 }
 
 /** The owner's own saved files of a message, for NotificationExtra (none for a forwarded one). */
@@ -1125,7 +1131,10 @@ export class ChannelLoop {
       extra = savedOwnFiles(outcomes, forwarded !== undefined);
       shown.push(message.id);
     }
-    await this.send({ content, meta }, extra);
+    await this.send(
+      { content, meta },
+      { files: extra?.files ?? [], item: { key: item.key, id: item.id, title: item.title } },
+    );
     this.shown.add(threadId, shown);
     const conversationId = event.data.channel?.id;
     state.activateItem(item.key, item.id);

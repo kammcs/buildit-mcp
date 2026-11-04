@@ -55,6 +55,8 @@ src/
                         nothing run, tag names only), the tag rule, --capabilities
   resources.ts          buildit://items/{key} and buildit://pages/{id}
   prompts.ts            plan_epic, triage, standup
+  agent-text.ts         the item and request workers' instructions, one source for the plugin's
+                        agents (scripts/agent-text.ts writes them) and the Codex bridge's threads
   api/client.ts         fetch wrapper: auth, X-Request-Id, X-Buildit-Tool, X-Buildit-Client, retries, timeouts
   api/operations.ts     typed calls by operationId (callOperation, behind ctx.call)
   api/generated/        generated from the contract (see above)
@@ -131,10 +133,19 @@ src/
   cli/commands.ts       connect (device flow), disconnect, status
   cli/codex.ts          buildit-mcp codex (preview): the folder's session, the channel lock and loop,
                         and a codex app-server child driven by the bridge
-  codex/bridge.ts       the Codex bridge: channel notifications to turns (start or steer), the final
-                        answer posted (with the dedupe rule), "is writing" from turn events, the
-                        thread map and resume; server requests go to a ServerRequestRouter
-  codex/router.ts       which Codex conversation an event goes to (the direct message only, for now)
+  codex/bridge.ts       the Codex bridge: channel notifications to turns (start or steer) in their
+                        conversations (the direct message, each item's, each request's), at most N
+                        items at once with the queued line, unassign (interrupt, close, unsubscribe),
+                        Codex's subagents followed for their approvals, the final answer posted (with
+                        the dedupe rule), "is writing" from turn events, the thread map, resume and
+                        restore; server requests go to a ServerRequestRouter
+  codex/router.ts       which Codex conversation an event goes to, in code (items, their children,
+                        handoffs, card outcomes, requests, unassign)
+  codex/worktrees.ts    each item's git worktree in .buildit/worktrees, on a branch named for the item
+  codex/skills.ts       the plugin's skills for Codex threads (skills/extraRoots/set, skill input items)
+  codex/questions.ts    Codex's own questions (requestUserInput) as the stacked question card; never isSecret
+  codex/plans.ts        plan mode: the plan's Approve/Deny card (its fields), and plan updates as posts
+  codex/text.ts         the bridge's posts: stable message ids, long text split
   codex/tool-server.ts  the bridge's tools for its Codex child: loopback Streamable HTTP, a secret per
                         run (bearer_token_env_var), a URL per Codex thread (the caller), the shared ChannelState
   codex/approvals.ts    Codex's approvals (commands, file changes, permissions, MCP tools) as Approve/Deny
@@ -146,7 +157,8 @@ src/
   codex/rpc.ts          the JSON-RPC connection to the app-server (stdio, one JSON object a line)
   codex/process.ts      starting and ending the app-server child
   codex/binary.ts       where the native codex program is (the npm shim followed, or the PATH)
-  codex/thread-map.ts   each place's Codex thread id, kept next to the lock files
+  codex/thread-map.ts   each place's Codex thread id (and an item's key, worktree, mode, and whether
+                        its work ran or waited), kept next to the lock files
   codex/version.ts      the oldest and the tested Codex versions, read from the user agent
   codex/protocol.ts     the protocol types the bridge uses (vendored from Codex, Apache-2.0)
   codex/surface.ts      every method and field the bridge relies on (npm run codex:schema checks it)
@@ -182,6 +194,7 @@ scripts/
   codex-smoke.ts        the bridge against the real app-server: real model turns, by hand only
                         (--dry-run: against the fake; --preflight-only: the free checks)
   codex-fixture.ts      a smoke run's transcript to a replay fixture (account and machine details out)
+  agent-text.ts         writes the plugin's agents/*.md from src/agent-text.ts (--write; a test checks)
   privacy.ts            the privacy guard (npm run privacy, and privacy:pack over the packed
                         package; test/privacy.test.ts runs it too)
   conformance.ts        official conformance suite against HTTP mode, offline

@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "buildIt.Social agent API",
-    "version": "1.25.0",
+    "version": "1.26.0",
     "summary": "The versioned API that AI agents (through buildit-mcp) use to work with an org's projects, pages and channels.",
     "description": "Every call runs as the token's owner, so the app's permissions, history and notifications apply. v1 only grows: new operations, optional request fields, response fields and enum values; clients must ignore what they don't know. A breaking change is /v2, with /v1 kept for 12 months. The oldest supported buildit-mcp is 0.1.0. Generated from the API's schemas; don't edit by hand."
   },
@@ -103,7 +103,7 @@
                   "$ref": "#/components/schemas/MetaResponse"
                 },
                 "example": {
-                  "api_version": "1.25.0",
+                  "api_version": "1.26.0",
                   "min_mcp_version": "0.1.0",
                   "deprecations": [],
                   "operations": [
@@ -8687,7 +8687,7 @@
                 "$ref": "#/components/schemas/ConnectStartRequest"
               },
               "example": {
-                "client": "Claude Code",
+                "client": "claude-code",
                 "machine": "DEMO-LAPTOP",
                 "label": "demo-app",
                 "projects": [
@@ -8933,6 +8933,7 @@
                     "label": "demo-app",
                     "machine": "DEMO-LAPTOP",
                     "client": "Claude Code",
+                    "client_key": "claude-code",
                     "scopes": [
                       "projects:write",
                       "pages:read",
@@ -13929,6 +13930,14 @@
           "name"
         ]
       },
+      "AgentClient": {
+        "type": "string",
+        "enum": [
+          "claude-code",
+          "codex"
+        ],
+        "description": "What a session runs in: claude-code (Claude Code) or codex (Codex, through buildit-mcp's bridge). v1 may add clients."
+      },
       "AgentRef": {
         "type": "string",
         "minLength": 1,
@@ -14903,10 +14912,13 @@
         "type": "object",
         "properties": {
           "client": {
+            "description": "What is connecting: claude-code or codex. The user sees its name when approving (\"Codex on DESKTOP-X\"), and it decides which requests the session is offered. Left out: claude-code. \"Claude Code\" (what older clients send) is read as claude-code; anything else is refused. Before API 1.26.0 it was free text, 1–100 characters, and required.",
             "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "What is connecting, as the user will see it (\"Claude Code\"): 1–100 characters."
+            "enum": [
+              "claude-code",
+              "codex",
+              "Claude Code"
+            ]
           },
           "machine": {
             "type": "string",
@@ -14939,7 +14951,6 @@
           }
         },
         "required": [
-          "client",
           "machine",
           "label",
           "projects"
@@ -23048,6 +23059,10 @@
             "type": "string",
             "description": "Its label, as the person approved it."
           },
+          "client_key": {
+            "description": "What it runs in (claude-code or codex). Since API 1.26.0 (absent from older servers: claude-code).",
+            "$ref": "#/components/schemas/AgentClient"
+          },
           "capabilities": {
             "maxItems": 20,
             "type": "array",
@@ -28115,7 +28130,12 @@
                 "type": "string"
               },
               "client": {
-                "type": "string"
+                "type": "string",
+                "description": "What this session runs in, by name (\"Claude Code\", \"Codex\"), as the user sees it. Read client_key to tell clients apart."
+              },
+              "client_key": {
+                "description": "What this session runs in: claude-code or codex. Since API 1.26.0 (absent from older servers: claude-code).",
+                "$ref": "#/components/schemas/AgentClient"
               },
               "scopes": {
                 "type": "array",

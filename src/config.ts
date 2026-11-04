@@ -134,6 +134,8 @@ export interface ConnectOptions extends SessionCommandOptions {
   yes: boolean;
   /** --capabilities: the tags to suggest instead of detecting them ([] for "none"). */
   capabilities?: string[];
+  /** What connects: Claude Code (the default), or Codex (`buildit-mcp codex`, agent API 1.26.0). */
+  client?: 'claude-code' | 'codex';
 }
 
 /**
@@ -159,6 +161,28 @@ export interface CodexOptions extends SessionCommandOptions {
    * BUILDIT_APPROVAL_TIMEOUT_MINUTES, default 60). Off: every approval is declined.
    */
   approvals?: ApprovalsConfig;
+  /**
+   * The plugin's settings, read the same way: how many items (and
+   * requests) run at once (BUILDIT_MAX_PARALLEL_ITEMS, 1 to 10, default
+   * 3), and how long a question waits (BUILDIT_ASK_TIMEOUT_MINUTES).
+   */
+  ask?: AskConfig;
+  /**
+   * Keep the person's own Codex plugins and apps in the bridge's threads
+   * (--keep-codex-plugins, BUILDIT_CODEX_KEEP_PLUGINS; default: off).
+   */
+  keepPlugins?: boolean;
+  /**
+   * Work items plan first, in Codex's plan mode (experimental): the plan
+   * becomes an Approve/Deny card (--plan-items, BUILDIT_CODEX_PLAN_ITEMS;
+   * default: off).
+   */
+  planItems?: boolean;
+  /**
+   * Post Codex's plan updates in the turn's thread (--post-plan-updates,
+   * BUILDIT_CODEX_PLAN_UPDATES; default: off).
+   */
+  planUpdates?: boolean;
 }
 
 export type SessionCommand = 'connect' | 'disconnect' | 'status' | 'codex';
@@ -298,10 +322,14 @@ Preview. Runs Codex for this folder's buildIt.Social session: it starts
 "codex app-server" (the codex program on the PATH, signed in with
 "codex login") as its only client, and the messages you send the agent in
 its direct message become Codex turns in this folder; Codex's answers are
-posted back. A message sent while Codex works joins the running turn. The
-conversation's Codex thread is resumed after a restart. Codex's own
-configuration decides the model, the sandbox and the approval policy; in
-this preview, requests for approval are declined. Stop it with Ctrl+C.
+posted back. A message sent while Codex works joins the running turn. Each
+work item assigned to the agent gets its own Codex thread, in a git
+worktree made for it on a branch named for the item, at most
+BUILDIT_MAX_PARALLEL_ITEMS (default 3) at once; the others wait, with a
+line in their thread. Codex's approvals come to buildIt.Social as cards.
+The threads are resumed after a restart. Codex's own configuration decides
+the model, the sandbox and the approval policy; your own Codex plugins and
+apps are off in these threads. Stop it with Ctrl+C.
 
 Options:
   --project <KEY>           Connect first, if the folder has no session yet:
@@ -316,6 +344,13 @@ Options:
   -c, --config <key=value>  A Codex configuration override for the app-server,
                             as for "codex -c" (repeatable), for example
                             -c model="<model>"
+  --keep-codex-plugins      BUILDIT_CODEX_KEEP_PLUGINS  Keep your own Codex
+                            plugins and apps in these threads (default: off)
+  --plan-items              BUILDIT_CODEX_PLAN_ITEMS  Work items plan first, in
+                            Codex's plan mode (experimental): the plan comes as
+                            an Approve/Deny card, and Approve carries it out
+  --post-plan-updates       BUILDIT_CODEX_PLAN_UPDATES  Post Codex's plan updates
+                            in the item's thread (default: off)
   --log-level <level>       BUILDIT_LOG_LEVEL  ${LOG_LEVELS.join(', ')} (default info); logs go to
                             stderr and never hold what people or Codex wrote
   -h, --help                Show this help
@@ -648,6 +683,9 @@ function parseSessionCommand(
               'codex-path': { type: 'string' },
               config: { type: 'string', short: 'c', multiple: true },
               'log-level': { type: 'string' },
+              'keep-codex-plugins': { type: 'boolean' },
+              'plan-items': { type: 'boolean' },
+              'post-plan-updates': { type: 'boolean' },
             }
           : {}),
       },
@@ -744,6 +782,16 @@ function codexAction(
       logLevel: levelRaw === undefined ? 'info' : parseLogLevel(levelRaw),
       // Its warnings (a value out of range) fall back to the defaults, as in channel mode.
       approvals: parseApprovals(env, []),
+      ask: parseAsk(env, []),
+      keepPlugins:
+        values['keep-codex-plugins'] === true ||
+        parseBoolean('BUILDIT_CODEX_KEEP_PLUGINS', nonEmpty(env.BUILDIT_CODEX_KEEP_PLUGINS), false),
+      planItems:
+        values['plan-items'] === true ||
+        parseBoolean('BUILDIT_CODEX_PLAN_ITEMS', nonEmpty(env.BUILDIT_CODEX_PLAN_ITEMS), false),
+      planUpdates:
+        values['post-plan-updates'] === true ||
+        parseBoolean('BUILDIT_CODEX_PLAN_UPDATES', nonEmpty(env.BUILDIT_CODEX_PLAN_UPDATES), false),
     },
   };
 }

@@ -32,6 +32,22 @@
         "params": "#/definitions/v2/TurnInterruptParams",
         "result": "#/definitions/v2/TurnInterruptResponse"
       },
+      "thread/unsubscribe": {
+        "params": "#/definitions/v2/ThreadUnsubscribeParams",
+        "result": "#/definitions/v2/ThreadUnsubscribeResponse"
+      },
+      "skills/extraRoots/set": {
+        "params": "#/definitions/v2/SkillsExtraRootsSetParams",
+        "result": "#/definitions/v2/SkillsExtraRootsSetResponse"
+      },
+      "skills/list": {
+        "params": "#/definitions/v2/SkillsListParams",
+        "result": "#/definitions/v2/SkillsListResponse"
+      },
+      "collaborationMode/list": {
+        "params": "#/definitions/v2/CollaborationModeListParams",
+        "result": "#/definitions/v2/CollaborationModeListResponse"
+      },
       "config/read": {
         "params": "#/definitions/v2/ConfigReadParams",
         "result": "#/definitions/v2/ConfigReadResponse"
@@ -39,7 +55,9 @@
     },
     "clientNotifications": { "initialized": {} },
     "serverNotifications": {
+      "thread/started": { "params": "#/definitions/v2/ThreadStartedNotification" },
       "turn/started": { "params": "#/definitions/v2/TurnStartedNotification" },
+      "turn/plan/updated": { "params": "#/definitions/v2/TurnPlanUpdatedNotification" },
       "turn/completed": { "params": "#/definitions/v2/TurnCompletedNotification" },
       "item/started": { "params": "#/definitions/v2/ItemStartedNotification" },
       "item/completed": { "params": "#/definitions/v2/ItemCompletedNotification" },
@@ -1256,6 +1274,35 @@
           "settings": { "$ref": "#/definitions/v2/Settings" }
         },
         "required": ["mode", "settings"],
+        "type": "object"
+      },
+      "CollaborationModeListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "CollaborationModeListParams",
+        "type": "object"
+      },
+      "CollaborationModeListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": { "items": { "$ref": "#/definitions/v2/CollaborationModeMask" }, "type": "array" }
+        },
+        "required": ["data"],
+        "title": "CollaborationModeListResponse",
+        "type": "object"
+      },
+      "CollaborationModeMask": {
+        "properties": {
+          "mode": { "anyOf": [{ "$ref": "#/definitions/v2/ModeKind" }, { "type": "null" }] },
+          "model": { "type": ["string", "null"] },
+          "name": { "type": "string" },
+          "reasoning_effort": {
+            "anyOf": [
+              { "anyOf": [{ "$ref": "#/definitions/v2/ReasoningEffort" }, { "type": "null" }] },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": ["name"],
         "type": "object"
       },
       "CommandAction": {
@@ -2940,6 +2987,108 @@
         "required": ["model"],
         "type": "object"
       },
+      "SkillDependencies": {
+        "properties": {
+          "tools": { "items": { "$ref": "#/definitions/v2/SkillToolDependency" }, "type": "array" }
+        },
+        "required": ["tools"],
+        "type": "object"
+      },
+      "SkillErrorInfo": {
+        "properties": { "message": { "type": "string" }, "path": { "type": "string" } },
+        "required": ["message", "path"],
+        "type": "object"
+      },
+      "SkillInterface": {
+        "properties": {
+          "brandColor": { "type": ["string", "null"] },
+          "defaultPrompt": { "type": ["string", "null"] },
+          "displayName": { "type": ["string", "null"] },
+          "iconLarge": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AbsolutePathBuf" }, { "type": "null" }]
+          },
+          "iconLargeUrl": { "type": ["string", "null"] },
+          "iconSmall": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AbsolutePathBuf" }, { "type": "null" }]
+          },
+          "iconSmallUrl": { "type": ["string", "null"] },
+          "shortDescription": { "type": ["string", "null"] }
+        },
+        "type": "object"
+      },
+      "SkillMetadata": {
+        "properties": {
+          "dependencies": {
+            "anyOf": [{ "$ref": "#/definitions/v2/SkillDependencies" }, { "type": "null" }]
+          },
+          "description": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "interface": {
+            "anyOf": [{ "$ref": "#/definitions/v2/SkillInterface" }, { "type": "null" }]
+          },
+          "name": { "type": "string" },
+          "path": { "$ref": "#/definitions/v2/LegacyAppPathString" },
+          "pluginId": { "type": ["string", "null"] },
+          "scope": { "$ref": "#/definitions/v2/SkillScope" },
+          "shortDescription": { "type": ["string", "null"] }
+        },
+        "required": ["description", "enabled", "name", "path", "scope"],
+        "type": "object"
+      },
+      "SkillScope": { "enum": ["user", "repo", "system", "admin"], "type": "string" },
+      "SkillToolDependency": {
+        "properties": {
+          "command": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "transport": { "type": ["string", "null"] },
+          "type": { "type": "string" },
+          "url": { "type": ["string", "null"] },
+          "value": { "type": "string" }
+        },
+        "required": ["type", "value"],
+        "type": "object"
+      },
+      "SkillsExtraRootsSetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "extraRoots": { "items": { "$ref": "#/definitions/v2/AbsolutePathBuf" }, "type": "array" }
+        },
+        "required": ["extraRoots"],
+        "title": "SkillsExtraRootsSetParams",
+        "type": "object"
+      },
+      "SkillsExtraRootsSetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "SkillsExtraRootsSetResponse",
+        "type": "object"
+      },
+      "SkillsListEntry": {
+        "properties": {
+          "cwd": { "type": "string" },
+          "errors": { "items": { "$ref": "#/definitions/v2/SkillErrorInfo" }, "type": "array" },
+          "skills": { "items": { "$ref": "#/definitions/v2/SkillMetadata" }, "type": "array" }
+        },
+        "required": ["cwd", "errors", "skills"],
+        "type": "object"
+      },
+      "SkillsListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwds": { "items": { "type": "string" }, "type": "array" },
+          "forceReload": { "type": "boolean" }
+        },
+        "title": "SkillsListParams",
+        "type": "object"
+      },
+      "SkillsListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": { "items": { "$ref": "#/definitions/v2/SkillsListEntry" }, "type": "array" }
+        },
+        "required": ["data"],
+        "title": "SkillsListResponse",
+        "type": "object"
+      },
       "SortDirection": { "enum": ["asc", "desc"], "type": "string" },
       "SubAgentActivityKind": {
         "enum": ["started", "interacted", "interrupted", "completed"],
@@ -3713,6 +3862,13 @@
         "type": "object"
       },
       "ThreadStartSource": { "enum": ["startup", "clear"], "type": "string" },
+      "ThreadStartedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": { "thread": { "$ref": "#/definitions/v2/Thread" } },
+        "required": ["thread"],
+        "title": "ThreadStartedNotification",
+        "type": "object"
+      },
       "ThreadStatus": {
         "oneOf": [
           {
@@ -3770,6 +3926,24 @@
         "required": ["status", "threadId"],
         "title": "ThreadStatusChangedNotification",
         "type": "object"
+      },
+      "ThreadUnsubscribeParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": { "threadId": { "type": "string" } },
+        "required": ["threadId"],
+        "title": "ThreadUnsubscribeParams",
+        "type": "object"
+      },
+      "ThreadUnsubscribeResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": { "status": { "$ref": "#/definitions/v2/ThreadUnsubscribeStatus" } },
+        "required": ["status"],
+        "title": "ThreadUnsubscribeResponse",
+        "type": "object"
+      },
+      "ThreadUnsubscribeStatus": {
+        "enum": ["notLoaded", "notSubscribed", "unsubscribed"],
+        "type": "string"
       },
       "ToolsV2": {
         "properties": {
@@ -3852,6 +4026,27 @@
           { "enum": ["summary"], "type": "string" },
           { "enum": ["full"], "type": "string" }
         ]
+      },
+      "TurnPlanStep": {
+        "properties": {
+          "status": { "$ref": "#/definitions/v2/TurnPlanStepStatus" },
+          "step": { "type": "string" }
+        },
+        "required": ["status", "step"],
+        "type": "object"
+      },
+      "TurnPlanStepStatus": { "enum": ["pending", "inProgress", "completed"], "type": "string" },
+      "TurnPlanUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "explanation": { "type": ["string", "null"] },
+          "plan": { "items": { "$ref": "#/definitions/v2/TurnPlanStep" }, "type": "array" },
+          "threadId": { "type": "string" },
+          "turnId": { "type": "string" }
+        },
+        "required": ["plan", "threadId", "turnId"],
+        "title": "TurnPlanUpdatedNotification",
+        "type": "object"
       },
       "TurnStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

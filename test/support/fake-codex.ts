@@ -21,7 +21,8 @@
  * - stdin closing ends it, as the real one exits then.
  */
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 
@@ -121,6 +122,15 @@ export interface TurnContext {
   signal: AbortSignal;
   /** An agent message: item/started, then item/completed. */
   agentMessage(text: string, phase: 'final_answer' | 'commentary' | null): void;
+  /** Questions asked without waiting, as Codex 0.166 asks in plan mode: an async agent message. */
+  asyncQuestion(text: string, questions: { title: string; options: string[] | null }[]): void;
+  /** A finished plan (plan mode): a `plan` item. */
+  plan(text: string): void;
+  /** Codex's checklist while it works (turn/plan/updated). */
+  planUpdate(
+    steps: { step: string; status: 'pending' | 'inProgress' | 'completed' }[],
+    explanation?: string,
+  ): void;
   /** A reasoning item (work, nothing to post). */
   reasoning(): void;
   /** thread/status/changed to active with these flags. */
@@ -155,6 +165,13 @@ interface FakeThread {
   config: Json | undefined;
   turn: { id: string; inputs: unknown[][]; abort: AbortController; done: boolean } | undefined;
   turns: number;
+  /** The params it was started with (thread/start), or resumed with. */
+  params?: Json;
+  /** A subagent's: the thread that spawned it, and its nickname. */
+  parentThreadId?: string;
+  nickname?: string;
+  /** The bridge unsubscribed from it. */
+  unsubscribed?: boolean;
 }
 
 export interface FakeCodexOptions {
@@ -198,6 +215,8 @@ export class FakeAppServer {
   /** Answer turn/steer with these errors first (tests: the turn ended meanwhile). */
   failSteer: { code: number; message: string }[] = [];
   private readonly threads = new Map<string, FakeThread>();
+  /** The skill roots the bridge added (skills/extraRoots/set). */
+  skillRoots: string[] = [];
   private initialized = false;
   private nextServerId = 0;
   private readonly pendingServer = new Map<
@@ -238,6 +257,48 @@ export class FakeAppServer {
   /** The ids of every thread the fake knows. */
   threadIds(): string[] {
     return [...this.threads.keys()];
+  }
+
+  /** The thread a thread/start or thread/resume made, by its cwd's end (tests). */
+  threadIn(cwdEnd: string): string | undefined {
+    for (const t of this.threads.values()) {
+      const cwd = t.cwd.split('\\').join('/');
+      if (t.parentThreadId === undefined && cwd.endsWith(cwdEnd)) return t.id;
+    }
+    return undefined;
+  }
+
+  /** Whether the bridge unsubscribed from a thread. */
+  unsubscribed(threadId: string): boolean {
+    return this.threads.get(threadId)?.unsubscribed === true;
+  }
+
+  /**
+   * A Codex subagent spawned by a thread's turn (multi_agent): its own
+   * thread, announced with thread/started (`parentThreadId`), whose server
+   * requests carry its own thread id. Returns its id and a request function.
+   */
+  spawnSubagent(
+    parentThreadId: string,
+    nickname = 'Ada',
+  ): { id: string; request: (method: string, params: Json) => Promise<Received> } {
+    const parent = this.threads.get(parentThreadId);
+    const thread: FakeThread = {
+      id: randomUUID(),
+      cwd: parent?.cwd ?? '/tmp/work',
+      config: parent?.config,
+      turn: undefined,
+      turns: 1,
+      parentThreadId,
+      nickname,
+    };
+    this.threads.set(thread.id, thread);
+    this.notify('thread/started', { thread: threadObject(thread) });
+    const turnId = randomUUID();
+    return {
+      id: thread.id,
+      request: (method, params) => this.request(method, { threadId: thread.id, turnId, ...params }),
+    };
   }
 
   /**
@@ -478,11 +539,11 @@ export class FakeAppServer {
           config: p.config as Json | undefined,
           turn: undefined,
           turns: 0,
+          params: p,
         };
         this.threads.set(thread.id, thread);
         this.answer(id, method, threadResponse(thread, this.userConfig));
-        // The bridge doesn't read thread/started (not in the subset): sent unchecked.
-        this.sendRaw({ method: 'thread/started', params: { thread: threadObject(thread) } });
+        this.notify('thread/started', { thread: threadObject(thread) });
         return;
       }
       case 'thread/resume': {
@@ -503,10 +564,55 @@ export class FakeAppServer {
           turns: 1,
         };
         thread.config = p.config as Json | undefined;
+        if (typeof p.cwd === 'string') thread.cwd = p.cwd;
+        thread.unsubscribed = false;
         this.threads.set(threadId, thread);
         this.answer(id, method, threadResponse(thread, this.userConfig));
         return;
       }
+      case 'thread/unsubscribe': {
+        const thread = this.threads.get(String(p.threadId));
+        if (thread === undefined) {
+          this.answer(id, method, { status: 'notLoaded' });
+          return;
+        }
+        thread.unsubscribed = true;
+        this.answer(id, method, { status: 'unsubscribed' });
+        return;
+      }
+      case 'skills/extraRoots/set':
+        this.skillRoots = Array.isArray(p.extraRoots) ? p.extraRoots.map(String) : [];
+        this.answer(id, method, {});
+        return;
+      case 'skills/list': {
+        const skills: Json[] = [];
+        for (const root of this.skillRoots) {
+          for (const name of existsSync(root) ? readdirSync(root) : []) {
+            const path = join(root, name, 'SKILL.md');
+            if (!existsSync(path)) continue;
+            // As the real one lists the plugin's skills: under its namespace.
+            skills.push({
+              name: `buildit:${name}`,
+              description: name,
+              path,
+              scope: 'user',
+              enabled: true,
+            });
+          }
+        }
+        const cwds = Array.isArray(p.cwds) ? p.cwds.map(String) : ['/tmp/work'];
+        this.answer(id, method, { data: cwds.map((cwd) => ({ cwd, skills, errors: [] })) });
+        return;
+      }
+      case 'collaborationMode/list':
+        // As Codex 0.166 lists them.
+        this.answer(id, method, {
+          data: [
+            { name: 'Plan', mode: 'plan', model: null, reasoning_effort: 'medium' },
+            { name: 'Default', mode: 'default', model: null, reasoning_effort: null },
+          ],
+        });
+        return;
       case 'config/read':
         this.answer(id, method, { config: { ...this.userConfig }, origins: {}, layers: null });
         return;
@@ -640,6 +746,29 @@ export class FakeAppServer {
           questions: null,
         });
       },
+      asyncQuestion: (text, questions) => {
+        emitItem({
+          type: 'agentMessage',
+          id: `call_${randomUUID()}`,
+          text,
+          phase: 'final_answer',
+          memoryCitation: null,
+          delivery: 'async',
+          questions,
+        });
+      },
+      plan: (text) => {
+        emitItem({ type: 'plan', id: `plan_${randomUUID()}`, text });
+      },
+      planUpdate: (steps, explanation) => {
+        if (!live()) return;
+        this.notify('turn/plan/updated', {
+          threadId: thread.id,
+          turnId: turn.id,
+          explanation: explanation ?? null,
+          plan: steps,
+        });
+      },
       reasoning: () => {
         emitItem({ type: 'reasoning', id: `rs_${randomUUID()}`, summary: [], content: [] });
       },
@@ -731,7 +860,7 @@ function threadObject(thread: FakeThread): Json {
     ],
     extra: null,
     forkedFromId: null,
-    parentThreadId: null,
+    parentThreadId: thread.parentThreadId ?? null,
     ephemeral: false,
     section: null,
     sectionEnteredAt: null,
@@ -744,7 +873,7 @@ function threadObject(thread: FakeThread): Json {
     originator: 'buildit_mcp',
     canAcceptDirectInput: true,
     threadSource: null,
-    agentNickname: null,
+    agentNickname: thread.nickname ?? null,
     agentRole: null,
     gitInfo: null,
     name: null,

@@ -28,10 +28,13 @@ import { CodexBridge, CodexVersionError } from '../codex/bridge.js';
 import { spawnAppServer, type SpawnAppServer } from '../codex/process.js';
 import { AppServerConnection } from '../codex/rpc.js';
 import { ThreadMap } from '../codex/thread-map.js';
+import type { Worktrees } from '../codex/worktrees.js';
+import type { AskOptions } from '../tools/ask.js';
 import { BridgeToolServer, newBridgeSecret } from '../codex/tool-server.js';
 import {
   DEFAULT_APPROVAL_TIMEOUT_MINUTES,
   DEFAULT_ASK_TIMEOUT_MINUTES,
+  DEFAULT_MAX_PARALLEL_ITEMS,
   parseApiUrl,
   type CodexOptions,
 } from '../config.js';
@@ -42,6 +45,12 @@ import { forgetSession, savedApiUrl, sessionKey } from '../secrets/keychain.js';
 import { hookWaitSeconds } from '../transports/stdio.js';
 import { compareVersions, SERVER_VERSION } from '../version.js';
 import { runConnect, type CommandIO } from './commands.js';
+
+/** The agent API version that knows Codex as a client (connect's `client: "codex"`). */
+export const CODEX_CLIENT_API = '1.26.0';
+
+/** A plain release version: what the server takes requests to a Codex session from. */
+const PLAIN_VERSION = /^\d+\.\d+\.\d+$/;
 
 export interface CodexDeps {
   /** Resolves when the person stops it (index.ts: SIGINT or SIGTERM). */
@@ -62,6 +71,10 @@ export interface CodexDeps {
   onReady?: (bridge: CodexBridge, state: ChannelState) => void;
   /** For tests: the approval cards' timing (a wait in seconds, and milliseconds per second). */
   approvals?: { msPerSecond?: number; now?: () => number; waitS?: number };
+  /** For tests: the items' worktrees (false: items work in the folder). */
+  worktrees?: Worktrees | false;
+  /** For tests: the question cards' timing (a wait in seconds, milliseconds per second). */
+  questions?: Partial<AskOptions>;
 }
 
 /** Runs the bridge until it is stopped; the exit code. */
@@ -85,6 +98,7 @@ export async function runCodex(
   }
   const key = sessionKey(options.folder, apiUrl);
   let token = await io.store.get(key);
+  let connectedNow = false;
   if (token === undefined) {
     if (options.projects.length === 0) {
       io.err(
@@ -100,10 +114,13 @@ export async function runCodex(
         label: options.label,
         yes: options.yes,
         ...(options.capabilities === undefined ? {} : { capabilities: options.capabilities }),
+        // As Codex: a server before agent API 1.26.0 shows it as the text it was sent.
+        client: 'codex',
       },
       io,
     );
     if (code !== 0) return code;
+    connectedNow = true;
     token = await io.store.get(key);
     if (token === undefined) return 1;
   }
@@ -154,9 +171,11 @@ export async function runCodex(
     logger,
     ...(io.fetch ? { fetch: io.fetch } : {}),
   });
+  let apiVersion: string | undefined;
   await api
     .getMeta()
     .then((meta) => {
+      apiVersion = meta.api_version;
       if (meta.min_mcp_version && compareVersions(SERVER_VERSION, meta.min_mcp_version) < 0) {
         logger.warn('this buildit-mcp is older than the API supports; update it', {
           version: SERVER_VERSION,
@@ -165,6 +184,22 @@ export async function runCodex(
       }
     })
     .catch(() => undefined);
+  if (
+    connectedNow &&
+    apiVersion !== undefined &&
+    compareVersions(apiVersion, CODEX_CLIENT_API) < 0
+  ) {
+    io.err(
+      `This buildIt.Social server runs agent API ${apiVersion}, older than ${CODEX_CLIENT_API}: it shows this session's client as the text "codex", and offers it requests as it does Claude Code's.\n`,
+    );
+  }
+  // The server takes requests to a Codex session only from a release (never a prerelease).
+  if (!PLAIN_VERSION.test(SERVER_VERSION)) {
+    logger.warn(
+      'this buildit-mcp is not a release: buildIt.Social sends a Codex session no requests from it',
+      { version: SERVER_VERSION },
+    );
+  }
 
   const state = new ChannelState();
   state.folder = options.folder;
@@ -177,12 +212,19 @@ export async function runCodex(
   // Attachments go to a folder of no client's own (.buildit/attachments), not Claude Code's.
   state.attachmentsDir = BRIDGE_ATTACHMENTS_DIR;
 
+  const askWaitS = hookWaitSeconds(options.ask?.timeoutMinutes ?? DEFAULT_ASK_TIMEOUT_MINUTES);
   // The bridge's tools, for its Codex child only (loopback, a secret for this run).
   const tools = new BridgeToolServer({
     api,
     state,
     logger: logger.child({ component: 'codex_tools' }),
-    ask: { questionsInApp: true, hookWaitS: hookWaitSeconds(DEFAULT_ASK_TIMEOUT_MINUTES) },
+    // ask waits as long as the plugin's questions do, and Codex lets it (tool_timeout_sec).
+    ask: {
+      questionsInApp: true,
+      hookWaitS: askWaitS,
+      toolDefaultWaitS: askWaitS,
+      toolMaxWaitS: askWaitS,
+    },
     secret: bridgeSecret,
   });
   try {
@@ -210,6 +252,19 @@ export async function runCodex(
     threads: new ThreadMap(join(lockDir, `${key}.codex-threads.json`), logger),
     folder: options.folder,
     toolServer: tools,
+    maxParallel: options.ask?.maxParallelItems ?? DEFAULT_MAX_PARALLEL_ITEMS,
+    keepPlugins: options.keepPlugins === true,
+    planItems: options.planItems === true,
+    postPlanUpdates: options.planUpdates === true,
+    // Codex's own questions wait as ask's do.
+    questions: {
+      questionsInApp: true,
+      hookWaitS: askWaitS,
+      toolDefaultWaitS: askWaitS,
+      toolMaxWaitS: askWaitS,
+      ...deps.questions,
+    },
+    ...(deps.worktrees === undefined ? {} : { worktrees: deps.worktrees }),
     approvals: {
       inApp: options.approvals?.inApp ?? true,
       waitS: hookWaitSeconds(options.approvals?.timeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES),
@@ -276,6 +331,22 @@ export async function runCodex(
     },
   });
   const running = loop.start();
+  // Once the session is known, items whose work a restart cut short carry on.
+  const restoring = (async () => {
+    while (state.session === undefined && !loop.isStopped()) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (state.session === undefined) return;
+    bridge.restore();
+    // A session connected by `connect` (as Claude Code) gets Claude Code's requests.
+    const clientKey = (state.session.session as { client_key?: unknown }).client_key;
+    if (clientKey !== undefined && clientKey !== 'codex') {
+      logger.warn(
+        'this folder\'s session was connected as Claude Code: buildIt.Social labels it so and offers it the requests Claude Code takes. To show it as Codex, run "buildit-mcp disconnect", then "buildit-mcp codex --project <KEY>"',
+        { client: typeof clientKey === 'string' ? clientKey : 'unknown' },
+      );
+    }
+  })();
   deps.onReady?.(bridge, state);
   io.out(
     'buildit-mcp codex (preview): messages to your agent in buildIt.Social now go to Codex in this folder. Press Ctrl+C to stop.\n',
@@ -288,6 +359,7 @@ export async function runCodex(
   ]);
   if (outcome === 'exited') logger.error('the codex app-server exited; stopping');
   await loop.stop();
+  await restoring;
   await shutdown();
   if (outcome === 'stopped') return 0;
   if (outcome === 'loop' && !status.ended && !connection.closed) return 0;
