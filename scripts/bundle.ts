@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -27,7 +28,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Client } from '@modelcontextprotocol/client';
@@ -77,10 +78,28 @@ function filesUnder(dir: string, skip: string): string[] {
   return out.sort();
 }
 
+/** A `files` entry as the paths it names: itself, or each match of its one `*` segment. */
+function expandEntry(entry: string): string[] {
+  const parts = entry.split('/');
+  const star = parts.indexOf('*');
+  if (star < 0) return [entry];
+  const base = parts.slice(0, star).join('/');
+  const rest = parts.slice(star + 1).join('/');
+  return readdirSync(join(root, base))
+    .map((name) => [base, name, rest].filter(Boolean).join('/'))
+    .filter((path) => existsSync(join(root, path)))
+    .sort();
+}
+
 const stage = mkdtempSync(join(tmpdir(), 'buildit-mcp-bundle-'));
 try {
   for (const entry of [...pkg.files, 'package.json', 'package-lock.json', '.npmrc']) {
-    cpSync(join(root, entry), join(stage, entry), { recursive: true });
+    // A `files` entry may hold one `*` segment (`plugin/skills/*/SKILL.md`):
+    // copy each match, since cpSync takes literal paths only.
+    for (const path of expandEntry(entry)) {
+      mkdirSync(dirname(join(stage, path)), { recursive: true });
+      cpSync(join(root, path), join(stage, path), { recursive: true });
+    }
   }
   const manifest = JSON.parse(readFileSync(join(root, 'bundle', 'manifest.json'), 'utf8')) as {
     version: string;
