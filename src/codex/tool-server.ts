@@ -92,7 +92,7 @@ export interface ToolServerOptions {
   ask: AskOptions;
   /** The host to bind (default 127.0.0.1; only loopback is allowed). */
   host?: string;
-  /** For tests: the secret (default 32 random bytes). */
+  /** The run's secret (default newBridgeSecret()). */
   secret?: string;
   /** Told when a call finds the session token refused for good. */
   onSessionOver?: (code: string) => void;
@@ -108,6 +108,11 @@ export function hasSecret(header: string | undefined, secret: string): boolean {
 }
 
 const randomToken = (): string => randomBytes(24).toString('base64url');
+
+/** A secret for one run: 32 random bytes, base64url. */
+export function newBridgeSecret(): string {
+  return randomBytes(32).toString('base64url');
+}
 
 function jsonRpcError(code: number, message: string): Record<string, unknown> {
   return { jsonrpc: '2.0', error: { code, message }, id: null };
@@ -146,7 +151,7 @@ export class BridgeToolServer {
   private threadOf: (place: string) => string | undefined = () => undefined;
 
   constructor(private readonly options: ToolServerOptions) {
-    this.secret = options.secret ?? randomBytes(32).toString('base64url');
+    this.secret = options.secret ?? newBridgeSecret();
     this.host = options.host ?? '127.0.0.1';
     const catalog = options.catalog ?? CATALOG;
     // Channel mode's policy: every toolset, nothing excluded (the API checks every call).

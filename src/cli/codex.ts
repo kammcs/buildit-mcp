@@ -28,7 +28,7 @@ import { CodexBridge, CodexVersionError } from '../codex/bridge.js';
 import { spawnAppServer, type SpawnAppServer } from '../codex/process.js';
 import { AppServerConnection } from '../codex/rpc.js';
 import { ThreadMap } from '../codex/thread-map.js';
-import { BridgeToolServer } from '../codex/tool-server.js';
+import { BridgeToolServer, newBridgeSecret } from '../codex/tool-server.js';
 import {
   DEFAULT_APPROVAL_TIMEOUT_MINUTES,
   DEFAULT_ASK_TIMEOUT_MINUTES,
@@ -107,9 +107,11 @@ export async function runCodex(
     if (token === undefined) return 1;
   }
 
+  // The hosted tools' secret for this run, made first so the logs scrub it too.
+  const bridgeSecret = newBridgeSecret();
   const logger = createLogger({
     level: options.logLevel,
-    secrets: [token],
+    secrets: [token, bridgeSecret],
     ...(deps.logSink === undefined ? {} : { sink: deps.logSink }),
   });
 
@@ -180,6 +182,7 @@ export async function runCodex(
     state,
     logger: logger.child({ component: 'codex_tools' }),
     ask: { questionsInApp: true, hookWaitS: hookWaitSeconds(DEFAULT_ASK_TIMEOUT_MINUTES) },
+    secret: bridgeSecret,
   });
   try {
     await tools.start();
