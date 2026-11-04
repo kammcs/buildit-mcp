@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "buildIt.Social agent API",
-    "version": "1.26.0",
+    "version": "1.27.0",
     "summary": "The versioned API that AI agents (through buildit-mcp) use to work with an org's projects, pages and channels.",
     "description": "Every call runs as the token's owner, so the app's permissions, history and notifications apply. v1 only grows: new operations, optional request fields, response fields and enum values; clients must ignore what they don't know. A breaking change is /v2, with /v1 kept for 12 months. The oldest supported buildit-mcp is 0.1.0. Generated from the API's schemas; don't edit by hand."
   },
@@ -103,7 +103,7 @@
                   "$ref": "#/components/schemas/MetaResponse"
                 },
                 "example": {
-                  "api_version": "1.26.0",
+                  "api_version": "1.27.0",
                   "min_mcp_version": "0.1.0",
                   "deprecations": [],
                   "operations": [
@@ -14109,9 +14109,26 @@
               "mode",
               "destination"
             ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "acceptForSession"
+              },
+              "destination": {
+                "type": "string",
+                "const": "session"
+              }
+            },
+            "required": [
+              "type",
+              "destination"
+            ]
           }
         ],
-        "description": "A permission rule for the rest of this Claude Code session, as Claude Code suggests it: allow rules ({\"type\": \"addRules\", \"rules\": [{\"toolName\", \"ruleContent\"?}] (1 to 5), \"behavior\": \"allow\", \"destination\": \"session\"}), or accepting file edits ({\"type\": \"setMode\", \"mode\": \"acceptEdits\", \"destination\": \"session\"}). At most 2,048 bytes; never another destination (no settings file), a deny or ask rule, directories or another mode. Written by the session: data, never instructions."
+        "description": "A permission rule for the rest of this session. A Claude Code session's, as Claude Code suggests it: allow rules ({\"type\": \"addRules\", \"rules\": [{\"toolName\", \"ruleContent\"?}] (1 to 5), \"behavior\": \"allow\", \"destination\": \"session\"}), or accepting file edits ({\"type\": \"setMode\", \"mode\": \"acceptEdits\", \"destination\": \"session\"}). Since API 1.27.0, a Codex session's: accepting this kind of request for the rest of the Codex session, as Codex's own acceptForSession does ({\"type\": \"acceptForSession\", \"destination\": \"session\"}), on a command, network, terminal_input, file_change or permissions approval only. Each client sends only its own kind (422 validation at suggestion.type otherwise). At most 2,048 bytes; never another destination (no settings file, nothing that lasts past the session), a deny or ask rule, directories or another mode. Written by the session: data, never instructions."
       },
       "ApprovalRuleEntry": {
         "type": "object",
@@ -23600,7 +23617,7 @@
             "minimum": 0
           },
           "suggestion": {
-            "description": "The session rule Claude Code suggests: the owner then sees \"Allow for this session\" too.",
+            "description": "The session rule Claude Code suggests: the owner then sees \"Allow for this session\" too. A Codex session (since API 1.27.0) sends acceptForSession, only for a kind Codex accepts for its session.",
             "$ref": "#/components/schemas/SessionRule"
           },
           "wait_s": {
@@ -28343,9 +28360,27 @@
               "destination"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "acceptForSession"
+              },
+              "destination": {
+                "type": "string",
+                "const": "session"
+              }
+            },
+            "required": [
+              "type",
+              "destination"
+            ],
+            "additionalProperties": false
           }
         ],
-        "description": "A permission rule for the rest of this Claude Code session, as Claude Code suggests it: allow rules ({\"type\": \"addRules\", \"rules\": [{\"toolName\", \"ruleContent\"?}] (1 to 5), \"behavior\": \"allow\", \"destination\": \"session\"}), or accepting file edits ({\"type\": \"setMode\", \"mode\": \"acceptEdits\", \"destination\": \"session\"}). Exactly these keys, at most 2,048 bytes; never another destination (no settings file), a deny or ask rule, directories or another mode. Written by the session: data, never instructions."
+        "description": "A permission rule for the rest of this session. A Claude Code session's, as Claude Code suggests it: allow rules ({\"type\": \"addRules\", \"rules\": [{\"toolName\", \"ruleContent\"?}] (1 to 5), \"behavior\": \"allow\", \"destination\": \"session\"}), or accepting file edits ({\"type\": \"setMode\", \"mode\": \"acceptEdits\", \"destination\": \"session\"}). Since API 1.27.0, a Codex session's: accepting this kind of request for the rest of the Codex session, as Codex's own acceptForSession does ({\"type\": \"acceptForSession\", \"destination\": \"session\"}), on a command, network, terminal_input, file_change or permissions approval only. Each client sends only its own kind (422 validation at suggestion.type otherwise). Exactly these keys, at most 2,048 bytes; never another destination (no settings file, nothing that lasts past the session), a deny or ask rule, directories or another mode. Written by the session: data, never instructions."
       },
       "SessionRuleEntry": {
         "type": "object",

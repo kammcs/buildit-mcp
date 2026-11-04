@@ -71,6 +71,11 @@ export interface FakeSession {
   id: string;
   token: string;
   label: string;
+  /**
+   * The session's client key as a 1.26+ server gives it (claude-code or
+   * codex); undefined: an older server's, without client_key (tests).
+   */
+  clientKey?: string;
   ownerId: string;
   ownerName: string;
   events: SessionEvent[];
@@ -342,6 +347,15 @@ export interface SessionHost {
   findItem?(ref: string): FakeHandoffItem | undefined;
 }
 
+/** The Codex bridge's kinds that take a Codex session rule (the server's list, 1.27.0). */
+const CODEX_SESSION_TOOLS = new Set([
+  'command',
+  'network',
+  'terminal_input',
+  'file_change',
+  'permissions',
+]);
+
 export class SessionRefusal extends Error {
   constructor(
     readonly code:
@@ -495,7 +509,8 @@ export class FakeSessions {
           id: s.id,
           label: s.label,
           machine: 'TEST-MACHINE',
-          client: 'Claude Code',
+          client: s.clientKey === 'codex' ? 'Codex' : 'Claude Code',
+          ...(s.clientKey === undefined ? {} : { client_key: s.clientKey }),
           scopes: identity.token.scopes,
           project_ids: identity.projects.map((p) => p.id),
           channel_ids: [],
@@ -728,6 +743,25 @@ export class FakeSessions {
     const refusal = this.approvalRefusals.shift();
     if (refusal !== undefined) {
       throw new SessionRefusal(refusal.code as SessionRefusal['code'], refusal.details);
+    }
+    // The server's rule (1.27.0): each client its own kind of session rule, a Codex one only
+    // for the kinds Codex accepts for its session.
+    const rule = body.suggestion as { type?: unknown } | undefined;
+    if (rule !== undefined) {
+      const codexRule = rule.type === 'acceptForSession';
+      const fits = codexRule
+        ? s.clientKey === 'codex' && CODEX_SESSION_TOOLS.has(String(body.tool_name))
+        : s.clientKey !== 'codex';
+      if (!fits) {
+        throw new SessionRefusal('validation', {
+          fields: [
+            {
+              path: 'suggestion.type',
+              message: "Not a session rule this session's client sends here.",
+            },
+          ],
+        });
+      }
     }
     const open = [...s.cards.values()].filter((c) => c.approval?.status === 'open').length;
     if (open >= this.approvalsOpenMax) throw new SessionRefusal('too_many_open', { open });
