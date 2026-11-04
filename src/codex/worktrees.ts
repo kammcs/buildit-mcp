@@ -140,7 +140,7 @@ export class Worktrees {
    */
   ensure(
     item: { key: string; id: string; title?: string | undefined },
-    saved?: { path: string; branch: string }  ,
+    saved?: { path: string; branch: string },
   ): Promise<Worktree | undefined> {
     const id = item.id.toLowerCase();
     let made = this.making.get(id);

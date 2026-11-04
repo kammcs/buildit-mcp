@@ -432,6 +432,28 @@ export class CodexApprovals implements ServerRequestRouter {
     return this.ask(request.id, p, spec);
   }
 
+  /**
+   * An Approve/Deny card that answers no request of Codex's (a plan): the
+   * same card, wait and rules, its outcome returned. It closes with its
+   * Codex thread's (unassign), the session's end and the bridge's stop.
+   */
+  async decide(
+    key: string,
+    codexThread: string | undefined,
+    spec: CardSpec,
+  ): Promise<'accept' | 'decline'> {
+    try {
+      const outcome = await this.card(key, codexThread, { threadId: codexThread }, spec);
+      this.options.logger.info('codex card decided', { tool: spec.toolName, outcome });
+      return outcome === 'accept' ? 'accept' : 'decline';
+    } catch (err) {
+      this.options.logger.warn('codex card failed; taken as denied', {
+        code: err instanceof ApiError ? err.code : 'error',
+      });
+      return 'decline';
+    }
+  }
+
   /** Posts the card, waits for the owner, and answers (or not, when Codex resolved it). */
   private async ask(
     requestId: RequestId,

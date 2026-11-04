@@ -624,6 +624,13 @@ export interface AskOptions {
   checkEveryS?: number;
   /** How long, in ms, an answer already on its way may still arrive after the deadline (default GRACE_MS). */
   graceMs?: number;
+  /**
+   * The tool's own wait when it names none (default TOOL_DEFAULT_WAIT_S), and
+   * the longest it may name: the Codex bridge sets both to the question
+   * wait, which its tool timeout covers.
+   */
+  toolDefaultWaitS?: number;
+  toolMaxWaitS?: number;
 }
 
 /** The tool's own wait when it names none. */
@@ -835,7 +842,12 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
           'questions must be 1 to 4 questions, each with a question, a header and 2 to 4 options with labels.',
         );
       }
-      const waitS = hook ? options.hookWaitS : (args.wait_s ?? TOOL_DEFAULT_WAIT_S);
+      const waitS = hook
+        ? options.hookWaitS
+        : Math.min(
+            options.toolMaxWaitS ?? Number.POSITIVE_INFINITY,
+            args.wait_s ?? options.toolDefaultWaitS ?? TOOL_DEFAULT_WAIT_S,
+          );
       const started = now();
       const id = askMessageId({
         toolUseId: hook ? args.tool_use_id : undefined,
@@ -864,51 +876,32 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
         threadId = await resolveThread(state, ctx, args, 'ask');
         inItem = args.item !== undefined || isItemThread(state, threadId);
       }
-      const locale = cardLocale(state.ownerLocale);
-      const closes = closesAt(started, waitS);
-      const built = buildQuestionCard(questions, {
-        agent: cleanLine(info.agent.name, 60),
-        locale,
-        closesAt: closes,
-        shared: inItem,
-      });
-
-      // Registered before the post, so an answer in the next poll finds it.
-      const inbox = new CardInbox();
-      const unregister = state.waiters.register(id, inbox, threadId);
       let progress: NodeJS.Timeout | undefined;
       try {
+        let outcome: CardOutcome;
         try {
-          await postCard(ctx, { id, text: built.text, threadId, card: built.card }, closes);
+          outcome = await askOnCard(
+            state,
+            ctx,
+            options,
+            { id, questions, threadId, inItem, waitS, started },
+            () => {
+              if (ctx.progress === undefined) return;
+              const report = ctx.progress;
+              let beats = 0;
+              progress = setInterval(() => {
+                beats++;
+                void report(
+                  `Waiting for the person's answer in buildIt.Social (${Math.round((beats * PROGRESS_EVERY_S) / 60)} min).`,
+                ).catch(() => undefined);
+              }, PROGRESS_EVERY_S * scale);
+            },
+          );
         } catch (err) {
-          ctx.logger.info('ask card not posted', { code: codeOf(err) });
+          if (!(err instanceof CardNotPosted)) throw err;
           if (hook) return pass('post_failed');
-          throw err;
+          throw err.cause;
         }
-        state.typing?.stop(threadId);
-        ctx.logger.info('ask card posted', { message_id: id, questions: questions.length });
-        if (ctx.progress !== undefined) {
-          const report = ctx.progress;
-          let beats = 0;
-          progress = setInterval(() => {
-            beats++;
-            void report(
-              `Waiting for the person's answer in buildIt.Social (${Math.round((beats * PROGRESS_EVERY_S) / 60)} min).`,
-            ).catch(() => undefined);
-          }, PROGRESS_EVERY_S * scale);
-        }
-        const outcome = await waitForAnswer({
-          ctx,
-          inbox,
-          memory: state.waiters,
-          id,
-          questions,
-          locale,
-          deadline: started + waitS * scale,
-          now,
-          checkEveryMs: (options.checkEveryS ?? CHECK_EVERY_S) * scale,
-          graceMs: options.graceMs ?? GRACE_MS,
-        });
         const minutes = Math.max(1, Math.round(waitS / 60));
         return result(outcome, {
           hook,
@@ -920,11 +913,95 @@ export function createAskTool(state: ChannelState, options: AskOptions): ToolDef
         });
       } finally {
         if (progress !== undefined) clearInterval(progress);
-        unregister();
-        inbox.drain();
       }
     },
   });
+}
+
+/** The question card couldn't be posted (`cause` is why). */
+export class CardNotPosted extends Error {
+  override name = 'CardNotPosted';
+  constructor(override readonly cause: unknown) {
+    super('the question card was not posted');
+  }
+}
+
+/** How a question card ended: the answers by question, or why there are none. */
+export type CardOutcome = Outcome;
+
+/** One question card to ask. */
+export interface CardAsk {
+  /** The card's message id. */
+  id: string;
+  questions: readonly Question[];
+  /** The thread to ask in (undefined: a new message of the direct message). */
+  threadId: string | undefined;
+  /** Whether that is an item's thread (the answers are shared there). */
+  inItem: boolean;
+  /** How long to wait, in seconds. */
+  waitS: number;
+  /** When the wait started (the clock's ms). */
+  started: number;
+}
+
+/**
+ * Posts one question card (the stacked card) and waits for its answer:
+ * the ask tool's card, for the tool and for the Codex bridge's own
+ * questions. Throws CardNotPosted when the post fails; `onPosted` is told
+ * once it is up. Cancelled by `ctx.signal` (the card is closed).
+ */
+export async function askOnCard(
+  state: ChannelState,
+  ctx: ToolContext,
+  options: AskOptions,
+  ask: CardAsk,
+  onPosted?: () => void,
+): Promise<CardOutcome> {
+  const scale = options.msPerSecond ?? 1000;
+  const now = options.now ?? Date.now;
+  const info = state.session;
+  const agent = info === undefined ? 'the agent' : cleanLine(info.agent.name, 60);
+  const locale = cardLocale(state.ownerLocale);
+  const closes = closesAt(ask.started, ask.waitS);
+  const built = buildQuestionCard(ask.questions, {
+    agent,
+    locale,
+    closesAt: closes,
+    shared: ask.inItem,
+  });
+  // Registered before the post, so an answer in the next poll finds it.
+  const inbox = new CardInbox();
+  const unregister = state.waiters.register(ask.id, inbox, ask.threadId);
+  try {
+    try {
+      await postCard(
+        ctx,
+        { id: ask.id, text: built.text, threadId: ask.threadId, card: built.card },
+        closes,
+      );
+    } catch (err) {
+      ctx.logger.info('ask card not posted', { code: codeOf(err) });
+      throw new CardNotPosted(err);
+    }
+    state.typing?.stop(ask.threadId);
+    ctx.logger.info('ask card posted', { message_id: ask.id, questions: ask.questions.length });
+    onPosted?.();
+    return await waitForAnswer({
+      ctx,
+      inbox,
+      memory: state.waiters,
+      id: ask.id,
+      questions: ask.questions,
+      locale,
+      deadline: ask.started + ask.waitS * scale,
+      now,
+      checkEveryMs: (options.checkEveryS ?? CHECK_EVERY_S) * scale,
+      graceMs: options.graceMs ?? GRACE_MS,
+    });
+  } finally {
+    unregister();
+    inbox.drain();
+  }
 }
 
 /**

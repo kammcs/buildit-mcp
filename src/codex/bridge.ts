@@ -52,7 +52,7 @@
  * Nothing is logged of what people or Codex wrote: methods, ids and
  * statuses only.
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 
 import { ApiError, type ApiClient } from '../api/client.js';
@@ -67,13 +67,14 @@ import type {
 import { isItemThread } from '../channel/threads.js';
 import { DEFAULT_MAX_PARALLEL_ITEMS } from '../config.js';
 import type { Logger } from '../log.js';
-import { REPLY_MAX_CHARS } from '../tools/reply.js';
+import type { AskOptions } from '../tools/ask.js';
 import { sanitizeLabel } from '../untrusted.js';
 import { SERVER_NAME, SERVER_VERSION } from '../version.js';
 import { CodexApprovals, type CodexApprovalsOptions } from './approvals.js';
 import { policyWarning, type ApprovalPolicy } from './policy.js';
 import {
   DELTA_NOTIFICATIONS,
+  type CollaborationMode,
   type ConfigReadParams,
   type ConfigReadResponse,
   type InitializeParams,
@@ -103,10 +104,15 @@ import {
 } from './router.js';
 import { RpcClosedError, RpcError, type AppServerConnection, type RpcNotification } from './rpc.js';
 import { DecliningServerRequests, type ServerRequestRouter } from './server-requests.js';
+import { planCard, PLAN_APPROVED, planUpdateText } from './plans.js';
+import { CodexQuestions } from './questions.js';
 import { BridgeSkills } from './skills.js';
 import type { ThreadMap } from './thread-map.js';
+import { splitText, stableUuid } from './text.js';
 import { checkCodexVersion, versionFromUserAgent, type VersionVerdict } from './version.js';
 import { Worktrees, type Worktree } from './worktrees.js';
+
+export { splitText, stableUuid } from './text.js';
 
 /** The client name Codex sees (its user agent starts with it). */
 export const CODEX_CLIENT_NAME = 'buildit_mcp';
@@ -198,6 +204,12 @@ export interface BridgeOptions {
   worktrees?: Worktrees | false;
   /** The buildit skills for the threads (default: the plugin's, registered at initialize). */
   skills?: BridgeSkills | false;
+  /** Codex's own questions as question cards, with ask's settings (its wait); none: declined. */
+  questions?: AskOptions;
+  /** Work items plan first (plan mode, experimental): their plans become Approve/Deny cards. */
+  planItems?: boolean;
+  /** Post Codex's plan updates (turn/plan/updated) in the turn's thread (default: off). */
+  postPlanUpdates?: boolean;
 }
 
 /** What the bridge needs of its hosted tools' server. */
@@ -223,6 +235,10 @@ interface TurnState {
   /** The threads the model already posted in during the turn (reply). */
   repliedIn: Set<string>;
   messages: AgentMessage[];
+  /** The turn's finished plans (plan mode), in order. */
+  plans: { id: string; text: string }[];
+  /** How many plan updates were posted (their message ids). */
+  planUpdates: number;
   /** turn/started was seen: "is writing" shows. */
   started: boolean;
   /** Waiting on an approval or the person's input: "is writing" is paused. */
@@ -256,6 +272,10 @@ interface Conversation {
   waiting: boolean;
   /** Notes for its next input (an item under it unassigned). */
   notes: string[];
+  /** An item's mode with plan mode on: `plan` until its plan is approved. */
+  mode: 'plan' | 'default';
+  /** The thread's model, as Codex said at thread/start or thread/resume (plan mode needs it). */
+  model: string | undefined;
 }
 
 /** A subagent's thread, and the conversation whose turn spawned it. */
@@ -291,32 +311,6 @@ export function imagesOf(extra: NotificationExtra | undefined): string[] {
     .map((f) => f.path);
 }
 
-/** A UUID made from a name, so the same answer always gets the same message id. */
-export function stableUuid(name: string): string {
-  const h = createHash('sha256').update(name).digest();
-  h.writeUInt8((h.readUInt8(6) & 0x0f) | 0x50, 6);
-  h.writeUInt8((h.readUInt8(8) & 0x3f) | 0x80, 8);
-  const hex = h.subarray(0, 16).toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
-
-/** Splits text into posts of at most `max` characters, at a paragraph, line or word when it can. */
-export function splitText(text: string, max: number = REPLY_MAX_CHARS): string[] {
-  const out: string[] = [];
-  let rest = text.trim();
-  while (rest.length > max) {
-    const window = rest.slice(0, max);
-    let cut = window.lastIndexOf('\n\n');
-    if (cut < max / 2) cut = window.lastIndexOf('\n');
-    if (cut < max / 2) cut = window.lastIndexOf(' ');
-    if (cut < max / 2) cut = max;
-    out.push(rest.slice(0, cut).trimEnd());
-    rest = rest.slice(cut).trimStart();
-  }
-  if (rest !== '') out.push(rest);
-  return out;
-}
-
 /** The text to post for a turn: the last final answer, else the last message without a phase. */
 export function answerOf(messages: readonly AgentMessage[]): AgentMessage | undefined {
   const reversed = messages.filter((m) => m.text.trim() !== '').reverse();
@@ -339,6 +333,15 @@ function agentMessage(item: unknown): AgentMessage | undefined {
   return { id, phase: typeof i.phase === 'string' ? i.phase : null, text: i.text };
 }
 
+/** A finished plan item (plan mode). */
+function planItem(item: unknown): { id: string; text: string } | undefined {
+  const i = record(item);
+  if (i.type !== 'plan') return undefined;
+  const id = str(i.id);
+  if (id === undefined || typeof i.text !== 'string' || i.text.trim() === '') return undefined;
+  return { id, text: i.text };
+}
+
 /** A promise and the function that settles it. */
 function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: unknown) => void } {
   let resolve!: () => void;
@@ -357,6 +360,9 @@ export class CodexBridge {
   private readonly router: CodexRouter;
   private readonly requests: ServerRequestRouter;
   private readonly approvals: CodexApprovals | undefined;
+  private readonly questions: CodexQuestions | undefined;
+  /** The plan cards waiting for the person. */
+  private readonly planCards = new Set<Promise<void>>();
   private readonly worktrees: Worktrees | undefined;
   private readonly skills: BridgeSkills | undefined;
   private readonly maxParallel: number;
@@ -411,6 +417,17 @@ export class CodexBridge {
     const declines = new DecliningServerRequests(
       options.logger.child({ component: 'codex_requests' }),
     );
+    this.questions =
+      options.serverRequests !== undefined || options.questions === undefined
+        ? undefined
+        : new CodexQuestions({
+            api: options.api,
+            state: options.state,
+            logger: options.logger.child({ component: 'codex_questions' }),
+            fallback: declines,
+            ask: options.questions,
+            threadFor: (codexThread) => this.cardThread(codexThread),
+          });
     this.approvals =
       options.serverRequests !== undefined || options.approvals === undefined
         ? undefined
@@ -418,22 +435,26 @@ export class CodexBridge {
             api: options.api,
             state: options.state,
             logger: options.logger.child({ component: 'codex_approvals' }),
-            fallback: declines,
+            fallback: this.questions ?? declines,
             folder: options.folder,
             threadFor: (codexThread) => this.cardThread(codexThread),
             subagentOf: (codexThread) => this.subagentName(codexThread),
             ...options.approvals,
           });
-    const requests: ServerRequestRouter = options.serverRequests ?? this.approvals ?? declines;
+    const requests: ServerRequestRouter =
+      options.serverRequests ?? this.approvals ?? this.questions ?? declines;
     this.requests = requests;
     options.connection.onServerRequest((r) => requests.handle(r));
+    const questions = requests === this.questions ? undefined : this.questions;
     this.unsubscribe = options.connection.onNotification((n) => {
       requests.observe?.(n);
+      questions?.observe(n);
       this.onNotification(n);
     });
     // The app-server is gone: its cards no longer need an answer.
     options.connection.onClose(() => {
       requests.closeAll?.();
+      questions?.closeAll();
     });
     options.state.postedListeners.add(this.onPosted);
     options.toolServer?.attachThreads((place) => this.threadOf(place));
@@ -670,6 +691,7 @@ export class CodexBridge {
     this.closed = true;
     this.unsubscribe();
     this.requests.closeAll?.();
+    this.questions?.closeAll();
     this.options.state.postedListeners.delete(this.onPosted);
     for (const w of this.waiting.splice(0)) w.grant(false);
     await this.idle().catch(() => undefined);
@@ -736,6 +758,8 @@ export class CodexBridge {
         stopped: false,
         waiting: false,
         notes: [],
+        mode: 'default',
+        model: undefined,
       };
       this.conversations.set(key, conv);
     }
@@ -886,7 +910,9 @@ export class CodexBridge {
     // Nothing of the turn is posted: it ends here, and its late events are ignored.
     this.endTurn(conv);
     let closed = 0;
-    for (const t of this.threadsOf(conv)) closed += this.approvals?.closeThread(t) ?? 0;
+    for (const t of this.threadsOf(conv)) {
+      closed += (this.approvals?.closeThread(t) ?? 0) + (this.questions?.closeThread(t) ?? 0);
+    }
     if (codexThread !== undefined) {
       if (turn !== undefined) {
         const params: TurnInterruptParams = { threadId: codexThread, turnId: turn.id };
@@ -987,7 +1013,12 @@ export class CodexBridge {
     for (let attempt = 0; attempt < 2 && response === undefined; attempt++) {
       conv.starting = route.threadId;
       try {
-        const params: TurnStartParams = { threadId, input };
+        const mode = this.collaborationMode(conv);
+        const params: TurnStartParams = {
+          threadId,
+          input,
+          ...(mode === undefined ? {} : { collaborationMode: mode }),
+        };
         response = await this.options.connection.request<TurnStartResponse>('turn/start', params);
       } catch (err) {
         if (err instanceof RpcClosedError) throw err;
@@ -1103,6 +1134,9 @@ export class CodexBridge {
     this.loadThreads();
     const cwd = await this.cwdOf(conv);
     const saved = threads.get(conv.key);
+    if (conv.place.kind === 'item' && this.options.planItems === true && !conv.hadTurn) {
+      conv.mode = saved?.mode ?? 'plan';
+    }
     if (saved?.has_turn === true && saved.codex_thread_id !== '') {
       try {
         const params: ThreadResumeParams = {
@@ -1119,6 +1153,7 @@ export class CodexBridge {
           source: 'thread',
         });
         this.register(conv, id);
+        conv.model = str(record(r).model) ?? conv.model;
         conv.hadTurn = true;
         if (id !== saved.codex_thread_id) threads.set(conv.key, id, true);
         logger.info('codex thread resumed', { place: conv.key, codex_thread: id });
@@ -1148,6 +1183,7 @@ export class CodexBridge {
       source: 'thread',
     });
     this.register(conv, id);
+    conv.model = str(record(r).model) ?? conv.model;
     conv.hadTurn = false;
     threads.set(conv.key, id, false);
     logger.info('codex thread started', { place: conv.key, codex_thread: id });
@@ -1178,6 +1214,8 @@ export class CodexBridge {
       joined: conv.starting === undefined ? [] : [conv.starting],
       repliedIn: new Set(),
       messages: [],
+      plans: [],
+      planUpdates: 0,
       started: false,
       paused: false,
     };
@@ -1264,13 +1302,19 @@ export class CodexBridge {
         if (turn === undefined) return;
         for (const t of turn.joined) this.options.typing?.activity(t);
         if (n.method === 'item/completed') {
-          const message = agentMessage((p as Partial<ItemCompletedNotification>).item);
+          const item = (p as Partial<ItemCompletedNotification>).item;
+          const message = agentMessage(item);
           if (message !== undefined) turn.messages.push(message);
+          const plan = planItem(item);
+          if (plan !== undefined) turn.plans.push(plan);
         }
         return;
       }
       case 'thread/status/changed':
         this.statusChanged(conv, p.status as ThreadStatus | undefined);
+        return;
+      case 'turn/plan/updated':
+        this.planUpdated(conv, p);
         return;
       case 'turn/completed':
         this.completed(conv, record(p.turn));
@@ -1380,7 +1424,130 @@ export class CodexBridge {
         });
       }
       for (const t of turn.joined) this.options.typing?.stop(t);
+      const plan = turn.plans.at(-1);
+      if (plan !== undefined && this.planning(conv)) this.planCard(conv, turnId, plan, target);
     })();
+    this.work.add(job);
+    void job.finally(() => this.work.delete(job));
+  }
+
+  /** Whether a conversation's turns plan first: an item's, with plan mode on, until approved. */
+  private planning(conv: Conversation): boolean {
+    return this.options.planItems === true && conv.place.kind === 'item' && conv.mode === 'plan';
+  }
+
+  /**
+   * The turn's collaboration mode, with plan mode on: `plan` for an item
+   * still planning, `default` once its plan was approved; none for the
+   * rest (or when Codex didn't say the thread's model, which a mode needs).
+   */
+  private collaborationMode(conv: Conversation): CollaborationMode | undefined {
+    if (this.options.planItems !== true || conv.place.kind !== 'item') return undefined;
+    if (conv.model === undefined) {
+      this.options.logger.warn("plan mode needs the thread's model, which codex didn't say");
+      return undefined;
+    }
+    return {
+      mode: conv.mode,
+      settings: { model: conv.model, reasoning_effort: null, developer_instructions: null },
+    };
+  }
+
+  /**
+   * A finished plan becomes an Approve/Deny card (posted in full first when
+   * it doesn't fit). Approved: the item leaves plan mode and the next turn
+   * carries it out. Denied (or no answer): it stays planning.
+   */
+  private planCard(
+    conv: Conversation,
+    turnId: string,
+    plan: { id: string; text: string },
+    target: string | undefined,
+  ): void {
+    const approvals = this.approvals;
+    if (approvals === undefined || conv.place.kind !== 'item') {
+      this.options.logger.info('a plan came, but cards are off: it stays a plan');
+      return;
+    }
+    const item = conv.place.item;
+    const threadId = item.id;
+    const codexThread = conv.codexThreadId;
+    const generation = conv.generation;
+    const { spec, before } = planCard(plan.text);
+    const job = (async () => {
+      const session = this.options.state.session?.session.id ?? 'session';
+      for (const [i, text] of before.entries()) {
+        try {
+          await postSessionMessage(
+            this.options.api,
+            {
+              id: stableUuid(`${session}:${turnId}:${plan.id}:plan:${i}`),
+              text,
+              thread_id: threadId,
+            },
+            { tool: 'reply', signal: AbortSignal.timeout(30_000) },
+          );
+        } catch (err) {
+          this.options.logger.warn('the plan was not posted; no card', {
+            code: err instanceof ApiError ? err.code : 'error',
+          });
+          return;
+        }
+      }
+      const decision = await approvals.decide(`plan:${turnId}:${plan.id}`, codexThread, spec);
+      if (generation !== conv.generation) return;
+      if (decision !== 'accept') {
+        this.options.logger.info('the plan was not approved: the item keeps planning', {
+          item: item.key,
+        });
+        return;
+      }
+      conv.mode = 'default';
+      if (this.loadThreads()) this.options.threads.note(conv.key, { mode: 'default' });
+      this.options.logger.info('the plan was approved: the next turn carries it out', {
+        item: item.key,
+      });
+      await this.enqueue(
+        conv,
+        {
+          key: conv.key,
+          place: conv.place,
+          threadId: target ?? threadId,
+          messageId: undefined,
+          event: 'plan_approved',
+        },
+        [{ type: 'text', text: PLAN_APPROVED, text_elements: [] }],
+      ).catch(() => undefined);
+    })();
+    this.planCards.add(job);
+    void job.finally(() => this.planCards.delete(job));
+  }
+
+  /** turn/plan/updated: posted in the turn's thread, only with the setting on. */
+  private planUpdated(conv: Conversation, p: Record<string, unknown>): void {
+    if (this.options.postPlanUpdates !== true) return;
+    const turnId = str(p.turnId);
+    const turn = conv.turn;
+    if (turn === undefined || turn.id !== turnId) return;
+    const text = planUpdateText(p);
+    const target = turn.joined.at(-1);
+    if (text === undefined || target === undefined) return;
+    const n = ++turn.planUpdates;
+    const session = this.options.state.session?.session.id ?? 'session';
+    const job = postSessionMessage(
+      this.options.api,
+      { id: stableUuid(`${session}:${turn.id}:plan-update:${n}`), text, thread_id: target },
+      { tool: 'reply', signal: AbortSignal.timeout(30_000) },
+    ).then(
+      () => {
+        this.options.logger.info('codex plan update posted', { turn: turn.id });
+      },
+      (err: unknown) => {
+        this.options.logger.info('codex plan update not posted', {
+          code: err instanceof ApiError ? err.code : 'error',
+        });
+      },
+    );
     this.work.add(job);
     void job.finally(() => this.work.delete(job));
   }

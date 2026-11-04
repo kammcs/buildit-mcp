@@ -170,6 +170,17 @@ export interface CodexOptions extends SessionCommandOptions {
    * (--keep-codex-plugins, BUILDIT_CODEX_KEEP_PLUGINS; default: off).
    */
   keepPlugins?: boolean;
+  /**
+   * Work items plan first, in Codex's plan mode (experimental): the plan
+   * becomes an Approve/Deny card (--plan-items, BUILDIT_CODEX_PLAN_ITEMS;
+   * default: off).
+   */
+  planItems?: boolean;
+  /**
+   * Post Codex's plan updates in the turn's thread (--post-plan-updates,
+   * BUILDIT_CODEX_PLAN_UPDATES; default: off).
+   */
+  planUpdates?: boolean;
 }
 
 export type SessionCommand = 'connect' | 'disconnect' | 'status' | 'codex';
@@ -333,6 +344,11 @@ Options:
                             -c model="<model>"
   --keep-codex-plugins      BUILDIT_CODEX_KEEP_PLUGINS  Keep your own Codex
                             plugins and apps in these threads (default: off)
+  --plan-items              BUILDIT_CODEX_PLAN_ITEMS  Work items plan first, in
+                            Codex's plan mode (experimental): the plan comes as
+                            an Approve/Deny card, and Approve carries it out
+  --post-plan-updates       BUILDIT_CODEX_PLAN_UPDATES  Post Codex's plan updates
+                            in the item's thread (default: off)
   --log-level <level>       BUILDIT_LOG_LEVEL  ${LOG_LEVELS.join(', ')} (default info); logs go to
                             stderr and never hold what people or Codex wrote
   -h, --help                Show this help
@@ -666,6 +682,8 @@ function parseSessionCommand(
               config: { type: 'string', short: 'c', multiple: true },
               'log-level': { type: 'string' },
               'keep-codex-plugins': { type: 'boolean' },
+              'plan-items': { type: 'boolean' },
+              'post-plan-updates': { type: 'boolean' },
             }
           : {}),
       },
@@ -766,6 +784,12 @@ function codexAction(
       keepPlugins:
         values['keep-codex-plugins'] === true ||
         parseBoolean('BUILDIT_CODEX_KEEP_PLUGINS', nonEmpty(env.BUILDIT_CODEX_KEEP_PLUGINS), false),
+      planItems:
+        values['plan-items'] === true ||
+        parseBoolean('BUILDIT_CODEX_PLAN_ITEMS', nonEmpty(env.BUILDIT_CODEX_PLAN_ITEMS), false),
+      planUpdates:
+        values['post-plan-updates'] === true ||
+        parseBoolean('BUILDIT_CODEX_PLAN_UPDATES', nonEmpty(env.BUILDIT_CODEX_PLAN_UPDATES), false),
     },
   };
 }

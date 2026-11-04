@@ -110,10 +110,7 @@ export class ThreadMap {
       for (const [key, e] of Object.entries(parsed.threads ?? {})) {
         if (e === null || typeof e !== 'object') continue;
         if (typeof e.codex_thread_id !== 'string') continue;
-        if (
-          e.codex_thread_id === '' &&
-          Object.keys(stateOf(e)).length === 0
-        ) {
+        if (e.codex_thread_id === '' && Object.keys(stateOf(e)).length === 0) {
           continue;
         }
         this.entries.set(key, {

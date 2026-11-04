@@ -90,6 +90,7 @@ import { runCodex } from '../src/cli/codex.js';
 import type { CommandIO } from '../src/cli/commands.js';
 import { findCodex } from '../src/codex/binary.js';
 import type { CodexBridge } from '../src/codex/bridge.js';
+import { PLAN_APPROVED } from '../src/codex/plans.js';
 import { spawnAppServer, type SpawnAppServer } from '../src/codex/process.js';
 import { AppServerConnection } from '../src/codex/rpc.js';
 import { BRIDGE_MCP_SERVER, BridgeToolServer } from '../src/codex/tool-server.js';
@@ -123,8 +124,10 @@ if (values.only !== undefined && !(ONLY as readonly string[]).includes(values.on
 const only = values.only === 'steer';
 const parity = values.only === 'parity';
 const threadsStep = values.only === 'threads';
+const questionsStep = values.only === 'questions';
+const requestsStep = values.only === 'requests';
 /** Turns allowed: each run's turns plus one spare. */
-const maxTurns = only ? 2 : threadsStep ? 4 : 5;
+const maxTurns = only ? 2 : threadsStep || questionsStep ? 4 : requestsStep ? 3 : 5;
 if (
   (values.approved !== true && !preflightOnly && values['dry-run'] !== true) ||
   values.model === undefined ||
@@ -141,7 +144,7 @@ if (readdirSync(work).length > 0) {
   process.exit(2);
 }
 /** The runs whose items need worktrees: the folder becomes a repository with one empty commit. */
-const needsRepo = threadsStep;
+const needsRepo = threadsStep || questionsStep || requestsStep;
 if (needsRepo) {
   const git = (...args: string[]) =>
     execFileSync(
@@ -183,6 +186,7 @@ const fakeSpawn: SpawnAppServer = (args, env) => {
       await ctx.interrupted();
       return;
     }
+    if (await fakeQuestionsTurn(fake, ctx, first)) return;
     if (first.startsWith('Count slowly from 1 to 30')) {
       await ctx.inputsReach(2);
       ctx.agentMessage('steered', 'final_answer');
@@ -203,6 +207,64 @@ const THREADS = {
   two: 'Reply with the single word two, and do nothing else.',
   count: 'Count slowly from 1 to 200, one number per line, and do nothing else.',
 } as const;
+
+/** The questions run's prompts: a question through the hosted ask, then a plan with a question. */
+const QUESTIONS = {
+  ask: 'Call the buildit ask tool once, with one question: "Pick a colour", header "Colour", options "red" and "blue". Then reply with the chosen colour only, and do nothing else.',
+  plan: 'Plan how to reply in this thread with one word. Before you plan, ask me which word with your request_user_input tool: one question, header "Word", options "yes" and "no". Then propose a one-step plan: reply with that word. Do nothing else.',
+} as const;
+
+/** The dry run's stand-in for Codex in the questions run; false: not one of its prompts. */
+async function fakeQuestionsTurn(
+  fake: FakeAppServer,
+  ctx: Parameters<FakeAppServer['onTurn']>[0],
+  first: string,
+): Promise<boolean> {
+  if (first.startsWith(QUESTIONS.ask)) {
+    const client = await fake.mcp(ctx.threadId);
+    const r = await client.callTool({
+      name: 'ask',
+      arguments: {
+        questions: [
+          {
+            question: 'Pick a colour',
+            header: 'Colour',
+            options: [{ label: 'red' }, { label: 'blue' }],
+          },
+        ],
+      },
+    });
+    ctx.agentMessage(JSON.stringify(r).includes('red') ? 'red' : 'none', 'final_answer');
+  } else if (first.includes(QUESTIONS.plan)) {
+    const r = await ctx.request('item/tool/requestUserInput', {
+      itemId: 'question-1',
+      questions: [
+        {
+          id: 'word',
+          header: 'Word',
+          question: 'Which word?',
+          isOther: true,
+          isSecret: false,
+          options: [
+            { label: 'yes', description: 'Say yes' },
+            { label: 'no', description: 'Say no' },
+          ],
+        },
+      ],
+      isBlocking: true,
+      autoResolutionMs: null,
+    });
+    const word = JSON.stringify(r.result).includes('"yes"') ? 'yes' : 'no';
+    ctx.agentMessage('Here is the plan.', 'final_answer');
+    ctx.plan(`1. Reply with the word ${word}.`);
+  } else if (first.startsWith(PLAN_APPROVED)) {
+    ctx.agentMessage('yes', 'final_answer');
+  } else {
+    return false;
+  }
+  ctx.complete();
+  return true;
+}
 
 /** The parity prompts (the dry run's fake plays a turn for each). */
 const PARITY = {
@@ -472,6 +534,8 @@ const wire = {
   turnThread: new Map<string, string>(),
   /** When each turn started and ended (ms), by turn id. */
   turnTimes: new Map<string, { start: number; end?: number }>(),
+  /** Each turn/start's collaboration mode (none: not sent). */
+  modes: [] as string[],
 };
 const tapped =
   (inner: SpawnAppServer): SpawnAppServer =>
@@ -550,6 +614,10 @@ const tapped =
         wire.inputs.push(input.map((i) => String(i.type)));
       }
       if (m.method === 'thread/start') wire.threadStarts.push(m.params ?? {});
+      if (m.method === 'turn/start') {
+        const mode = (m.params?.collaborationMode as { mode?: unknown } | undefined)?.mode;
+        wire.modes.push(typeof mode === 'string' ? mode : 'none');
+      }
       if (m.method === 'turn/interrupt') wire.interrupts.push(String(m.params?.threadId));
       if (m.method === 'thread/unsubscribe') wire.unsubscribes.push(String(m.params?.threadId));
       const asked = m.method === undefined ? wire.serverRequests.get(m.id) : undefined;
@@ -602,6 +670,8 @@ async function bridgeRun(): Promise<{ bridge: CodexBridge; stop: () => Promise<n
       codexConfig: parity ? [...config, ...PARITY_CONFIG] : config,
       // Parity: debug, for the `_meta` keys of Codex's tool calls (names only; the report lists them).
       logLevel: parity ? 'debug' : 'info',
+      // The questions run: work items plan first.
+      ...(questionsStep ? { planItems: true } : {}),
     },
     io,
     {
@@ -771,7 +841,9 @@ function owner(answers: () => Record<string, 'approve' | 'deny'> = () => ({})): 
       );
     }
   }, 100);
-  return () => { clearInterval(timer); };
+  return () => {
+    clearInterval(timer);
+  };
 }
 
 /** The text posts in a thread (not the approval cards). */
@@ -856,6 +928,78 @@ async function threadsRun(): Promise<void> {
   }
 }
 
+/** The question cards in a thread (the stacked card), oldest first. */
+function questionCardsIn(thread: string | null): typeof s.messages {
+  return s.messages.filter((m) => m.thread_id === thread && (m.card ?? null) !== null);
+}
+
+/** A question through the hosted ask, then a plan-mode question and the plan's card. */
+async function questionsRun(): Promise<void> {
+  const token = SESSION_TOKENS.first;
+  const run = await bridgeRun();
+  await until(() => s.heartbeats.includes('online'), 30_000, 'online');
+  // The owner approves the plan's card and denies any other; each question card gets its first option.
+  const stopOwner = owner(() => ({ plan: 'approve' }));
+  const answered = new Set<string>();
+  const answerer = setInterval(() => {
+    for (const m of s.messages) {
+      if ((m.card ?? null) === null || answered.has(m.id) || cardIdsOf().has(m.id)) continue;
+      answered.add(m.id);
+      api.sessions.answerCard(token, m.id, { inputs: { q1: 'o1' } });
+    }
+  }, 100);
+  const item = storeItem(44);
+  try {
+    // A. ask, through the hosted tool
+    const thread = api.sessions.postFrom(token, QUESTIONS.ask);
+    await until(
+      () => wire.started.length >= 1 && idle(run)() && textPostsIn(thread).length >= 1,
+      180_000,
+      'turn A',
+    );
+    await run.bridge.idle();
+    check(
+      'A ask',
+      questionCardsIn(thread).length === 1 && /red/i.test(textPostsIn(thread).join(' ')),
+      `question cards ${questionCardsIn(thread).length}, tool calls ${JSON.stringify(wire.toolCalls)}, posts ${JSON.stringify(textPostsIn(thread))}`,
+    );
+
+    // B. plan mode: Codex's own question, the plan's card, approved, then carried out
+    api.sessions.itemMessage(token, item, QUESTIONS.plan, { mention: true });
+    await until(
+      () => api.sessions.approvals(token).some((c) => c.toolName === 'plan'),
+      180_000,
+      'the plan card',
+    );
+    await until(() => wire.started.length >= 3 && idle(run)(), 180_000, 'turn B carried out');
+    await run.bridge.idle();
+    const modes = wire.modes.slice(-2);
+    const planCardOf = api.sessions.approvals(token).find((c) => c.toolName === 'plan');
+    const asked = [...wire.serverRequests.values()].some(
+      (r) => r.method === 'item/tool/requestUserInput' && (r.answer ?? '').includes('"yes"'),
+    );
+    check(
+      'B plan',
+      asked &&
+        questionCardsIn(item.id).length >= 1 &&
+        planCardOf?.status === 'approved' &&
+        modes[0] === 'plan' &&
+        modes[1] === 'default' &&
+        /yes/i.test(textPostsIn(item.id).join(' ')),
+      `requestUserInput answered yes ${String(asked)}, question cards ${questionCardsIn(item.id).length}, plan card ${String(planCardOf?.status)}, modes ${JSON.stringify(modes)}, posts ${JSON.stringify(textPostsIn(item.id))}`,
+    );
+  } finally {
+    clearInterval(answerer);
+    stopOwner();
+    await run.stop();
+  }
+}
+
+/** The approval cards' message ids (not question cards). */
+function cardIdsOf(): Set<string> {
+  return new Set(api.sessions.approvals(SESSION_TOKENS.first).map((c) => c.id));
+}
+
 /** An extra run is over (its steps reported): the main steps are skipped. */
 class RunDone extends Error {}
 
@@ -866,6 +1010,10 @@ try {
   }
   if (threadsStep) {
     await threadsRun();
+    throw new RunDone();
+  }
+  if (questionsStep) {
+    await questionsRun();
     throw new RunDone();
   }
   let run = await bridgeRun();

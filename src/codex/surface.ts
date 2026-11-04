@@ -65,7 +65,7 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     },
     'turn/start': {
       result: 'v2/TurnStartResponse',
-      sends: ['threadId', 'input'],
+      sends: ['threadId', 'input', 'collaborationMode'],
       reads: ['turn.id'],
     },
     'turn/steer': {
@@ -103,6 +103,7 @@ export const BRIDGE_SURFACE: BridgeSurface = {
       reads: ['thread.id', 'thread.parentThreadId', 'thread.agentNickname', 'thread.agentRole'],
     },
     'turn/started': { reads: ['threadId', 'turn.id'] },
+    'turn/plan/updated': { reads: ['threadId', 'turnId', 'explanation', 'plan'] },
     'turn/completed': {
       reads: ['threadId', 'turn.id', 'turn.status', 'turn.error', 'turn.items'],
     },
@@ -148,7 +149,7 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     },
     'item/tool/requestUserInput': {
       result: 'ToolRequestUserInputResponse',
-      reads: ['threadId'],
+      reads: ['threadId', 'itemId', 'questions'],
       sends: ['answers'],
     },
     'item/tool/call': {
@@ -181,6 +182,18 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     },
     { ref: 'v2/ThreadItem', variant: 'subAgentActivity', fields: ['agentThreadId', 'agentPath'] },
     { ref: 'v2/SkillsListEntry', fields: ['skills'] },
+    { ref: 'v2/ThreadItem', variant: 'plan', fields: ['id', 'text'] },
+    {
+      ref: 'ToolRequestUserInputQuestion',
+      fields: ['id', 'header', 'question', 'isOther', 'isSecret', 'options'],
+    },
+    { ref: 'ToolRequestUserInputOption', fields: ['label', 'description'] },
+    { ref: 'ToolRequestUserInputAnswer', fields: ['answers'] },
+    { ref: 'v2/TurnPlanStep', fields: ['step', 'status'] },
+    { ref: 'v2/TurnPlanStepStatus', values: ['pending', 'inProgress', 'completed'] },
+    { ref: 'v2/CollaborationMode', fields: ['mode', 'settings'] },
+    { ref: 'v2/ModeKind', values: ['plan', 'default'] },
+    { ref: 'v2/Settings', fields: ['model', 'reasoning_effort', 'developer_instructions'] },
     { ref: 'v2/SkillMetadata', fields: ['name', 'path', 'enabled'] },
     { ref: 'v2/TurnError', fields: ['message', 'codexErrorInfo'] },
     { ref: 'CommandExecutionApprovalDecision', values: ['accept', 'decline'] },

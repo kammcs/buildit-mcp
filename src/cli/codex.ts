@@ -29,6 +29,7 @@ import { spawnAppServer, type SpawnAppServer } from '../codex/process.js';
 import { AppServerConnection } from '../codex/rpc.js';
 import { ThreadMap } from '../codex/thread-map.js';
 import type { Worktrees } from '../codex/worktrees.js';
+import type { AskOptions } from '../tools/ask.js';
 import { BridgeToolServer, newBridgeSecret } from '../codex/tool-server.js';
 import {
   DEFAULT_APPROVAL_TIMEOUT_MINUTES,
@@ -66,6 +67,8 @@ export interface CodexDeps {
   approvals?: { msPerSecond?: number; now?: () => number; waitS?: number };
   /** For tests: the items' worktrees (false: items work in the folder). */
   worktrees?: Worktrees | false;
+  /** For tests: the question cards' timing (a wait in seconds, milliseconds per second). */
+  questions?: Partial<AskOptions>;
 }
 
 /** Runs the bridge until it is stopped; the exit code. */
@@ -181,12 +184,19 @@ export async function runCodex(
   // Attachments go to a folder of no client's own (.buildit/attachments), not Claude Code's.
   state.attachmentsDir = BRIDGE_ATTACHMENTS_DIR;
 
+  const askWaitS = hookWaitSeconds(options.ask?.timeoutMinutes ?? DEFAULT_ASK_TIMEOUT_MINUTES);
   // The bridge's tools, for its Codex child only (loopback, a secret for this run).
   const tools = new BridgeToolServer({
     api,
     state,
     logger: logger.child({ component: 'codex_tools' }),
-    ask: { questionsInApp: true, hookWaitS: hookWaitSeconds(DEFAULT_ASK_TIMEOUT_MINUTES) },
+    // ask waits as long as the plugin's questions do, and Codex lets it (tool_timeout_sec).
+    ask: {
+      questionsInApp: true,
+      hookWaitS: askWaitS,
+      toolDefaultWaitS: askWaitS,
+      toolMaxWaitS: askWaitS,
+    },
     secret: bridgeSecret,
   });
   try {
@@ -216,6 +226,16 @@ export async function runCodex(
     toolServer: tools,
     maxParallel: options.ask?.maxParallelItems ?? DEFAULT_MAX_PARALLEL_ITEMS,
     keepPlugins: options.keepPlugins === true,
+    planItems: options.planItems === true,
+    postPlanUpdates: options.planUpdates === true,
+    // Codex's own questions wait as ask's do.
+    questions: {
+      questionsInApp: true,
+      hookWaitS: askWaitS,
+      toolDefaultWaitS: askWaitS,
+      toolMaxWaitS: askWaitS,
+      ...deps.questions,
+    },
     ...(deps.worktrees === undefined ? {} : { worktrees: deps.worktrees }),
     approvals: {
       inApp: options.approvals?.inApp ?? true,

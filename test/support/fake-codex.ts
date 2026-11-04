@@ -122,6 +122,13 @@ export interface TurnContext {
   signal: AbortSignal;
   /** An agent message: item/started, then item/completed. */
   agentMessage(text: string, phase: 'final_answer' | 'commentary' | null): void;
+  /** A finished plan (plan mode): a `plan` item. */
+  plan(text: string): void;
+  /** Codex's checklist while it works (turn/plan/updated). */
+  planUpdate(
+    steps: { step: string; status: 'pending' | 'inProgress' | 'completed' }[],
+    explanation?: string,
+  ): void;
   /** A reasoning item (work, nothing to post). */
   reasoning(): void;
   /** thread/status/changed to active with these flags. */
@@ -726,6 +733,18 @@ export class FakeAppServer {
           memoryCitation: null,
           delivery: null,
           questions: null,
+        });
+      },
+      plan: (text) => {
+        emitItem({ type: 'plan', id: `plan_${randomUUID()}`, text });
+      },
+      planUpdate: (steps, explanation) => {
+        if (!live()) return;
+        this.notify('turn/plan/updated', {
+          threadId: thread.id,
+          turnId: turn.id,
+          explanation: explanation ?? null,
+          plan: steps,
         });
       },
       reasoning: () => {

@@ -53,6 +53,7 @@
     "serverNotifications": {
       "thread/started": { "params": "#/definitions/v2/ThreadStartedNotification" },
       "turn/started": { "params": "#/definitions/v2/TurnStartedNotification" },
+      "turn/plan/updated": { "params": "#/definitions/v2/TurnPlanUpdatedNotification" },
       "turn/completed": { "params": "#/definitions/v2/TurnCompletedNotification" },
       "item/started": { "params": "#/definitions/v2/ItemStartedNotification" },
       "item/completed": { "params": "#/definitions/v2/ItemCompletedNotification" },
@@ -3992,6 +3993,27 @@
           { "enum": ["summary"], "type": "string" },
           { "enum": ["full"], "type": "string" }
         ]
+      },
+      "TurnPlanStep": {
+        "properties": {
+          "status": { "$ref": "#/definitions/v2/TurnPlanStepStatus" },
+          "step": { "type": "string" }
+        },
+        "required": ["status", "step"],
+        "type": "object"
+      },
+      "TurnPlanStepStatus": { "enum": ["pending", "inProgress", "completed"], "type": "string" },
+      "TurnPlanUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "explanation": { "type": ["string", "null"] },
+          "plan": { "items": { "$ref": "#/definitions/v2/TurnPlanStep" }, "type": "array" },
+          "threadId": { "type": "string" },
+          "turnId": { "type": "string" }
+        },
+        "required": ["plan", "threadId", "turnId"],
+        "title": "TurnPlanUpdatedNotification",
+        "type": "object"
       },
       "TurnStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

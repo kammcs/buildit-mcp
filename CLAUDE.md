@@ -143,6 +143,9 @@ src/
                         handoffs, card outcomes, requests, unassign)
   codex/worktrees.ts    each item's git worktree in .buildit/worktrees, on a branch named for the item
   codex/skills.ts       the plugin's skills for Codex threads (skills/extraRoots/set, skill input items)
+  codex/questions.ts    Codex's own questions (requestUserInput) as the stacked question card; never isSecret
+  codex/plans.ts        plan mode: the plan's Approve/Deny card (its fields), and plan updates as posts
+  codex/text.ts         the bridge's posts: stable message ids, long text split
   codex/tool-server.ts  the bridge's tools for its Codex child: loopback Streamable HTTP, a secret per
                         run (bearer_token_env_var), a URL per Codex thread (the caller), the shared ChannelState
   codex/approvals.ts    Codex's approvals (commands, file changes, permissions, MCP tools) as Approve/Deny
