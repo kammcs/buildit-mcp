@@ -43,8 +43,11 @@ import type { ChannelNotificationParams, ChannelState } from '../channel/loop.js
 import type { Logger } from '../log.js';
 import { REPLY_MAX_CHARS } from '../tools/reply.js';
 import { SERVER_NAME, SERVER_VERSION } from '../version.js';
+import { policyWarning, type ApprovalPolicy } from './policy.js';
 import {
   DELTA_NOTIFICATIONS,
+  type ConfigReadParams,
+  type ConfigReadResponse,
   type InitializeParams,
   type InitializeResponse,
   type ItemCompletedNotification,
@@ -63,6 +66,7 @@ import {
 } from './protocol.js';
 import { DirectMessageRouter, DM_ROUTE, type CodexRouter, type Route } from './router.js';
 import { RpcClosedError, RpcError, type AppServerConnection, type RpcNotification } from './rpc.js';
+import { CodexApprovals, type CodexApprovalsOptions } from './approvals.js';
 import { DecliningServerRequests, type ServerRequestRouter } from './server-requests.js';
 import type { ThreadMap } from './thread-map.js';
 import { checkCodexVersion, versionFromUserAgent, type VersionVerdict } from './version.js';
@@ -128,6 +132,13 @@ export interface BridgeOptions {
   serverRequests?: ServerRequestRouter;
   /** The bridge's hosted tools (tool-server.ts): each thread's config names its endpoint. */
   toolServer?: HostedTools;
+  /**
+   * Codex's approvals as cards (approvals.ts), with these settings; none:
+   * every approval is declined (unless `serverRequests` answers them).
+   */
+  approvals?: Pick<CodexApprovalsOptions, 'waitS' | 'inApp' | 'msPerSecond' | 'now'>;
+  /** Told of the approval policy Codex reports (config/read, thread/start), for `status`. */
+  onPolicy?: (policy: ApprovalPolicy) => void;
 }
 
 /** What the bridge needs of its hosted tools' server. */
@@ -227,12 +238,15 @@ export class CodexBridge {
   private readonly conversations = new Map<string, Conversation>();
   private readonly byCodexThread = new Map<string, Conversation>();
   private readonly router: CodexRouter;
+  private readonly requests: ServerRequestRouter;
   private readonly work = new Set<Promise<void>>();
   /** The notices posted in this run, by key (one per thread, one for requests). */
   private readonly noticed = new Set<string>();
   /** This run's id, in the notices' message ids. */
   private readonly runId = randomUUID();
   private threadsLoadedFor: string | undefined;
+  /** The approval settings last logged. */
+  private policySeen: string | undefined;
   private closed = false;
   private readonly unsubscribe: () => void;
   private readonly onPosted = (threadId: string): void => {
@@ -243,12 +257,30 @@ export class CodexBridge {
 
   constructor(private readonly options: BridgeOptions) {
     this.router = options.router ?? new DirectMessageRouter();
-    const requests =
+    const declines = new DecliningServerRequests(
+      options.logger.child({ component: 'codex_requests' }),
+    );
+    const requests: ServerRequestRouter =
       options.serverRequests ??
-      new DecliningServerRequests(options.logger.child({ component: 'codex_requests' }));
+      (options.approvals === undefined
+        ? declines
+        : new CodexApprovals({
+            api: options.api,
+            state: options.state,
+            logger: options.logger.child({ component: 'codex_approvals' }),
+            fallback: declines,
+            threadFor: (codexThread) => this.cardThread(codexThread),
+            ...options.approvals,
+          }));
+    this.requests = requests;
     options.connection.onServerRequest((r) => requests.handle(r));
     this.unsubscribe = options.connection.onNotification((n) => {
+      requests.observe?.(n);
       this.onNotification(n);
+    });
+    // The app-server is gone: its cards no longer need an answer.
+    options.connection.onClose(() => {
+      requests.closeAll?.();
     });
     options.state.postedListeners.add(this.onPosted);
     options.toolServer?.attachThreads((place) => this.threadOf(place));
@@ -260,6 +292,16 @@ export class CodexBridge {
    */
   threadOf(place: string): string | undefined {
     return this.conversations.get(place)?.turn?.joined.at(-1);
+  }
+
+  /**
+   * The buildIt.Social thread a Codex thread's approval cards go in: its
+   * running turn's (the latest message's), else the direct message's
+   * latest thread.
+   */
+  cardThread(codexThreadId: string | undefined): string | undefined {
+    const conv = codexThreadId === undefined ? undefined : this.byCodexThread.get(codexThreadId);
+    return conv?.turn?.joined.at(-1) ?? this.options.state.lastDmThread;
   }
 
   /**
@@ -291,7 +333,48 @@ export class CodexBridge {
     } else {
       this.options.logger.info('codex app-server ready', { codex_version: verdict.version });
     }
+    await this.readPolicy();
     return { verdict, userAgent };
+  }
+
+  /**
+   * The folder's approval settings (config/read; no turn), so the startup
+   * log says when approvals won't reach the app. A Codex that can't answer
+   * it is only logged.
+   */
+  private async readPolicy(): Promise<void> {
+    try {
+      const params: ConfigReadParams = { cwd: this.options.folder };
+      const r = await this.options.connection.request<ConfigReadResponse>('config/read', params);
+      const config = record(record(r).config);
+      this.notePolicy({
+        approvalPolicy: config.approval_policy ?? null,
+        approvalsReviewer: config.approvals_reviewer ?? null,
+        source: 'config',
+      });
+    } catch (err) {
+      if (err instanceof RpcClosedError) throw err;
+      this.options.logger.info("codex's approval settings could not be read", {
+        code: err instanceof RpcError ? err.code : 'error',
+      });
+    }
+  }
+
+  /** Logs where approvals go when that changed (a warning when not to the app), and says it. */
+  private notePolicy(policy: ApprovalPolicy): void {
+    const seen = JSON.stringify([policy.approvalPolicy ?? null, policy.approvalsReviewer ?? null]);
+    if (seen === this.policySeen) return;
+    this.policySeen = seen;
+    const warning = policyWarning(policy);
+    if (warning !== undefined) {
+      this.options.logger.warn(
+        `approvals won't reach buildIt.Social as cards: ${warning}. Change it in your Codex config, or pass -c approval_policy="on-request" -c approvals_reviewer="user"`,
+        { source: policy.source },
+      );
+    } else if (policy.source === 'config') {
+      this.options.logger.info("codex's approvals come to buildIt.Social as cards");
+    }
+    this.options.onPolicy?.(policy);
   }
 
   /**
@@ -375,6 +458,7 @@ export class CodexBridge {
     if (this.closed) return;
     this.closed = true;
     this.unsubscribe();
+    this.requests.closeAll?.();
     this.options.state.postedListeners.delete(this.onPosted);
     await this.idle().catch(() => undefined);
     await this.options.typing?.stopAll().catch(() => undefined);
@@ -485,6 +569,11 @@ export class CodexBridge {
         };
         const r = await connection.request<ThreadResumeResponse>('thread/resume', params);
         const id = str(record(record(r).thread).id) ?? saved.codex_thread_id;
+        this.notePolicy({
+          approvalPolicy: record(r).approvalPolicy ?? null,
+          approvalsReviewer: record(r).approvalsReviewer ?? null,
+          source: 'thread',
+        });
         this.register(conv, id);
         if (id !== saved.codex_thread_id) threads.set(conv.key, id, true);
         logger.info('codex thread resumed', { place: conv.key, codex_thread: id });
@@ -507,6 +596,11 @@ export class CodexBridge {
     const r = await connection.request<ThreadStartResponse>('thread/start', params);
     const id = str(record(record(r).thread).id);
     if (id === undefined) throw new RpcError('thread/start', -32603, 'no thread id in the answer');
+    this.notePolicy({
+      approvalPolicy: record(r).approvalPolicy ?? null,
+      approvalsReviewer: record(r).approvalsReviewer ?? null,
+      source: 'thread',
+    });
     this.register(conv, id);
     threads.set(conv.key, id, false);
     logger.info('codex thread started', { place: conv.key, codex_thread: id });

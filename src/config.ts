@@ -154,6 +154,11 @@ export interface CodexOptions extends SessionCommandOptions {
   /** `key=value` overrides passed to `codex app-server -c` (repeatable -c / --config). */
   codexConfig: string[];
   logLevel: LogLevel;
+  /**
+   * Codex's approvals as cards (BUILDIT_APPROVALS_IN_APP, default true;
+   * BUILDIT_APPROVAL_TIMEOUT_MINUTES, default 60). Off: every approval is declined.
+   */
+  approvals?: ApprovalsConfig;
 }
 
 export type SessionCommand = 'connect' | 'disconnect' | 'status' | 'codex';
@@ -737,6 +742,8 @@ function codexAction(
       ...(codexPath === undefined ? {} : { codexPath: resolve(cwd, codexPath.trim()) }),
       codexConfig,
       logLevel: levelRaw === undefined ? 'info' : parseLogLevel(levelRaw),
+      // Its warnings (a value out of range) fall back to the defaults, as in channel mode.
+      approvals: parseApprovals(env, []),
     },
   };
 }

@@ -28,7 +28,13 @@ import { spawnAppServer, type SpawnAppServer } from '../codex/process.js';
 import { AppServerConnection } from '../codex/rpc.js';
 import { ThreadMap } from '../codex/thread-map.js';
 import { BridgeToolServer } from '../codex/tool-server.js';
-import { DEFAULT_ASK_TIMEOUT_MINUTES, parseApiUrl, type CodexOptions } from '../config.js';
+import {
+  DEFAULT_APPROVAL_TIMEOUT_MINUTES,
+  DEFAULT_ASK_TIMEOUT_MINUTES,
+  parseApiUrl,
+  type CodexOptions,
+} from '../config.js';
+import { policyNotePath, writePolicyNote } from '../codex/policy.js';
 import { createLogger } from '../log.js';
 import { forgetSession, savedApiUrl, sessionKey } from '../secrets/keychain.js';
 import { hookWaitSeconds } from '../transports/stdio.js';
@@ -52,6 +58,8 @@ export interface CodexDeps {
   typingEveryMs?: number;
   /** Told once the bridge runs (tests, and the smoke script). */
   onReady?: (bridge: CodexBridge, state: ChannelState) => void;
+  /** For tests: the approval cards' timing (a wait in seconds, and milliseconds per second). */
+  approvals?: { msPerSecond?: number; now?: () => number; waitS?: number };
 }
 
 /** Runs the bridge until it is stopped; the exit code. */
@@ -195,6 +203,14 @@ export async function runCodex(
     threads: new ThreadMap(join(lockDir, `${key}.codex-threads.json`), logger),
     folder: options.folder,
     toolServer: tools,
+    approvals: {
+      inApp: options.approvals?.inApp ?? true,
+      waitS: hookWaitSeconds(options.approvals?.timeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES),
+      ...deps.approvals,
+    },
+    onPolicy: (policy) => {
+      writePolicyNote(policyNotePath(lockDir, key), policy);
+    },
     typing: new TypingIndicator({
       api,
       logger: logger.child({ component: 'typing' }),

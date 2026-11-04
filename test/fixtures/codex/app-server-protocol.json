@@ -31,6 +31,10 @@
       "turn/interrupt": {
         "params": "#/definitions/v2/TurnInterruptParams",
         "result": "#/definitions/v2/TurnInterruptResponse"
+      },
+      "config/read": {
+        "params": "#/definitions/v2/ConfigReadParams",
+        "result": "#/definitions/v2/ConfigReadResponse"
       }
     },
     "clientNotifications": { "initialized": {} },
@@ -964,9 +968,39 @@
         ]
       },
       "AgentPath": { "type": "string" },
+      "AllowDenyRequirement": { "enum": ["allow", "deny"], "type": "string" },
+      "AnalyticsConfig": {
+        "additionalProperties": true,
+        "properties": { "enabled": { "type": ["boolean", "null"] } },
+        "type": "object"
+      },
+      "AppToolApproval": { "enum": ["auto", "prompt", "writes", "approve"], "type": "string" },
       "ApprovalsReviewer": {
         "enum": ["user", "auto_review", "guardian_subagent"],
         "type": "string"
+      },
+      "AppsConfig": {
+        "properties": {
+          "_default": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AppsDefaultConfig" }, { "type": "null" }],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "AppsDefaultConfig": {
+        "properties": {
+          "approvals_reviewer": {
+            "anyOf": [{ "$ref": "#/definitions/v2/ApprovalsReviewer" }, { "type": "null" }]
+          },
+          "default_tools_approval_mode": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AppToolApproval" }, { "type": "null" }]
+          },
+          "destructive_enabled": { "default": true, "type": "boolean" },
+          "enabled": { "default": true, "type": "boolean" },
+          "open_world_enabled": { "default": true, "type": "boolean" }
+        },
+        "type": "object"
       },
       "AskForApproval": {
         "oneOf": [
@@ -999,6 +1033,45 @@
           "title": { "type": "string" }
         },
         "required": ["title"],
+        "type": "object"
+      },
+      "AutoCompactTokenLimitScope": {
+        "oneOf": [
+          { "enum": ["total"], "type": "string" },
+          { "enum": ["body_after_prefix"], "type": "string" }
+        ]
+      },
+      "BrowserUseConfig": {
+        "properties": {
+          "allow_history_access": { "type": ["boolean", "null"] },
+          "default_origin_policy": {
+            "anyOf": [
+              { "$ref": "#/definitions/v2/BrowserUseOriginPolicyConfig" },
+              { "type": "null" }
+            ]
+          },
+          "origins": {
+            "additionalProperties": { "$ref": "#/definitions/v2/BrowserUseOriginPolicyConfig" },
+            "type": ["object", "null"]
+          }
+        },
+        "type": "object"
+      },
+      "BrowserUseOriginPolicyConfig": {
+        "properties": {
+          "access": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AllowDenyRequirement" }, { "type": "null" }]
+          },
+          "downloads": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AllowDenyRequirement" }, { "type": "null" }]
+          },
+          "full_cdp_access": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AllowDenyRequirement" }, { "type": "null" }]
+          },
+          "uploads": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AllowDenyRequirement" }, { "type": "null" }]
+          }
+        },
         "type": "object"
       },
       "ByteRange": {
@@ -1271,6 +1344,273 @@
       "CommandExecutionStatus": {
         "enum": ["inProgress", "completed", "failed", "declined"],
         "type": "string"
+      },
+      "ComputerUseConfig": {
+        "properties": {
+          "default_app_access": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AllowDenyRequirement" }, { "type": "null" }]
+          },
+          "macos": {
+            "anyOf": [{ "$ref": "#/definitions/v2/ComputerUseMacosConfig" }, { "type": "null" }]
+          },
+          "windows": {
+            "anyOf": [{ "$ref": "#/definitions/v2/ComputerUseWindowsConfig" }, { "type": "null" }]
+          }
+        },
+        "type": "object"
+      },
+      "ComputerUseMacosConfig": {
+        "properties": {
+          "bundle_ids": {
+            "additionalProperties": { "$ref": "#/definitions/v2/AllowDenyRequirement" },
+            "type": ["object", "null"]
+          }
+        },
+        "type": "object"
+      },
+      "ComputerUseWindowsConfig": {
+        "properties": {
+          "aumids": {
+            "additionalProperties": { "$ref": "#/definitions/v2/AllowDenyRequirement" },
+            "type": ["object", "null"]
+          },
+          "exes": {
+            "items": { "$ref": "#/definitions/v2/ComputerUseWindowsExeConfig" },
+            "type": ["array", "null"]
+          }
+        },
+        "type": "object"
+      },
+      "ComputerUseWindowsExeConfig": {
+        "properties": {
+          "access": { "$ref": "#/definitions/v2/AllowDenyRequirement" },
+          "binary_name": { "type": ["string", "null"] },
+          "product_name": { "type": "string" },
+          "publisher_name": { "type": "string" }
+        },
+        "required": ["access", "product_name", "publisher_name"],
+        "type": "object"
+      },
+      "Config": {
+        "additionalProperties": true,
+        "properties": {
+          "analytics": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AnalyticsConfig" }, { "type": "null" }]
+          },
+          "approval_policy": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AskForApproval" }, { "type": "null" }]
+          },
+          "approvals_reviewer": {
+            "anyOf": [{ "$ref": "#/definitions/v2/ApprovalsReviewer" }, { "type": "null" }]
+          },
+          "apps": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AppsConfig" }, { "type": "null" }],
+            "default": null
+          },
+          "browser_use": {
+            "anyOf": [{ "$ref": "#/definitions/v2/BrowserUseConfig" }, { "type": "null" }]
+          },
+          "compact_prompt": { "type": ["string", "null"] },
+          "computer_use": {
+            "anyOf": [{ "$ref": "#/definitions/v2/ComputerUseConfig" }, { "type": "null" }]
+          },
+          "desktop": { "additionalProperties": true, "type": ["object", "null"] },
+          "developer_instructions": { "type": ["string", "null"] },
+          "forced_chatgpt_workspace_id": {
+            "anyOf": [{ "$ref": "#/definitions/v2/ForcedChatgptWorkspaceIds" }, { "type": "null" }]
+          },
+          "forced_login_method": {
+            "anyOf": [{ "$ref": "#/definitions/v2/ForcedLoginMethod" }, { "type": "null" }]
+          },
+          "instructions": { "type": ["string", "null"] },
+          "model": { "type": ["string", "null"] },
+          "model_auto_compact_token_limit": { "format": "int64", "type": ["integer", "null"] },
+          "model_auto_compact_token_limit_scope": {
+            "anyOf": [{ "$ref": "#/definitions/v2/AutoCompactTokenLimitScope" }, { "type": "null" }]
+          },
+          "model_context_window": { "format": "int64", "type": ["integer", "null"] },
+          "model_provider": { "type": ["string", "null"] },
+          "model_reasoning_effort": {
+            "anyOf": [{ "$ref": "#/definitions/v2/ReasoningEffort" }, { "type": "null" }]
+          },
+          "model_reasoning_summary": {
+            "anyOf": [{ "$ref": "#/definitions/v2/ReasoningSummary" }, { "type": "null" }]
+          },
+          "model_verbosity": {
+            "anyOf": [{ "$ref": "#/definitions/v2/Verbosity" }, { "type": "null" }]
+          },
+          "review_model": { "type": ["string", "null"] },
+          "sandbox_mode": {
+            "anyOf": [{ "$ref": "#/definitions/v2/SandboxMode" }, { "type": "null" }]
+          },
+          "sandbox_workspace_write": {
+            "anyOf": [{ "$ref": "#/definitions/v2/SandboxWorkspaceWrite" }, { "type": "null" }]
+          },
+          "service_tier": { "type": ["string", "null"] },
+          "tools": { "anyOf": [{ "$ref": "#/definitions/v2/ToolsV2" }, { "type": "null" }] },
+          "web_search": {
+            "anyOf": [{ "$ref": "#/definitions/v2/WebSearchMode" }, { "type": "null" }]
+          }
+        },
+        "type": "object"
+      },
+      "ConfigLayer": {
+        "properties": {
+          "config": true,
+          "disabledReason": { "type": ["string", "null"] },
+          "name": { "$ref": "#/definitions/v2/ConfigLayerSource" },
+          "version": { "type": "string" }
+        },
+        "required": ["config", "name", "version"],
+        "type": "object"
+      },
+      "ConfigLayerMetadata": {
+        "properties": {
+          "name": { "$ref": "#/definitions/v2/ConfigLayerSource" },
+          "version": { "type": "string" }
+        },
+        "required": ["name", "version"],
+        "type": "object"
+      },
+      "ConfigLayerSource": {
+        "oneOf": [
+          {
+            "properties": {
+              "file": { "allOf": [{ "$ref": "#/definitions/v2/AbsolutePathBuf" }] },
+              "type": {
+                "enum": ["packagedDefaults"],
+                "title": "PackagedDefaultsConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": ["file", "type"],
+            "title": "PackagedDefaultsConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "domain": { "type": "string" },
+              "key": { "type": "string" },
+              "type": { "enum": ["mdm"], "title": "MdmConfigLayerSourceType", "type": "string" }
+            },
+            "required": ["domain", "key", "type"],
+            "title": "MdmConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": { "allOf": [{ "$ref": "#/definitions/v2/AbsolutePathBuf" }] },
+              "type": {
+                "enum": ["system"],
+                "title": "SystemConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": ["file", "type"],
+            "title": "SystemConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "type": {
+                "enum": ["enterpriseManaged"],
+                "title": "EnterpriseManagedConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": ["id", "name", "type"],
+            "title": "EnterpriseManagedConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": { "allOf": [{ "$ref": "#/definitions/v2/AbsolutePathBuf" }] },
+              "profile": { "type": ["string", "null"] },
+              "type": { "enum": ["user"], "title": "UserConfigLayerSourceType", "type": "string" }
+            },
+            "required": ["file", "type"],
+            "title": "UserConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "dotCodexFolder": { "$ref": "#/definitions/v2/AbsolutePathBuf" },
+              "type": {
+                "enum": ["project"],
+                "title": "ProjectConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": ["dotCodexFolder", "type"],
+            "title": "ProjectConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": ["sessionFlags"],
+                "title": "SessionFlagsConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": ["type"],
+            "title": "SessionFlagsConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": { "$ref": "#/definitions/v2/AbsolutePathBuf" },
+              "type": {
+                "enum": ["legacyManagedConfigTomlFromFile"],
+                "title": "LegacyManagedConfigTomlFromFileConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": ["file", "type"],
+            "title": "LegacyManagedConfigTomlFromFileConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": ["legacyManagedConfigTomlFromMdm"],
+                "title": "LegacyManagedConfigTomlFromMdmConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": ["type"],
+            "title": "LegacyManagedConfigTomlFromMdmConfigLayerSource",
+            "type": "object"
+          }
+        ]
+      },
+      "ConfigReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwd": { "type": ["string", "null"] },
+          "includeLayers": { "type": "boolean" }
+        },
+        "title": "ConfigReadParams",
+        "type": "object"
+      },
+      "ConfigReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "config": { "$ref": "#/definitions/v2/Config" },
+          "layers": {
+            "items": { "$ref": "#/definitions/v2/ConfigLayer" },
+            "type": ["array", "null"]
+          },
+          "origins": {
+            "additionalProperties": { "$ref": "#/definitions/v2/ConfigLayerMetadata" },
+            "type": "object"
+          }
+        },
+        "required": ["config", "origins"],
+        "title": "ConfigReadResponse",
+        "type": "object"
       },
       "ConfigurationReasoning": {
         "properties": { "effort": { "$ref": "#/definitions/v2/ReasoningEffort" } },
@@ -1588,6 +1928,10 @@
         "required": ["diff", "kind", "path"],
         "type": "object"
       },
+      "ForcedChatgptWorkspaceIds": {
+        "anyOf": [{ "type": "string" }, { "items": { "type": "string" }, "type": "array" }]
+      },
+      "ForcedLoginMethod": { "enum": ["chatgpt", "api"], "type": "string" },
       "FunctionCallOutputBody": {
         "anyOf": [
           { "type": "string" },
@@ -2539,6 +2883,15 @@
           }
         ]
       },
+      "SandboxWorkspaceWrite": {
+        "properties": {
+          "exclude_slash_tmp": { "default": false, "type": "boolean" },
+          "exclude_tmpdir_env_var": { "default": false, "type": "boolean" },
+          "network_access": { "default": false, "type": "boolean" },
+          "writable_roots": { "default": [], "items": { "type": "string" }, "type": "array" }
+        },
+        "type": "object"
+      },
       "SelectedCapabilityRoot": {
         "properties": {
           "id": { "type": "string" },
@@ -3418,6 +3771,14 @@
         "title": "ThreadStatusChangedNotification",
         "type": "object"
       },
+      "ToolsV2": {
+        "properties": {
+          "web_search": {
+            "anyOf": [{ "$ref": "#/definitions/v2/WebSearchToolConfig" }, { "type": "null" }]
+          }
+        },
+        "type": "object"
+      },
       "Turn": {
         "properties": {
           "completedAt": { "format": "int64", "type": ["integer", "null"] },
@@ -3737,6 +4098,7 @@
           }
         ]
       },
+      "Verbosity": { "enum": ["low", "medium", "high"], "type": "string" },
       "WebSearchAction": {
         "oneOf": [
           {
@@ -3785,6 +4147,31 @@
             "type": "object"
           }
         ]
+      },
+      "WebSearchContextSize": { "enum": ["low", "medium", "high"], "type": "string" },
+      "WebSearchLocation": {
+        "additionalProperties": false,
+        "properties": {
+          "city": { "type": ["string", "null"] },
+          "country": { "type": ["string", "null"] },
+          "region": { "type": ["string", "null"] },
+          "timezone": { "type": ["string", "null"] }
+        },
+        "type": "object"
+      },
+      "WebSearchMode": { "enum": ["disabled", "cached", "indexed", "live"], "type": "string" },
+      "WebSearchToolConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_domains": { "items": { "type": "string" }, "type": ["array", "null"] },
+          "context_size": {
+            "anyOf": [{ "$ref": "#/definitions/v2/WebSearchContextSize" }, { "type": "null" }]
+          },
+          "location": {
+            "anyOf": [{ "$ref": "#/definitions/v2/WebSearchLocation" }, { "type": "null" }]
+          }
+        },
+        "type": "object"
       }
     }
   }

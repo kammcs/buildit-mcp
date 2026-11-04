@@ -227,7 +227,7 @@ const ITEM_FALLBACK_CODES: ReadonlySet<string> = new Set([
 // ---------------------------------------------------------------------------
 
 /** How a card ended, as the API says it (an event's data.approval, or a SessionApproval). */
-interface Final {
+export interface Final {
   status: string;
   reason?: string | undefined;
   /** The session rule the server stored (an event's data.approval.rule only). */
@@ -310,7 +310,7 @@ function answerOf(
 const codeOf = (err: unknown): string => (err instanceof ApiError ? err.code : 'error');
 
 /** The approval object of a card.closed event for this card, if it carries one (and names it). */
-function eventApproval(event: { data: unknown }, id: string): Final | undefined {
+export function eventApproval(event: { data: unknown }, id: string): Final | undefined {
   const approval = (event.data as Record<string, unknown>).approval;
   if (approval === null || typeof approval !== 'object') return undefined;
   const a = approval as Record<string, unknown>;
@@ -323,7 +323,7 @@ function eventApproval(event: { data: unknown }, id: string): Final | undefined 
 }
 
 /** A post that failed in a way that may have stored it: a timeout, the network, a 5xx. */
-function mayBeStored(err: unknown): boolean {
+export function mayBeStored(err: unknown): boolean {
   if (!(err instanceof ApiError)) return true;
   return err.status >= 500 || err.status === 408 || err.code === 'timeout';
 }

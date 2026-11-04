@@ -49,6 +49,15 @@ export function inputText(msg: Record<string, unknown>): string | undefined {
 
 const COMPARED = ['threadId', 'expectedTurnId', 'turnId', 'excludeTurns'] as const;
 
+/**
+ * Requests the bridge sends that the recording predates, and the answer
+ * each gets here (outside the recording: its position doesn't move).
+ * Newer free reads only; a turn method is never in this list.
+ */
+export const NEWER_REQUESTS: Readonly<Record<string, unknown>> = {
+  'config/read': { config: { approval_policy: null, approvals_reviewer: null }, origins: {} },
+};
+
 export class ReplayAppServer {
   readonly violations: string[] = [];
   readonly serverViolations: string[] = [];
@@ -93,11 +102,26 @@ export class ReplayAppServer {
     return this.position >= this.records.length;
   }
 
+  /** The newer requests the bridge sent, answered outside the recording. */
+  readonly newer: string[] = [];
+
   private onBridge(line: string): void {
     const sent = JSON.parse(line) as Record<string, unknown>;
     const expected = this.expecting;
     const method = typeof sent.method === 'string' ? sent.method : undefined;
     this.validate(sent, method);
+    if (
+      method !== undefined &&
+      sent.id !== undefined &&
+      method !== expected?.msg.method &&
+      method in NEWER_REQUESTS
+    ) {
+      this.newer.push(method);
+      if (!this.ended) {
+        this.toBridge.write(JSON.stringify({ id: sent.id, result: NEWER_REQUESTS[method] }) + '\n');
+      }
+      return;
+    }
     if (expected === undefined) {
       this.violations.push(
         `the bridge sent ${method ?? 'an answer'}, the recording expected nothing`,

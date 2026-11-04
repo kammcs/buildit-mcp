@@ -136,7 +136,11 @@ src/
   codex/router.ts       which Codex conversation an event goes to (the direct message only, for now)
   codex/tool-server.ts  the bridge's tools for its Codex child: loopback Streamable HTTP, a secret per
                         run (bearer_token_env_var), a URL per Codex thread (the caller), the shared ChannelState
-  codex/server-requests.ts  the app-server's own requests: declined, the clock, "method not found"
+  codex/approvals.ts    Codex's approvals (commands, file changes, permissions, MCP tools) as Approve/Deny
+                        cards: the diffs from fileChange items, masking, decline unless shown in full,
+                        closed on serverRequest/resolved, unassign, stop and exit
+  codex/policy.ts       where Codex's config sends approvals: the warning, and the note status reads
+  codex/server-requests.ts  the rest of the app-server's requests: declined, the clock, "method not found"
   codex/rpc.ts          the JSON-RPC connection to the app-server (stdio, one JSON object a line)
   codex/process.ts      starting and ending the app-server child
   codex/binary.ts       where the native codex program is (the npm shim followed, or the PATH)
