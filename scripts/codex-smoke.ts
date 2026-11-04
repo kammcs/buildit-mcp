@@ -40,12 +40,16 @@ import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 
+import { ApiClient } from '../src/api/client.js';
+import { getSession } from '../src/channel/api.js';
+import { ChannelState } from '../src/channel/loop.js';
 import { runCodex } from '../src/cli/codex.js';
 import type { CommandIO } from '../src/cli/commands.js';
 import { findCodex } from '../src/codex/binary.js';
 import type { CodexBridge } from '../src/codex/bridge.js';
 import { spawnAppServer, type SpawnAppServer } from '../src/codex/process.js';
 import { AppServerConnection } from '../src/codex/rpc.js';
+import { BRIDGE_MCP_SERVER, BridgeToolServer } from '../src/codex/tool-server.js';
 import { createLogger } from '../src/log.js';
 import { FileTokenStore, sessionKey } from '../src/secrets/keychain.js';
 import { FakeApi } from '../test/support/fake-api.js';
@@ -204,6 +208,70 @@ if (!dryRun) {
     process.exit(2);
   }
 }
+/**
+ * Free (no turn): the bridge's hosted tools reach a Codex thread. A tool
+ * server on loopback (buildIt.Social's side is the in-process fake), an
+ * app-server started with its secret, an ephemeral thread started with
+ * the thread's config, then mcpServerStatus/list for that thread: the
+ * buildit server must be connected, with its tools.
+ */
+async function hostedToolsCheck(): Promise<string> {
+  const fake = await new FakeApi().start();
+  fake.sessions.open(SESSION_TOKENS.first, 'codex-smoke-tools');
+  const api = new ApiClient({ baseUrl: fake.url, token: SESSION_TOKENS.first, logger });
+  await api.getMeta().catch(() => undefined);
+  const state = new ChannelState();
+  state.folder = work;
+  state.session = await getSession(api);
+  const tools = new BridgeToolServer({
+    api,
+    state,
+    logger,
+    ask: { questionsInApp: true, hookWaitS: 60 },
+  });
+  await tools.start();
+  const proc = spawnAppServer(binary, { cwd: work, logger })(
+    config.flatMap((c) => ['-c', c]),
+    tools.env,
+  );
+  const conn = new AppServerConnection(proc.stdout, proc.stdin, { logger });
+  try {
+    await conn.request('initialize', {
+      clientInfo: { name: 'buildit_mcp_smoke', title: null, version: '0.0.0' },
+      capabilities: { experimentalApi: true },
+    });
+    conn.notify('initialized');
+    const started = await conn.request<{ thread: { id: string } }>('thread/start', {
+      cwd: work,
+      ephemeral: true,
+      config: tools.threadConfig('dm'),
+    });
+    for (let i = 0; i < 15; i++) {
+      await sleep(1000);
+      const list = await conn.request<{ data?: McpStatus[] }>('mcpServerStatus/list', {
+        threadId: started.thread.id,
+        serverName: BRIDGE_MCP_SERVER,
+      });
+      const entry = (list.data ?? []).find((m) => m.name === BRIDGE_MCP_SERVER);
+      const names = Object.keys(entry?.tools ?? {});
+      if (names.length > 0) {
+        const want = ['reply', 'whoami', 'ask', 'get_attachment'];
+        const missing = want.filter((n) => !names.includes(n));
+        return missing.length === 0
+          ? `OK, ${names.length} tools over loopback`
+          : `FAIL, missing ${missing.join(', ')}`;
+      }
+    }
+    return 'FAIL, the buildit server listed no tools';
+  } finally {
+    conn.close();
+    await proc.stop();
+    await tools.close();
+    await fake.close();
+  }
+}
+
+if (!dryRun) console.log(`Hosted tools (no turn): ${await hostedToolsCheck()}`);
 if (preflightOnly) process.exit(0);
 
 // What the wire shows: new turns, their ends, the steers, the resumes, and the token usage.

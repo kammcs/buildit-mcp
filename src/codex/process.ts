@@ -21,7 +21,14 @@ export interface AppServerProcess {
   stop(graceMs?: number): Promise<number | null>;
 }
 
-export type SpawnAppServer = (args: readonly string[]) => AppServerProcess;
+/**
+ * Starts the app-server with these arguments and these environment
+ * variables added to the bridge's own (the hosted tools' secret).
+ */
+export type SpawnAppServer = (
+  args: readonly string[],
+  env?: Readonly<Record<string, string>>,
+) => AppServerProcess;
 
 /** How long the app-server gets to exit after its stdin closes. */
 export const STOP_GRACE_MS = 5000;
@@ -31,10 +38,10 @@ export function spawnAppServer(
   binary: CodexBinary,
   options: { cwd: string; logger: Logger },
 ): SpawnAppServer {
-  return (args) => {
+  return (args, env = {}) => {
     const child = spawn(binary.path, ['app-server', ...args], {
       cwd: options.cwd,
-      env: { ...process.env, ...binary.env },
+      env: { ...process.env, ...binary.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });

@@ -134,6 +134,8 @@ src/
                         answer posted (with the dedupe rule), "is writing" from turn events, the
                         thread map and resume; server requests go to a ServerRequestRouter
   codex/router.ts       which Codex conversation an event goes to (the direct message only, for now)
+  codex/tool-server.ts  the bridge's tools for its Codex child: loopback Streamable HTTP, a secret per
+                        run (bearer_token_env_var), a URL per Codex thread (the caller), the shared ChannelState
   codex/server-requests.ts  the app-server's own requests: declined, the clock, "method not found"
   codex/rpc.ts          the JSON-RPC connection to the app-server (stdio, one JSON object a line)
   codex/process.ts      starting and ending the app-server child
@@ -157,6 +159,7 @@ test/
   support/fake-codex.ts a scripted fake codex app-server, validating the bridge's messages against
                         fixtures/codex/app-server-protocol.json (the vendored schema subset)
   support/codex-replay.ts  plays a recorded real run (fixtures/codex/smoke-*.jsonl) back to the bridge
+  support/codex-run.ts  runCodex in process against the fakes, for the Codex tests
   *.test.ts             vitest
 scripts/
   codegen.ts, generate.ts  the generator (npm run generate)

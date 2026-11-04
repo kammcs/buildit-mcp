@@ -3,7 +3,9 @@
  *
  * A thread named by `thread_id`, or a work item's by `item` (its key: its
  * id comes from the items the events named, else from get_item; the
- * item's id is its thread's). Without either, the thread of the latest
+ * item's id is its thread's). Without either, a hosted tool's caller's own
+ * thread (Codex bridge mode: the thread its conversation's turn answers);
+ * else the thread of the latest
  * message, mention or assignment, but only while one thread is active:
  * once the session works in several (an item's thread besides the direct
  * message, or two items; the lead's item workers post in parallel through
@@ -100,6 +102,9 @@ export async function resolveThread(
   }
   const named = fromItem ?? given.thread_id;
   if (named !== undefined) return named;
+  // Codex bridge mode: the calling conversation's own thread, known from where the call came in.
+  const own = ctx.caller?.thread();
+  if (own !== undefined) return own;
   if (state.activeThreads().length > 1) {
     throw new ToolInputError(threadRequiredMessage(state, tool, how));
   }

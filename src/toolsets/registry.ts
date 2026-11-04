@@ -49,6 +49,22 @@ export interface ToolContext {
   channel?: ChannelState;
   /** Reports progress to the client, when the call asked for it (a progress token). */
   progress?: (message: string) => Promise<void>;
+  /**
+   * Codex bridge mode: who called, as the bridge knows it from the URL the
+   * call came in on (never from the call's arguments or metadata).
+   */
+  caller?: ToolCaller;
+}
+
+/**
+ * The conversation a hosted tool call came from (Codex bridge mode): its
+ * place in the bridge, and the buildIt.Social thread it answers now.
+ */
+export interface ToolCaller {
+  /** The place's key (the thread map's: `dm` for the direct message). */
+  place: string;
+  /** The buildIt.Social thread the place's running turn answers, when one runs. */
+  thread(): string | undefined;
 }
 
 /** The context for one call of `tool`. */
@@ -60,6 +76,7 @@ export function createToolContext(init: {
   client?: ClientInfo | undefined;
   channel?: ChannelState | undefined;
   progress?: ((message: string) => Promise<void>) | undefined;
+  caller?: ToolCaller | undefined;
 }): ToolContext {
   const apiOptions: ApiRequestOptions = {
     tool: init.tool,
@@ -74,6 +91,7 @@ export function createToolContext(init: {
     call: (id, args = {}) => callOperation(init.api, id, args, apiOptions),
     ...(init.channel ? { channel: init.channel } : {}),
     ...(init.progress ? { progress: init.progress } : {}),
+    ...(init.caller ? { caller: init.caller } : {}),
   };
 }
 

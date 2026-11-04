@@ -126,6 +126,16 @@ export interface BridgeOptions {
   typing?: TypingLike | undefined;
   router?: CodexRouter;
   serverRequests?: ServerRequestRouter;
+  /** The bridge's hosted tools (tool-server.ts): each thread's config names its endpoint. */
+  toolServer?: HostedTools;
+}
+
+/** What the bridge needs of its hosted tools' server. */
+export interface HostedTools {
+  /** The config a place's Codex thread starts or resumes with. */
+  threadConfig(place: string): Record<string, unknown>;
+  /** Tells the server which buildIt.Social thread each place answers now. */
+  attachThreads(threadOf: (place: string) => string | undefined): void;
 }
 
 /** An agent message of a turn. */
@@ -241,6 +251,15 @@ export class CodexBridge {
       this.onNotification(n);
     });
     options.state.postedListeners.add(this.onPosted);
+    options.toolServer?.attachThreads((place) => this.threadOf(place));
+  }
+
+  /**
+   * The buildIt.Social thread a place's running turn answers (its latest
+   * message's), for the hosted tools' default thread; none between turns.
+   */
+  threadOf(place: string): string | undefined {
+    return this.conversations.get(place)?.turn?.joined.at(-1);
   }
 
   /**
@@ -459,7 +478,11 @@ export class CodexBridge {
     const saved = threads.get(conv.key);
     if (saved?.has_turn === true) {
       try {
-        const params: ThreadResumeParams = { threadId: saved.codex_thread_id, excludeTurns: true };
+        const params: ThreadResumeParams = {
+          threadId: saved.codex_thread_id,
+          excludeTurns: true,
+          ...this.toolsConfig(conv.key),
+        };
         const r = await connection.request<ThreadResumeResponse>('thread/resume', params);
         const id = str(record(record(r).thread).id) ?? saved.codex_thread_id;
         this.register(conv, id);
@@ -479,6 +502,7 @@ export class CodexBridge {
       cwd: this.options.folder,
       serviceName: CODEX_CLIENT_NAME,
       developerInstructions: DEVELOPER_INSTRUCTIONS,
+      ...this.toolsConfig(conv.key),
     };
     const r = await connection.request<ThreadStartResponse>('thread/start', params);
     const id = str(record(record(r).thread).id);
@@ -487,6 +511,12 @@ export class CodexBridge {
     threads.set(conv.key, id, false);
     logger.info('codex thread started', { place: conv.key, codex_thread: id });
     return id;
+  }
+
+  /** The thread's config for the hosted tools (its own endpoint), when the bridge serves them. */
+  private toolsConfig(place: string): { config?: Record<string, unknown> } {
+    const tools = this.options.toolServer;
+    return tools === undefined ? {} : { config: tools.threadConfig(place) };
   }
 
   private register(conv: Conversation, codexThreadId: string): void {

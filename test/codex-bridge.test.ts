@@ -645,7 +645,9 @@ describe('buildit-mcp codex: restarts', () => {
     await waitFor(() => s.heartbeats.filter((h) => h === 'online').length === 2);
     api.sessions.postFrom(token, 'What was it?');
     await waitFor(() => posts().length === 2);
-    expect(second.requests('thread/resume')).toEqual([{ threadId, excludeTurns: true }]);
+    expect(second.requests('thread/resume')).toEqual([
+      { threadId, excludeTurns: true, config: expect.any(Object) as unknown },
+    ]);
     expect(second.requests('thread/start')).toHaveLength(0);
     expect(second.requests('turn/start')[0]!.threadId).toBe(threadId);
     expect(posts()[1]!.text).toBe('42');
@@ -687,7 +689,9 @@ describe('buildit-mcp codex: restarts', () => {
     await waitFor(() => s.heartbeats.filter((h) => h === 'online').length === 2);
     api.sessions.postFrom(token, 'Two');
     await waitFor(() => posts().length === 2);
-    expect(b.requests('thread/resume')).toEqual([{ threadId: 'never-saved', excludeTurns: true }]);
+    expect(b.requests('thread/resume')).toEqual([
+      { threadId: 'never-saved', excludeTurns: true, config: expect.any(Object) as unknown },
+    ]);
     expect(b.requests('thread/start')).toHaveLength(1);
     const map = readMap(mapFile);
     expect(map.threads.dm?.codex_thread_id).not.toBe('never-saved');

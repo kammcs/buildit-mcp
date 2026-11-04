@@ -81,6 +81,8 @@ export interface ThreadStartParams {
   serviceName?: string | null;
   developerInstructions?: string | null;
   ephemeral?: boolean | null;
+  /** Config overrides for this thread, by dotted key (as `-c` takes them). */
+  config?: Record<string, unknown> | null;
 }
 
 export interface ThreadStartResponse {
@@ -92,6 +94,8 @@ export interface ThreadResumeParams {
   threadId: string;
   /** Leave `thread.turns` empty: the bridge never reads the history. */
   excludeTurns?: boolean;
+  /** Config overrides for the resumed thread (the hosted tools' URL is new each run). */
+  config?: Record<string, unknown> | null;
 }
 
 export type ThreadResumeResponse = ThreadStartResponse;

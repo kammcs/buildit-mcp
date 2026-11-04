@@ -55,12 +55,12 @@ export const BRIDGE_SURFACE: BridgeSurface = {
     },
     'thread/start': {
       result: 'v2/ThreadStartResponse',
-      sends: ['cwd', 'serviceName', 'developerInstructions'],
+      sends: ['cwd', 'serviceName', 'developerInstructions', 'config'],
       reads: ['thread.id'],
     },
     'thread/resume': {
       result: 'v2/ThreadResumeResponse',
-      sends: ['threadId', 'excludeTurns'],
+      sends: ['threadId', 'excludeTurns', 'config'],
       reads: ['thread.id'],
     },
     'turn/start': {
