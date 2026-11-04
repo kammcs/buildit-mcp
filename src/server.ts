@@ -34,6 +34,7 @@ import {
   type ClientInfo,
   type PromptDefinition,
   type ResourceDefinition,
+  type ToolCaller,
   type ToolDefinition,
   type ToolPolicy,
 } from './toolsets/registry.js';
@@ -166,6 +167,13 @@ export interface CreateServerOptions {
   lead?: { maxParallelItems: number };
   /** Told about every tool call, before it runs (its name and arguments). */
   onToolCall?: (tool: string, args: unknown) => void;
+  /**
+   * Whether to declare the Claude Code channel capability (default: with
+   * `channel`). The Codex bridge's hosted tools are channel tools without it.
+   */
+  channelCapability?: boolean;
+  /** Codex bridge mode: who calls (from the URL the request came in on). */
+  caller?: ToolCaller;
 }
 
 export const DEFAULT_TOOLS_LIST_TTL_MS = 5 * 60_000;
@@ -207,7 +215,9 @@ export function createSwitchableMcpServer(options: CreateServerOptions): Switcha
     { name: SERVER_NAME, title: 'buildIt.Social', version: SERVER_VERSION },
     {
       capabilities: {
-        ...(options.channel === true ? { experimental: { [CHANNEL_CAPABILITY]: {} } } : {}),
+        ...((options.channelCapability ?? options.channel) === true
+          ? { experimental: { [CHANNEL_CAPABILITY]: {} } }
+          : {}),
         // A channel drops reply from its tools when its session ends, and says so.
         tools: { listChanged: options.channel === true },
         ...(resources.length > 0 ? { resources: { listChanged: false } } : {}),
@@ -367,6 +377,7 @@ function registerTool(
         signal: ctx.mcpReq.signal,
         client: clientInfo(server, ctx.mcpReq.envelope),
         channel: options.channelState,
+        caller: options.caller,
         progress:
           progressToken === undefined
             ? undefined

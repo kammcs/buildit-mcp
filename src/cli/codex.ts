@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { ApiClient } from '../api/client.js';
 import { suggestedCapabilities } from '../capabilities.js';
 import { ToolApprovals } from '../channel/approvals.js';
+import { BRIDGE_ATTACHMENTS_DIR } from '../channel/attachments.js';
 import { acquireChannelLock, defaultLockDir, type ChannelLock } from '../channel/lock.js';
 import { ChannelLoop, ChannelState } from '../channel/loop.js';
 import { TypingIndicator } from '../channel/typing.js';
@@ -27,9 +28,18 @@ import { CodexBridge, CodexVersionError } from '../codex/bridge.js';
 import { spawnAppServer, type SpawnAppServer } from '../codex/process.js';
 import { AppServerConnection } from '../codex/rpc.js';
 import { ThreadMap } from '../codex/thread-map.js';
-import { parseApiUrl, type CodexOptions } from '../config.js';
-import { createLogger } from '../log.js';
+import { BridgeToolServer, newBridgeSecret } from '../codex/tool-server.js';
+import {
+  DEFAULT_APPROVAL_TIMEOUT_MINUTES,
+  DEFAULT_ASK_TIMEOUT_MINUTES,
+  parseApiUrl,
+  type CodexOptions,
+} from '../config.js';
+import { policyNotePath, writePolicyNote } from '../codex/policy.js';
+import { likelyCause, usefulLine } from '../codex/startup.js';
+import { createLogger, scrubString } from '../log.js';
 import { forgetSession, savedApiUrl, sessionKey } from '../secrets/keychain.js';
+import { hookWaitSeconds } from '../transports/stdio.js';
 import { compareVersions, SERVER_VERSION } from '../version.js';
 import { runConnect, type CommandIO } from './commands.js';
 
@@ -50,6 +60,8 @@ export interface CodexDeps {
   typingEveryMs?: number;
   /** Told once the bridge runs (tests, and the smoke script). */
   onReady?: (bridge: CodexBridge, state: ChannelState) => void;
+  /** For tests: the approval cards' timing (a wait in seconds, and milliseconds per second). */
+  approvals?: { msPerSecond?: number; now?: () => number; waitS?: number };
 }
 
 /** Runs the bridge until it is stopped; the exit code. */
@@ -96,9 +108,11 @@ export async function runCodex(
     if (token === undefined) return 1;
   }
 
+  // The hosted tools' secret for this run, made first so the logs scrub it too.
+  const bridgeSecret = newBridgeSecret();
   const logger = createLogger({
     level: options.logLevel,
-    secrets: [token],
+    secrets: [token, bridgeSecret],
     ...(deps.logSink === undefined ? {} : { sink: deps.logSink }),
   });
 
@@ -160,8 +174,31 @@ export async function runCodex(
   });
   state.requestJournal = join(lockDir, `${key}.requests.json`);
   state.loadRequestJournal();
+  // Attachments go to a folder of no client's own (.buildit/attachments), not Claude Code's.
+  state.attachmentsDir = BRIDGE_ATTACHMENTS_DIR;
 
-  const proc = spawn(options.codexConfig.flatMap((c) => ['-c', c]));
+  // The bridge's tools, for its Codex child only (loopback, a secret for this run).
+  const tools = new BridgeToolServer({
+    api,
+    state,
+    logger: logger.child({ component: 'codex_tools' }),
+    ask: { questionsInApp: true, hookWaitS: hookWaitSeconds(DEFAULT_ASK_TIMEOUT_MINUTES) },
+    secret: bridgeSecret,
+  });
+  try {
+    await tools.start();
+  } catch (err) {
+    io.err(
+      `The bridge could not serve its tools on this computer's loopback address: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    lock.release();
+    return 1;
+  }
+
+  const proc = spawn(
+    options.codexConfig.flatMap((c) => ['-c', c]),
+    tools.env,
+  );
   const connection = new AppServerConnection(proc.stdout, proc.stdin, {
     logger: logger.child({ component: 'codex_rpc' }),
   });
@@ -172,6 +209,15 @@ export async function runCodex(
     logger: logger.child({ component: 'codex_bridge' }),
     threads: new ThreadMap(join(lockDir, `${key}.codex-threads.json`), logger),
     folder: options.folder,
+    toolServer: tools,
+    approvals: {
+      inApp: options.approvals?.inApp ?? true,
+      waitS: hookWaitSeconds(options.approvals?.timeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES),
+      ...deps.approvals,
+    },
+    onPolicy: (policy) => {
+      writePolicyNote(policyNotePath(lockDir, key), policy);
+    },
     typing: new TypingIndicator({
       api,
       logger: logger.child({ component: 'typing' }),
@@ -183,17 +229,29 @@ export async function runCodex(
     await bridge.close();
     connection.close();
     await proc.stop();
+    await tools.close();
     lock.release();
   };
 
   try {
     await bridge.initialize();
+    proc.started?.();
   } catch (err) {
-    io.err(
-      err instanceof CodexVersionError
-        ? `${err.message}\n`
-        : `The Codex app-server did not start: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
+    if (err instanceof CodexVersionError) {
+      io.err(`${err.message}\n`);
+    } else {
+      // What it said while starting, to the terminal only (scrubbed), with the likely cause.
+      const said = usefulLine((await proc.startupStderr?.()) ?? []);
+      const line = said === undefined ? undefined : scrubString(said, [token, bridgeSecret]);
+      io.err(
+        [
+          `The Codex app-server did not start: ${err instanceof Error ? err.message : String(err)}`,
+          ...(line === undefined ? [] : [`It said: ${line}`]),
+          likelyCause(line, options.codexConfig),
+        ].join('\n') + '\n',
+      );
+      logger.error('the codex app-server did not start', { said_something: line !== undefined });
+    }
     await shutdown();
     return err instanceof CodexVersionError ? 2 : 1;
   }
@@ -203,7 +261,7 @@ export async function runCodex(
     api,
     logger: logger.child({ component: 'channel' }),
     state,
-    notify: (params) => bridge.handle(params),
+    notify: (params, extra) => bridge.handle(params, extra),
     capabilities: () => suggestedCapabilities(options.capabilities),
     owns: () => lock.owns(),
     ...(deps.intervalMs === undefined ? {} : { intervalMs: deps.intervalMs }),

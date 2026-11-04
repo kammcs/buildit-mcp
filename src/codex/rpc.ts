@@ -53,11 +53,13 @@ export const RPC_METHOD_NOT_FOUND = -32601;
 export const RPC_INTERNAL_ERROR = -32603;
 
 /**
- * What a server request handler returns: the result, or an error to send
- * back. A handler that throws is answered with an internal error.
+ * What a server request handler returns: the result, an error to send
+ * back, or `none` when no answer is owed any more (the app-server said the
+ * request was resolved otherwise). A handler that throws is answered with
+ * an internal error.
  */
 export type ServerRequestAnswer =
-  { result: unknown } | { error: { code: number; message: string } };
+  { result: unknown } | { error: { code: number; message: string } } | { none: true };
 
 export type ServerRequestHandler = (request: RpcServerRequest) => Promise<ServerRequestAnswer>;
 
@@ -249,6 +251,7 @@ export class AppServerConnection {
     }
     answer.then(
       (a) => {
+        if ('none' in a) return;
         this.write(
           'result' in a ? { id: request.id, result: a.result } : { id: request.id, error: a.error },
         );

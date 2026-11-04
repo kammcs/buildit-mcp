@@ -2,11 +2,14 @@
  * The app-server's own requests to the bridge, answered safely.
  *
  * Codex asks its client before it runs a command, changes files, widens
- * its permissions, runs an MCP tool or asks the person a question. Cards
- * for those come in a later version; until then every such request is
- * declined (the turn goes on without it, and Codex tells the person why),
- * and logged with its method and thread, never its content. Nothing is
- * ever approved here.
+ * its permissions, runs an MCP tool or asks the person a question. The
+ * approvals become cards (approvals.ts), which hand everything else here:
+ * what this version can't show the person (questions, elicitations that
+ * aren't an MCP tool's approval, dynamic tools, the old v1 approvals), and,
+ * when the bridge runs without cards, the approvals too. Each is declined
+ * (the turn goes on without it, and Codex tells the person why), and
+ * logged with its method and thread, never its content. Nothing is ever
+ * approved here.
  *
  * The rest: `currentTime/read` is answered with this computer's clock;
  * requests for credentials or attestations, and methods this version
@@ -15,9 +18,14 @@
  */
 import type { Logger } from '../log.js';
 import type { AnsweredServerRequest, ServerRequestResults } from './protocol.js';
-import { RPC_METHOD_NOT_FOUND, type RpcServerRequest, type ServerRequestAnswer } from './rpc.js';
+import {
+  RPC_METHOD_NOT_FOUND,
+  type RpcNotification,
+  type RpcServerRequest,
+  type ServerRequestAnswer,
+} from './rpc.js';
 
-/** What the person would be asked; a later version shows them as cards. */
+/** The safe answer to each request the person would decide: no, nothing, or none. */
 const DECLINES: { [M in AnsweredServerRequest]?: ServerRequestResults[M] } = {
   'item/commandExecution/requestApproval': { decision: 'decline' },
   'item/fileChange/requestApproval': { decision: 'decline' },
@@ -36,7 +44,7 @@ const DECLINES: { [M in AnsweredServerRequest]?: ServerRequestResults[M] } = {
   },
 };
 
-/** Requests that mean "the person must decide": declined until cards exist. */
+/** Requests that mean "the person must decide": declined when they reach this router. */
 export const DECLINED_METHODS: readonly string[] = Object.keys(DECLINES);
 
 export type ServerRequestOutcome = 'declined' | 'answered' | 'unsupported';
@@ -44,6 +52,10 @@ export type ServerRequestOutcome = 'declined' | 'answered' | 'unsupported';
 export interface ServerRequestRouter {
   /** Answers one server request. */
   handle(request: RpcServerRequest): Promise<ServerRequestAnswer>;
+  /** Sees every notification first (the file changes' diffs, resolved requests). */
+  observe?(n: RpcNotification): void;
+  /** Ends every wait: the app-server is gone, or the bridge stops. */
+  closeAll?(): void;
 }
 
 /** The answers of this version: declines, the clock, and "method not found". */
@@ -63,7 +75,7 @@ export class DecliningServerRequests implements ServerRequestRouter {
     const decline = DECLINES[request.method as AnsweredServerRequest];
     if (decline !== undefined) {
       this.logger.warn(
-        'codex asked for an approval or an answer; declined (cards for these come in a later version)',
+        'codex asked for something this bridge cannot show the person yet; declined',
         { method: request.method, codex_thread: thread },
       );
       this.onOutcome?.(request.method, 'declined');

@@ -12,10 +12,21 @@
  * the recording steered, another turn, another order) is a violation.
  * The bridge's messages are also checked against the vendored schema, and
  * the server's recorded ones too (`serverViolations`).
+ *
+ * What the real Codex did outside the stream is played by `onRecord`, a
+ * hook awaited before each recorded server message is sent: the parity
+ * run's MCP tool calls, for example, which Codex made to the bridge's
+ * hosted tools between an mcpToolCall item's start and its end
+ * (`mcpCall` makes such a call as Codex would: the thread's URL from the
+ * bridge's own thread/start, the secret from the environment it started
+ * the app-server with). The bridge's answers to the recorded server
+ * requests must match the recording's (accept or decline).
  */
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
+
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 import type { AppServerProcess, SpawnAppServer } from '../../src/codex/process.js';
 import { PROTOCOL, schemaErrors, unknownFields } from './fake-codex.js';
@@ -47,7 +58,40 @@ export function inputText(msg: Record<string, unknown>): string | undefined {
   return typeof text === 'string' ? text : undefined;
 }
 
+/**
+ * The person's words of a turn's text: its first paragraph (an
+ * attachments block after it holds this run's paths and block ids).
+ */
+export function promptOf(msg: Record<string, unknown>): string | undefined {
+  return inputText(msg)?.split('\n\n')[0];
+}
+
+/** A turn method's input item types (text, localImage...). */
+export function inputTypes(msg: Record<string, unknown>): string {
+  const params = msg.params as { input?: { type?: unknown }[] } | undefined;
+  return (params?.input ?? []).map((i) => String(i.type)).join(',');
+}
+
+/** An answer to a server request that decides something (an approval's). */
+function decisionOf(msg: Record<string, unknown>): string | undefined {
+  const r = msg.result;
+  if (r === null || typeof r !== 'object') return undefined;
+  if ('decision' in r) return JSON.stringify(r.decision);
+  if ('action' in r) return JSON.stringify(r.action);
+  if ('permissions' in r) return JSON.stringify(r.permissions);
+  return undefined;
+}
+
 const COMPARED = ['threadId', 'expectedTurnId', 'turnId', 'excludeTurns'] as const;
+
+/**
+ * Requests the bridge sends that the recording predates, and the answer
+ * each gets here (outside the recording: its position doesn't move).
+ * Newer free reads only; a turn method is never in this list.
+ */
+export const NEWER_REQUESTS: Readonly<Record<string, unknown>> = {
+  'config/read': { config: { approval_policy: null, approvals_reviewer: null }, origins: {} },
+};
 
 export class ReplayAppServer {
   readonly violations: string[] = [];
@@ -59,6 +103,14 @@ export class ReplayAppServer {
   private exitedResolve!: (code: number | null) => void;
   private readonly exited = new Promise<number | null>((r) => (this.exitedResolve = r));
   private ended = false;
+  /** The environment the bridge started the app-server with (the hosted tools' secret). */
+  env: Readonly<Record<string, string>> = {};
+  /** The config of the bridge's thread/start (its hosted tools' entry). */
+  private threadConfig: Record<string, unknown> | undefined;
+  /** Awaited before each recorded server message is sent (what Codex did outside the stream). */
+  onRecord: ((msg: Record<string, unknown>) => Promise<void>) | undefined;
+  private pumping: Promise<void> = Promise.resolve();
+  private readonly clients: Client[] = [];
 
   constructor(private readonly records: readonly FixtureRecord[]) {
     createInterface({ input: this.fromBridge }).on('line', (line) => {
@@ -81,7 +133,29 @@ export class ReplayAppServer {
     },
   };
 
-  readonly spawn: SpawnAppServer = () => this.process;
+  readonly spawn: SpawnAppServer = (_args, env = {}) => {
+    this.env = env;
+    return this.process;
+  };
+
+  /** Calls a hosted tool as Codex does, on the thread the bridge started. */
+  async mcpCall(name: string, args: Record<string, unknown>): Promise<unknown> {
+    const entry = this.threadConfig?.['mcp_servers.buildit'] as Record<string, unknown> | undefined;
+    if (entry === undefined) throw new Error('the bridge started no thread with its tools');
+    const secret = this.env[String(entry.bearer_token_env_var)] ?? '';
+    const client = new Client({ name: 'codex-replay', version: '0.166.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(String(entry.url)), {
+        requestInit: { headers: { Authorization: `Bearer ${secret}` } },
+      }),
+    );
+    this.clients.push(client);
+    try {
+      return await client.callTool({ name, arguments: args });
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  }
 
   /** The next message the recording expects from the bridge (undefined: none left). */
   get expecting(): FixtureRecord | undefined {
@@ -93,11 +167,26 @@ export class ReplayAppServer {
     return this.position >= this.records.length;
   }
 
+  /** The newer requests the bridge sent, answered outside the recording. */
+  readonly newer: string[] = [];
+
   private onBridge(line: string): void {
     const sent = JSON.parse(line) as Record<string, unknown>;
     const expected = this.expecting;
     const method = typeof sent.method === 'string' ? sent.method : undefined;
     this.validate(sent, method);
+    if (
+      method !== undefined &&
+      sent.id !== undefined &&
+      method !== expected?.msg.method &&
+      method in NEWER_REQUESTS
+    ) {
+      this.newer.push(method);
+      if (!this.ended) {
+        this.toBridge.write(JSON.stringify({ id: sent.id, result: NEWER_REQUESTS[method] }) + '\n');
+      }
+      return;
+    }
     if (expected === undefined) {
       this.violations.push(
         `the bridge sent ${method ?? 'an answer'}, the recording expected nothing`,
@@ -105,6 +194,14 @@ export class ReplayAppServer {
       return;
     }
     const e = expected.msg;
+    if (method === 'thread/start') {
+      this.threadConfig = ((sent.params ?? {}) as { config?: Record<string, unknown> }).config;
+    }
+    if (method === undefined && decisionOf(e) !== decisionOf(sent)) {
+      this.violations.push(
+        `an answer ${String(decisionOf(sent))}, the recording has ${String(decisionOf(e))}`,
+      );
+    }
     if (e.method !== method) {
       this.violations.push(
         `the bridge sent ${method ?? 'an answer'}, the recording has ${String(e.method)}`,
@@ -119,18 +216,34 @@ export class ReplayAppServer {
           );
         }
       }
-      if (inputText(sent) !== inputText(e)) {
+      if (promptOf(sent) !== promptOf(e)) {
         this.violations.push(
-          `${method}: input ${JSON.stringify(inputText(sent))}, the recording has ${JSON.stringify(inputText(e))}`,
+          `${method}: input ${JSON.stringify(promptOf(sent))}, the recording has ${JSON.stringify(promptOf(e))}`,
+        );
+      }
+      if (inputTypes(sent) !== inputTypes(e)) {
+        this.violations.push(
+          `${method}: input types ${inputTypes(sent)}, the recording has ${inputTypes(e)}`,
         );
       }
     }
     if (e.id !== undefined && sent.id !== undefined) this.ids.set(e.id, sent.id);
     this.position++;
-    // The server's recorded messages, up to the bridge's next one.
+    // The server's recorded messages, up to the bridge's next one (after each one's hook).
+    this.pumping = this.pumping.then(() => this.pump());
+  }
+
+  private async pump(): Promise<void> {
     while (this.records[this.position]?.dir === 'in') {
       const msg = { ...this.records[this.position]!.msg };
       if (msg.method === undefined && this.ids.has(msg.id)) msg.id = this.ids.get(msg.id);
+      if (this.onRecord !== undefined) {
+        try {
+          await this.onRecord(msg);
+        } catch (err) {
+          this.violations.push(`the replay's hook failed: ${String(err)}`);
+        }
+      }
       this.checkServer(msg);
       if (!this.ended) this.toBridge.write(JSON.stringify(msg) + '\n');
       this.position++;

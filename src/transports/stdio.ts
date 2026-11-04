@@ -412,7 +412,7 @@ function channelTools(
  * the API's /v1/meta leaves out is not listed (when the API doesn't say,
  * every tool is, and an older one says so when called).
  */
-function servedTools(api: ApiClient, tools: readonly ToolDefinition[]): ToolDefinition[] {
+export function servedTools(api: ApiClient, tools: readonly ToolDefinition[]): ToolDefinition[] {
   const served = api.served?.operations;
   // Not said: every tool, the newest variant of each (an older one says so when called).
   if (served === undefined) return tools.filter((t) => t.listedUnlessOperations === undefined);

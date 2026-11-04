@@ -25,6 +25,7 @@ import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { Ajv, type ValidateFunction } from 'ajv';
 
 import type { AppServerProcess, SpawnAppServer } from '../../src/codex/process.js';
@@ -150,6 +151,8 @@ export const replyWith =
 interface FakeThread {
   id: string;
   cwd: string;
+  /** The config overrides it was started or resumed with. */
+  config: Json | undefined;
   turn: { id: string; inputs: unknown[][]; abort: AbortController; done: boolean } | undefined;
   turns: number;
 }
@@ -167,6 +170,15 @@ export class FakeAppServer {
   readonly received: Received[] = [];
   /** The args the bridge started the app-server with. */
   args: readonly string[] | undefined;
+  /** The environment variables the bridge added for the app-server. */
+  env: Readonly<Record<string, string>> = {};
+  /** The person's Codex config, as config/read and thread/start answer it. */
+  userConfig: { approval_policy?: unknown; approvals_reviewer?: unknown } = {
+    approval_policy: 'on-request',
+    approvals_reviewer: 'user',
+  };
+  /** MCP clients the fake opened to the bridge's tools (closed when it ends). */
+  private readonly mcpClients: Client[] = [];
   onTurn: TurnScript = replyWith('ok');
   /** Answer thread/resume with this error instead (tests). */
   failResume: { code: number; message: string } | undefined;
@@ -174,6 +186,15 @@ export class FakeAppServer {
   failTurnStart: { code: number; message: string }[] = [];
   /** Never answer turn/start (tests: the app-server dies meanwhile). */
   hangTurnStart = false;
+  /**
+   * Fail to start (tests): at initialize, write these lines to stderr and
+   * exit 1 without an answer, as the real one does for a setting it refuses.
+   */
+  failStart: string[] | undefined;
+  /** What it wrote to stderr. */
+  private readonly stderrLines: string[] = [];
+  /** Whether the bridge said the handshake was done (stderr no longer kept). */
+  startedCalled = false;
   /** Answer turn/steer with these errors first (tests: the turn ended meanwhile). */
   failSteer: { code: number; message: string }[] = [];
   private readonly threads = new Map<string, FakeThread>();
@@ -203,10 +224,62 @@ export class FakeAppServer {
   }
 
   /** The spawner the bridge is given: one process (this fake). */
-  readonly spawn: SpawnAppServer = (args) => {
+  readonly spawn: SpawnAppServer = (args, env = {}) => {
     this.args = args;
+    this.env = env;
     return this.process;
   };
+
+  /** The config a thread was started or resumed with. */
+  threadConfig(threadId: string): Json | undefined {
+    return this.threads.get(threadId)?.config;
+  }
+
+  /** The ids of every thread the fake knows. */
+  threadIds(): string[] {
+    return [...this.threads.keys()];
+  }
+
+  /**
+   * Connects to the bridge's hosted tools as Codex does for a thread: the
+   * URL and the bearer secret's environment variable from the thread's
+   * `mcp_servers.buildit` config, the secret from the environment the
+   * bridge started the app-server with.
+   */
+  async mcp(threadId: string, server = 'buildit'): Promise<Client> {
+    const entry = this.threadConfig(threadId)?.[`mcp_servers.${server}`] as Json | undefined;
+    if (entry === undefined) throw new Error(`thread ${threadId} has no ${server} MCP server`);
+    const url = String(entry.url);
+    const secret = this.env[String(entry.bearer_token_env_var)] ?? '';
+    const transport = new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: { headers: { Authorization: `Bearer ${secret}` } },
+    });
+    const client = new Client({ name: 'codex-mcp-client', version: '0.166.0' });
+    await client.connect(transport);
+    this.mcpClients.push(client);
+    return client;
+  }
+
+  /** The server requests the bridge hasn't answered yet, by id. */
+  pendingServerRequests(): { id: number; method: string }[] {
+    return [...this.pendingServer].map(([id, p]) => ({ id, method: p.method }));
+  }
+
+  /**
+   * Another client answered a server request (or Codex no longer needs
+   * it): it is resolved without the bridge's answer, as the real server
+   * says with serverRequest/resolved. A later answer from the bridge is a
+   * violation (an answer to no server request).
+   */
+  resolveElsewhere(id: number): void {
+    const pending = this.pendingServer.get(id);
+    if (pending === undefined) throw new Error(`no pending server request ${id}`);
+    this.pendingServer.delete(id);
+    pending.resolve({ id, result: 'resolved elsewhere' });
+    if (pending.threadId !== undefined) {
+      this.notify('serverRequest/resolved', { threadId: pending.threadId, requestId: id });
+    }
+  }
 
   readonly process: AppServerProcess = {
     stdout: this.toBridge,
@@ -215,6 +288,13 @@ export class FakeAppServer {
     stop: async () => {
       this.fromBridge.end();
       return this.exitedPromise;
+    },
+    startupStderr: async () => {
+      await Promise.race([this.exitedPromise, new Promise((r) => setTimeout(r, 1000))]);
+      return [...this.stderrLines];
+    },
+    started: () => {
+      this.startedCalled = true;
     },
   };
 
@@ -282,6 +362,7 @@ export class FakeAppServer {
   exit(code: number | null = 1): void {
     if (this.ended) return;
     this.ended = true;
+    for (const c of this.mcpClients.splice(0)) void c.close().catch(() => undefined);
     this.toBridge.end();
     this.exitedResolve(code);
   }
@@ -367,6 +448,11 @@ export class FakeAppServer {
       for (const e of unknownFields(ref, params)) this.violations.push(`${method} ${e}`);
     }
     const p = (params ?? {}) as Json;
+    if (method === 'initialize' && this.failStart !== undefined) {
+      this.stderrLines.push(...this.failStart);
+      this.exit(1);
+      return;
+    }
     if (method === 'initialize') {
       const info = (p.clientInfo ?? {}) as Json;
       const name = typeof info.name === 'string' ? info.name : 'client';
@@ -389,11 +475,12 @@ export class FakeAppServer {
         const thread: FakeThread = {
           id: randomUUID(),
           cwd: typeof p.cwd === 'string' ? p.cwd : '/tmp/work',
+          config: p.config as Json | undefined,
           turn: undefined,
           turns: 0,
         };
         this.threads.set(thread.id, thread);
-        this.answer(id, method, threadResponse(thread));
+        this.answer(id, method, threadResponse(thread, this.userConfig));
         // The bridge doesn't read thread/started (not in the subset): sent unchecked.
         this.sendRaw({ method: 'thread/started', params: { thread: threadObject(thread) } });
         return;
@@ -411,13 +498,18 @@ export class FakeAppServer {
         const thread: FakeThread = this.threads.get(threadId) ?? {
           id: threadId,
           cwd: '/tmp/work',
+          config: undefined,
           turn: undefined,
           turns: 1,
         };
+        thread.config = p.config as Json | undefined;
         this.threads.set(threadId, thread);
-        this.answer(id, method, threadResponse(thread));
+        this.answer(id, method, threadResponse(thread, this.userConfig));
         return;
       }
+      case 'config/read':
+        this.answer(id, method, { config: { ...this.userConfig }, origins: {}, layers: null });
+        return;
       case 'turn/start':
         this.turnStart(id, p);
         return;
@@ -665,14 +757,17 @@ function threadObject(thread: FakeThread): Json {
   };
 }
 
-function threadResponse(thread: FakeThread): Json {
+function threadResponse(
+  thread: FakeThread,
+  config: { approval_policy?: unknown; approvals_reviewer?: unknown },
+): Json {
   return {
     thread: threadObject(thread),
     model: 'test-model',
     modelProvider: 'openai',
     cwd: thread.cwd,
-    approvalPolicy: 'on-request',
-    approvalsReviewer: 'user',
+    approvalPolicy: config.approval_policy ?? 'on-request',
+    approvalsReviewer: config.approvals_reviewer ?? 'user',
     sandbox: { type: 'readOnly', networkAccess: false },
   };
 }

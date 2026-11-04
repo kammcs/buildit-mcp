@@ -5,7 +5,9 @@
  *
  * Each file is saved in the session's folder inside the project, so Claude
  * Code reads it as it reads any project file:
- * `<folder>/.claude/buildit-attachments/<session>/<message>/<name>`. The
+ * `<folder>/.claude/buildit-attachments/<session>/<message>/<name>` (the
+ * Codex bridge's, which isn't Claude Code's, use the client-neutral
+ * `<folder>/.buildit/attachments/...`). The
  * folder holds a `.gitignore` of `*`, so nothing in it is committed; when
  * it can't be written, `<os temp>/buildit-mcp/<session>/<message>/` is
  * used instead. Folders are 0700, files 0600 and never executable, and
@@ -27,7 +29,17 @@
  * session's folder when the session ends or the folder is disconnected.
  */
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -64,6 +76,10 @@ export function filesServed(api: ApiClient): boolean | undefined {
 
 /** The folder, relative to the project, that holds the sessions' attachments. */
 export const ATTACHMENTS_DIR = join('.claude', 'buildit-attachments');
+/** The Codex bridge's: the same, in a folder of no client's (`.buildit/attachments`). */
+export const BRIDGE_ATTACHMENTS_DIR = join('.buildit', 'attachments');
+/** Every attachments folder a project may have (disconnect removes them all). */
+export const ALL_ATTACHMENTS_DIRS = [ATTACHMENTS_DIR, BRIDGE_ATTACHMENTS_DIR] as const;
 
 /** The automatic download's caps. */
 export const AUTO_FILE_MAX_BYTES = 100 * 1024 * 1024;
@@ -139,6 +155,8 @@ export interface AttachmentStoreOptions {
   logger: Logger;
   /** The project folder the session is connected for. */
   folder: string;
+  /** The attachments folder, relative to the project (default ATTACHMENTS_DIR). */
+  dir?: string | undefined;
   /** The session's id (its folder's name). */
   sessionId: string;
   /** Bytes this session may still download today, when the session said. */
@@ -220,7 +238,7 @@ export class AttachmentStore {
 
   /** The folder of all sessions' attachments in the project. */
   get base(): string {
-    return join(this.options.folder, ATTACHMENTS_DIR);
+    return join(this.options.folder, this.options.dir ?? ATTACHMENTS_DIR);
   }
 
   /** The fallback folder of all sessions' attachments. */
@@ -552,11 +570,16 @@ export class AttachmentStore {
 
 /**
  * Removes every session's attachments of a project folder (disconnect):
- * its `.claude/buildit-attachments` folder. The fallback folders in the
- * temp folder are removed when their own session ends, or after 7 days.
+ * its `.claude/buildit-attachments` and `.buildit/attachments` folders
+ * (and `.buildit` when nothing else is left in it). The fallback folders in
+ * the temp folder are removed when their own session ends, or after 7 days.
  */
 export async function removeFolderAttachments(folder: string): Promise<void> {
-  await rm(join(folder, ATTACHMENTS_DIR), { recursive: true, force: true }).catch(() => undefined);
+  for (const dir of ALL_ATTACHMENTS_DIRS) {
+    await rm(join(folder, dir), { recursive: true, force: true }).catch(() => undefined);
+  }
+  // rmdir only removes an empty folder.
+  await rmdir(join(folder, '.buildit')).catch(() => undefined);
 }
 
 /** Why a file wasn't downloaded, in plain words for Claude. */

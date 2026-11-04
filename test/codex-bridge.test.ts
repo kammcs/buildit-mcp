@@ -401,7 +401,7 @@ describe('buildit-mcp codex: turns and answers', () => {
 });
 
 describe('buildit-mcp codex: "is writing" and server requests', () => {
-  it('pauses "is writing" while Codex waits on an approval, and declines the approval', async () => {
+  it('pauses "is writing" while Codex waits on an approval, and declines what the owner denies', async () => {
     const s = api.sessions.open(token, 'demo-folder');
     const codex = fake();
     let answer: Received | undefined;
@@ -423,7 +423,9 @@ describe('buildit-mcp codex: "is writing" and server requests', () => {
     const r = await start(codex);
     await waitFor(() => s.heartbeats.includes('online'));
     const id = api.sessions.postFrom(token, 'Run echo hi');
-    await waitFor(() => posts().length === 1);
+    await waitFor(() => api.sessions.approvals(token).length === 1);
+    api.sessions.decideApproval(token, api.sessions.approvals(token)[0]!.id, 'deny');
+    await waitFor(() => posts().some((m) => m.text === 'The command was declined.'));
     expect(answer).toMatchObject({ result: { decision: 'decline' } });
     // Start, pause, resume, stop. The indicator's notices are separate requests, so the first
     // three may reach the server in any order; the stop comes after the post.
@@ -431,11 +433,11 @@ describe('buildit-mcp codex: "is writing" and server requests', () => {
     expect(s.typings.filter((t) => t.typing)).toHaveLength(2);
     expect(s.typings[3]?.typing).toBe(false);
     expect(s.typings.every((t) => t.thread_id === id)).toBe(true);
-    expect(logged(r, 'declined')).toBe(true);
+    expect(logged(r, 'codex approval answered')).toBe(true);
     expect(r.logs.join('\n')).not.toContain('echo hi');
   });
 
-  it('answers every other server request safely, and unknown ones with "method not found"', async () => {
+  it('answers every server request safely with approvals in the app off, and unknown ones with "method not found"', async () => {
     const s = api.sessions.open(token, 'demo-folder');
     const codex = fake();
     const answers: Record<string, Received> = {};
@@ -477,7 +479,7 @@ describe('buildit-mcp codex: "is writing" and server requests', () => {
       ctx.agentMessage('done', 'final_answer');
       ctx.complete();
     };
-    await start(codex);
+    await start(codex, { approvals: { inApp: false, timeoutMinutes: 60 } });
     await waitFor(() => s.heartbeats.includes('online'));
     api.sessions.postFrom(token, 'Do things');
     await waitFor(() => posts().length === 1);
@@ -645,7 +647,9 @@ describe('buildit-mcp codex: restarts', () => {
     await waitFor(() => s.heartbeats.filter((h) => h === 'online').length === 2);
     api.sessions.postFrom(token, 'What was it?');
     await waitFor(() => posts().length === 2);
-    expect(second.requests('thread/resume')).toEqual([{ threadId, excludeTurns: true }]);
+    expect(second.requests('thread/resume')).toEqual([
+      { threadId, excludeTurns: true, config: expect.any(Object) as unknown },
+    ]);
     expect(second.requests('thread/start')).toHaveLength(0);
     expect(second.requests('turn/start')[0]!.threadId).toBe(threadId);
     expect(posts()[1]!.text).toBe('42');
@@ -687,7 +691,9 @@ describe('buildit-mcp codex: restarts', () => {
     await waitFor(() => s.heartbeats.filter((h) => h === 'online').length === 2);
     api.sessions.postFrom(token, 'Two');
     await waitFor(() => posts().length === 2);
-    expect(b.requests('thread/resume')).toEqual([{ threadId: 'never-saved', excludeTurns: true }]);
+    expect(b.requests('thread/resume')).toEqual([
+      { threadId: 'never-saved', excludeTurns: true, config: expect.any(Object) as unknown },
+    ]);
     expect(b.requests('thread/start')).toHaveLength(1);
     const map = readMap(mapFile);
     expect(map.threads.dm?.codex_thread_id).not.toBe('never-saved');

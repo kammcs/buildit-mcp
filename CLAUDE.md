@@ -112,7 +112,8 @@ src/
   channel/approvals.ts  the session's open tool approvals (what ends them), and their journal
   channel/mask.ts       a tool approval's details: cleaned, credentials masked, cut; and
                         findCredentials, the same rules finding (the files' scan)
-  channel/attachments.ts  the session's attachments folder: the automatic download (caps,
+  channel/attachments.ts  the session's attachments folder (.claude/buildit-attachments, or
+                        .buildit/attachments in Codex bridge mode): the automatic download (caps,
                         budget, timeout, reuse), get_attachment's fetch, names, marks, cleanup
   channel/attachment-blocks.ts  how a message's files are shown (untrusted attachments blocks)
   channel/upload.ts     reply's files: the checks before any request, location removed, the
@@ -134,7 +135,14 @@ src/
                         answer posted (with the dedupe rule), "is writing" from turn events, the
                         thread map and resume; server requests go to a ServerRequestRouter
   codex/router.ts       which Codex conversation an event goes to (the direct message only, for now)
-  codex/server-requests.ts  the app-server's own requests: declined, the clock, "method not found"
+  codex/tool-server.ts  the bridge's tools for its Codex child: loopback Streamable HTTP, a secret per
+                        run (bearer_token_env_var), a URL per Codex thread (the caller), the shared ChannelState
+  codex/approvals.ts    Codex's approvals (commands, file changes, permissions, MCP tools) as Approve/Deny
+                        cards: the diffs from fileChange items, masking, decline unless shown in full,
+                        closed on serverRequest/resolved, unassign, stop and exit
+  codex/policy.ts       where Codex's config sends approvals: the warning, and the note status reads
+  codex/startup.ts      why the app-server didn't start: its first stderr line and the likely cause
+  codex/server-requests.ts  the rest of the app-server's requests: declined, the clock, "method not found"
   codex/rpc.ts          the JSON-RPC connection to the app-server (stdio, one JSON object a line)
   codex/process.ts      starting and ending the app-server child
   codex/binary.ts       where the native codex program is (the npm shim followed, or the PATH)
@@ -156,7 +164,9 @@ test/
   support/test-tools.ts stand-in tools across toolsets, for registry and transport tests
   support/fake-codex.ts a scripted fake codex app-server, validating the bridge's messages against
                         fixtures/codex/app-server-protocol.json (the vendored schema subset)
-  support/codex-replay.ts  plays a recorded real run (fixtures/codex/smoke-*.jsonl) back to the bridge
+  support/codex-replay.ts  plays a recorded real run (fixtures/codex/smoke-*.jsonl, parity-*.jsonl) back
+                        to the bridge
+  support/codex-run.ts  runCodex in process against the fakes, for the Codex tests
   *.test.ts             vitest
 scripts/
   codegen.ts, generate.ts  the generator (npm run generate)

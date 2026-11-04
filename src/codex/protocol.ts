@@ -81,17 +81,35 @@ export interface ThreadStartParams {
   serviceName?: string | null;
   developerInstructions?: string | null;
   ephemeral?: boolean | null;
+  /** Config overrides for this thread, by dotted key (as `-c` takes them). */
+  config?: Record<string, unknown> | null;
 }
 
 export interface ThreadStartResponse {
   thread: Thread;
   model?: string;
+  /** The approval policy that applies in the thread. */
+  approvalPolicy?: AskForApproval;
+  /** Who reviews its approvals: `user` (the client), `auto_review`, `guardian_subagent`. */
+  approvalsReviewer?: string;
+}
+
+/** config/read: the effective config, as seen from a folder. */
+export interface ConfigReadParams {
+  cwd?: string | null;
+}
+
+export interface ConfigReadResponse {
+  /** Only the approval settings are read. */
+  config: { approval_policy?: AskForApproval | null; approvals_reviewer?: string | null };
 }
 
 export interface ThreadResumeParams {
   threadId: string;
   /** Leave `thread.turns` empty: the bridge never reads the history. */
   excludeTurns?: boolean;
+  /** Config overrides for the resumed thread (the hosted tools' URL is new each run). */
+  config?: Record<string, unknown> | null;
 }
 
 export type ThreadResumeResponse = ThreadStartResponse;

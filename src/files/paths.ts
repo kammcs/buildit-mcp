@@ -28,8 +28,8 @@ async function real(folder: string): Promise<string> {
 /**
  * The secret folders and files a session never shares from, under the home
  * folder: SSH, cloud and cluster credentials, GnuPG, the Docker login,
- * buildit-mcp's own token file, and the browsers' profiles (passwords and
- * cookies).
+ * Codex's home (its sign-in; CODEX_HOME too), buildit-mcp's own token
+ * file, and the browsers' profiles (passwords and cookies).
  */
 export function secretLocations(home: string = homedir()): string[] {
   const h = (...parts: string[]): string => join(home, ...parts);
@@ -42,6 +42,11 @@ export function secretLocations(home: string = homedir()): string[] {
     h('.kube'),
     h('.docker', 'config.json'),
     h('.git-credentials'),
+    // Codex's sign-in and its own state.
+    h('.codex'),
+    ...(process.env.CODEX_HOME === undefined || process.env.CODEX_HOME === ''
+      ? []
+      : [resolve(process.env.CODEX_HOME)]),
     dirname(defaultTokenFile()),
     // Browser profiles.
     h('AppData', 'Local', 'Google', 'Chrome', 'User Data'),

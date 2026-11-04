@@ -26,7 +26,8 @@ import { FORBIDDEN_CHARS, type ConnectOptions, type SessionCommandOptions } from
 import { isTokenRefused, isTransientFailure } from '../identity.js';
 import type { Logger } from '../log.js';
 import { channelServers, duplicateChannelWarning, pluginConfigured } from './claude-config.js';
-import { lockHolders } from '../channel/lock.js';
+import { defaultLockDir, lockHolders } from '../channel/lock.js';
+import { policyNotePath, policyWarning, readPolicyNote } from '../codex/policy.js';
 import {
   forgetSession,
   forgetStaleApi,
@@ -231,6 +232,28 @@ function channelLines(folder: string, apiUrl: string, io: CommandIO): string[] {
     lines.push("Channel:  no buildit server is receiving this folder's messages now.");
   }
   return lines;
+}
+
+/**
+ * What `buildit-mcp codex` last found of Codex's approval settings in this
+ * folder (its note next to the lock files), when it has run here: a
+ * warning when approvals won't reach buildIt.Social as cards.
+ */
+function codexLines(key: string, io: CommandIO): string[] {
+  const note = readPolicyNote(policyNotePath(io.lockDir ?? defaultLockDir(), key));
+  if (note === undefined) return [];
+  // Worked out again from the settings (the file is only data), and made safe for a terminal.
+  const warning = policyWarning({
+    approvalPolicy: note.approval_policy,
+    approvalsReviewer: note.approvals_reviewer,
+  });
+  const checked = plain(note.checked_at, 40);
+  return [
+    warning === undefined
+      ? `Codex:    approvals come to buildIt.Social as cards (checked ${checked}).`
+      : `Codex:    approvals won't reach buildIt.Social as cards: ${plain(warning, 400)} (checked ${checked}). Change it in your Codex config, or start the bridge with ` +
+        'buildit-mcp codex -c approval_policy="on-request" -c approvals_reviewer="user".',
+  ];
 }
 
 /** The API a command works with: --api-url, else the one connect saved for the folder. */
@@ -495,6 +518,7 @@ export async function runStatus(given: SessionCommandOptions, io: CommandIO): Pr
     `API:      ${options.apiUrl}`,
     ...channelLines(options.folder, options.apiUrl, io),
     ...(duplicate === undefined ? [] : [duplicate]),
+    ...codexLines(key, io),
   ];
   if (token === undefined) {
     io.out(
