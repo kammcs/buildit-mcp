@@ -1,0 +1,27 @@
+{
+  "name": "buildit",
+  "version": "0.17.0",
+  "description": "buildIt.Social's projects, items, comments, pages and channels as tools in Codex, with the buildit request skills.",
+  "author": {
+    "name": "Kamm Creative Solutions"
+  },
+  "homepage": "https://github.com/kammcs/buildit-mcp#codex",
+  "repository": "https://github.com/kammcs/buildit-mcp",
+  "license": "MIT",
+  "keywords": ["buildit", "mcp", "projects", "work items", "agents"],
+  "skills": "./plugin/skills/",
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "buildIt.Social",
+    "shortDescription": "Work with buildIt.Social projects and items",
+    "longDescription": "The buildit MCP server as tools in Codex: search, read and update an org's work items, comments, pages and channels with your personal access token. For messages, questions and approvals from buildIt.Social, run the bridge instead: buildit-mcp codex.",
+    "developerName": "Kamm Creative Solutions",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/kammcs/buildit-mcp#codex",
+    "defaultPrompt": [
+      "Run whoami on buildit",
+      "List the open items assigned to me in buildIt.Social"
+    ]
+  }
+}

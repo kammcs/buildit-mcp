@@ -397,3 +397,76 @@ describe('the Claude Code plugin', () => {
     }
   });
 });
+
+describe('the Codex plugin', () => {
+  // The npm package is the plugin: Codex installs it from npm (the marketplace's npm source).
+  const marketplace = read('.agents/plugins/marketplace.json') as {
+    name: string;
+    plugins: {
+      name: string;
+      source: { source: string; package?: string; version?: string };
+      policy: { installation: string; authentication: string };
+      category: string;
+    }[];
+  };
+  const manifest = read('.codex-plugin/plugin.json') as Record<string, unknown> & {
+    name: string;
+    version: string;
+    skills: string;
+    mcpServers: string;
+  };
+  const mcp = read('.codex-plugin/mcp.json') as {
+    mcpServers: Record<string, Record<string, unknown> & { args: string[] }>;
+  };
+  const files = (read('package.json') as { files: string[] }).files;
+
+  it("installs package.json's release from npm, with the Claude Code marketplace's name", () => {
+    const claude = read('.claude-plugin/marketplace.json') as { name: string };
+    expect(marketplace.name).toBe(claude.name);
+    expect(marketplace.plugins).toEqual([
+      {
+        name: 'buildit',
+        source: { source: 'npm', package: pkg.name, version: pkg.version },
+        policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
+        category: expect.any(String) as string,
+      },
+    ]);
+    expect(manifest.name).toBe('buildit');
+    expect(manifest.version).toBe(pkg.version);
+  });
+
+  it('ships its manifest and MCP config in the package, and no hooks', () => {
+    expect(files).toEqual(
+      expect.arrayContaining(['.codex-plugin/plugin.json', '.codex-plugin/mcp.json']),
+    );
+    expect(manifest.mcpServers).toBe('./.codex-plugin/mcp.json');
+    // Approvals reach the app only through the bridge (as server requests), never by a hook.
+    expect(manifest).not.toHaveProperty('hooks');
+    expect(manifest).not.toHaveProperty('extensions');
+    expect(files.some((f) => /hooks/.test(f))).toBe(false);
+  });
+
+  it("gives Codex the Claude Code plugin's own skill files, no copies", async () => {
+    const { BRIDGE_SKILLS } = await import('../src/codex/skills.js');
+    expect(manifest.skills).toBe('./plugin/skills/');
+    expect(files).toContain('plugin/skills/*/SKILL.md');
+    const shipped = readdirSync(new URL('../plugin/skills/', import.meta.url)).sort();
+    expect([...BRIDGE_SKILLS].sort()).toEqual(shipped);
+  });
+
+  it('runs the released server in plain mode, approved without asking but for apply_plan', () => {
+    expect(Object.keys(mcp.mcpServers)).toEqual(['buildit']);
+    const server = mcp.mcpServers.buildit!;
+    expect(server.command).toBe('npx');
+    // Plain tools: no channel (the bridge is the channel), the token from the environment.
+    expect(server.args).toEqual(['-y', `${pkg.name}@${pkg.version}`]);
+    expect(server).not.toHaveProperty('env');
+    expect(server.env_vars).toContain('BUILDIT_TOKEN');
+    expect(server.env_vars).not.toContain('BUILDIT_CHANNEL');
+    expect(server.env_vars).not.toContain('BUILDIT_HTTP');
+    expect(server.default_tools_approval_mode).toBe('approve');
+    expect(server.tools).toEqual({ apply_plan: { approval_mode: 'prompt' } });
+    expect(server.tool_timeout_sec).toBeGreaterThanOrEqual(120);
+    expect(server.startup_timeout_sec).toBeGreaterThanOrEqual(30);
+  });
+});

@@ -8,7 +8,9 @@
  * holds a lock file keyed like the folder's saved session (the SHA-256 of
  * the folder and the API's origin), next to the token file, created
  * exclusively (folder 0700, file 0600), holding `{"pid": n, "started_at":
- * "…Z", "plugin": bool}`. It is held for the process's life and removed
+ * "…Z", "plugin": bool}`, and `"codex": true` from the Codex bridge
+ * (`buildit-mcp codex`, which takes the plugin's lock), so `status` can
+ * name it. It is held for the process's life and removed
  * when the process exits. A lock whose process is gone (a crash) is taken
  * over.
  *
@@ -65,6 +67,8 @@ export interface ChannelLock {
 export interface LockOptions {
   /** Started by the buildit plugin (it takes precedence). */
   plugin?: boolean;
+  /** The Codex bridge (`buildit-mcp codex`): marked in the lock file, for status. */
+  codex?: boolean;
   /** The folder for lock files (default: `locks` next to the token file). */
   dir?: string;
   /** This process's id (tests). */
@@ -104,6 +108,8 @@ export interface LockHolder {
   pid: number;
   started_at: string | undefined;
   plugin: boolean;
+  /** Held by the Codex bridge. */
+  codex: boolean;
 }
 
 function readHolder(path: string): LockHolder | undefined {
@@ -112,6 +118,7 @@ function readHolder(path: string): LockHolder | undefined {
       pid?: unknown;
       started_at?: unknown;
       plugin?: unknown;
+      codex?: unknown;
     };
     if (typeof parsed.pid !== 'number' || !Number.isInteger(parsed.pid) || parsed.pid <= 0) {
       return undefined;
@@ -120,6 +127,7 @@ function readHolder(path: string): LockHolder | undefined {
       pid: parsed.pid,
       started_at: typeof parsed.started_at === 'string' ? parsed.started_at : undefined,
       plugin: parsed.plugin === true,
+      codex: parsed.codex === true,
     };
   } catch {
     return undefined;
@@ -163,6 +171,7 @@ function take(
   plugin: boolean,
   isAlive: (pid: number) => boolean,
   now: () => Date,
+  codex = false,
 ): boolean {
   for (let attempt = 0; attempt < 2; attempt++) {
     let fd: number;
@@ -177,7 +186,8 @@ function take(
       continue;
     }
     try {
-      writeSync(fd, JSON.stringify({ pid, started_at: now().toISOString(), plugin }) + '\n');
+      const holder = { pid, started_at: now().toISOString(), plugin, ...(codex ? { codex } : {}) };
+      writeSync(fd, JSON.stringify(holder) + '\n');
     } finally {
       closeSync(fd);
     }
@@ -214,7 +224,7 @@ export function acquireChannelLock(
   };
   let preempted: number | undefined;
   if (plugin) {
-    if (!take(paths.plugin, pid, true, isAlive, now)) return undefined;
+    if (!take(paths.plugin, pid, true, isAlive, now, options.codex === true)) return undefined;
     const other = readHolder(paths.server)?.pid;
     if (other !== undefined && other !== pid && isAlive(other)) preempted = other;
   } else {

@@ -163,6 +163,8 @@ src/
   codex/protocol.ts     the protocol types the bridge uses (vendored from Codex, Apache-2.0)
   codex/surface.ts      every method and field the bridge relies on (npm run codex:schema checks it)
   cli/claude-config.ts  reads Claude Code's files for status (a channel server and the plugin)
+  cli/codex-config.ts   reads Codex's config.toml for status (the buildit plugin for Codex, buildit-mcp
+                        servers in mcp_servers; names only)
   secrets/keychain.ts   a folder's session token in the OS keychain (@napi-rs/keyring,
                         optional), or a 0600 file
   transports/stdio.ts   stdio: token from BUILDIT_TOKEN, identity read at startup and refreshed;
@@ -207,6 +209,10 @@ plugin/                 the Claude Code plugin (channel server; AskUserQuestion,
                         the item and request worker subagents in agents/; the request skills
                         and buildit-work-updates in skills/);
                         .claude-plugin/marketplace.json lists it (versions match package.json)
+.codex-plugin/          the Codex plugin, which is the npm package itself: plugin.json (its skills are
+                        plugin/skills/, no copies) and mcp.json (the released server in plain mode,
+                        approved without asking but for apply_plan; no hooks); shipped in the package
+.agents/plugins/marketplace.json  Codex's marketplace: the plugin from npm, pinned to package.json's version
 server.json             the MCP Registry entry (its versions must match package.json; a test checks)
 docs/releasing.md       how a release ships through npm, GHCR, the bundle and the Registry
 ```

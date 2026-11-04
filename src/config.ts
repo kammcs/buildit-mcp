@@ -358,7 +358,10 @@ Options:
   status: `Usage: buildit-mcp status [options]
 
 Shows the session saved for this folder: its agent, name, org and reach, and
-whether buildIt.Social still accepts it.
+whether buildIt.Social still accepts it; the buildit servers set up for the
+folder in Claude Code and in Codex (the buildit plugin for Codex, buildit-mcp
+servers in Codex's config.toml, and whether the Codex bridge has run here or
+is running), and which one receives its messages.
 
 Options:
   --folder <path>           The folder (default: the working directory)

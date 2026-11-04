@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server for [buildIt.Social](https://bu
 
 It runs on your own machine (stdio) or as a stateless HTTP server for a team. It holds no secrets of its own: each person's token stays in their own client.
 
-**Status:** 0.16.0, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (45 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`; with the [buildit plugin](#questions-and-approvals-in-builditsocial-plugin), its questions, approvals and [tool approvals](#tool-approvals-in-builditsocial) come to you there as cards, and you can [assign it work items](#work-items-for-your-agent), which it can [hand to another of your sessions](#handing-work-to-another-session) with your tap. [Files](#files-attachments-in-and-out) go both ways with no extra steps: your attachments reach Claude as local paths, and `reply` posts files. A button in the app can send it a [request](#requests-from-builditsocial), such as a private catch-up on a channel, a thread turned into work items, triage, help with an item, or notes from a call, each answered with a card only your tap applies.
+**Status:** 0.17.0, on npm as [`@kammcs/buildit-mcp`](https://www.npmjs.com/package/@kammcs/buildit-mcp). Built on the agent API's v1 contract: items and comments by default (15 tools), and planning, pages, chat, admin and destructive changes when you turn them on (45 tools in all). In [channel mode](#talk-to-claude-code-from-builditsocial) it also brings your messages to your agent in buildIt.Social into a Claude Code session, which answers with `reply`; with the [buildit plugin](#questions-and-approvals-in-builditsocial-plugin), its questions, approvals and [tool approvals](#tool-approvals-in-builditsocial) come to you there as cards, and you can [assign it work items](#work-items-for-your-agent), which it can [hand to another of your sessions](#handing-work-to-another-session) with your tap. [Files](#files-attachments-in-and-out) go both ways with no extra steps: your attachments reach Claude as local paths, and `reply` posts files. A button in the app can send it a [request](#requests-from-builditsocial), such as a private catch-up on a channel, a thread turned into work items, triage, help with an item, or notes from a call, each answered with a card only your tap applies. [Codex](#codex) gets the tools and skills through the buildit plugin for Codex, and the rest through the bridge (`buildit-mcp codex`, preview).
 
 - [How it works](docs/design.md)
 - [Security policy](SECURITY.md)
@@ -546,11 +546,55 @@ Each folder and deployment has its own entry, named by a hash of the folder's re
 - **WSL:** it can't reach Windows Credential Manager, so the token goes to the file in your Linux home. Run `connect` inside WSL if Claude Code runs there.
 - **`spawn npx ENOENT` on Windows:** use `cmd /c npx` as above.
 
-## Codex (bridge mode)
+## Codex
+
+[Codex](https://github.com/openai/codex) can use buildIt.Social in two ways:
+
+1. **[Plain MCP use](#plain-mcp-use-tools-only):** the buildit plugin for Codex (or a server you add yourself) gives Codex buildit's tools and the request skills. Codex calls the tools when you ask it to in Codex; nothing from buildIt.Social is pushed in (Codex ignores an MCP server's own notifications), so there are no messages, cards or work items from the app.
+2. **[The bridge](#the-bridge-full-agent-support)** (`buildit-mcp codex --project <KEY>`, preview): full agent support. Your messages to your agent, the work items you assign it and your requests become Codex turns in a folder, and its answers, questions and approvals come back to buildIt.Social, as with Claude Code's channel.
+
+Use the plugin for tools in your own Codex sessions, and the bridge in a folder where buildIt.Social talks to Codex; they don't get in each other's way (the bridge's threads leave your plugins out, unless you keep them).
+
+`buildit-mcp status` in a folder names the Codex setup it finds: the buildit plugin and any `buildit-mcp` server in Codex's `config.toml` (yours, in `CODEX_HOME` or `~/.codex`, and the folder's own `.codex/config.toml`), whether the bridge has run in the folder or is running now, and whether Codex's approvals reach buildIt.Social as cards. It reads only names from those files.
+
+### Plain MCP use (tools only)
+
+Put your personal access token in the `BUILDIT_TOKEN` environment variable first ([What you need](#what-you-need)), then add the plugin's marketplace and install the plugin:
+
+```sh
+codex plugin marketplace add kammcs/buildit-mcp
+codex plugin add buildit@buildit-mcp
+```
+
+Start a new Codex session and ask it to "run whoami on buildit". The plugin is this npm package itself: the marketplace installs `@kammcs/buildit-mcp`, of the release it names, from npm (so `npm` must be on the `PATH`).
+
+- **The server:** `npx -y @kammcs/buildit-mcp@<the same release>`, in plain stdio mode (no channel), with the default toolsets. Codex passes it `BUILDIT_TOKEN` from your environment, and `BUILDIT_API_URL`, `BUILDIT_TOOLSETS`, `BUILDIT_READ_ONLY`, `BUILDIT_EXCLUDE_TOOLS` and `BUILDIT_LOG_LEVEL` when you set them ([Configuration](#configuration)); nothing but the plugin's name is written to your Codex config. Codex starts `npx` itself on Windows too (checked with Codex 0.166).
+- **Approvals:** buildit's tools run without Codex asking first (`default_tools_approval_mode = "approve"`): the token's scopes and the API decide what they may do, and changes that delete, move or bulk-edit come as a preview first ([Preview, then confirm](#preview-then-confirm)). `apply_plan`, which applies such a preview, is the exception: Codex asks you before it runs (`approval_mode = "prompt"`). A call may take up to 5 minutes (`tool_timeout_sec = 300`).
+- **Skills:** the request skills and `buildit-work-updates`, as `buildit:buildit-catch-up` and so on: the same `SKILL.md` files the Claude Code plugin has (`plugin/skills/`, one copy in the package). They are written for sessions that get requests (the bridge, or Claude Code's channel); with plain tools they are only guidance.
+- **No hooks:** the plugin brings none. Approvals reach buildIt.Social only through the bridge, which gets them from Codex directly.
+- **Updating:** each release's marketplace names its own version: `codex plugin marketplace upgrade buildit-mcp`, then `codex plugin add buildit@buildit-mcp` again.
+- **Removing:** `codex plugin remove buildit@buildit-mcp`, then `codex plugin marketplace remove buildit-mcp`.
+
+Without the plugin, add the server to Codex's `config.toml` yourself (the token stays in your environment: `env_vars` passes it on):
+
+```toml
+[mcp_servers.buildit]
+command = "npx"
+args = ["-y", "@kammcs/buildit-mcp@latest"]
+env_vars = ["BUILDIT_TOKEN"]
+default_tools_approval_mode = "approve"
+
+[mcp_servers.buildit.tools.apply_plan]
+approval_mode = "prompt"
+```
+
+The Claude Code marketplace (`.claude-plugin/marketplace.json`) is for Claude Code only: Codex reads this repository's `.agents/plugins/marketplace.json` first, which lists the Codex plugin.
+
+### The bridge: full agent support
 
 > **Preview.** The direct message, work items, requests, turns, answers, "is writing", restarts, buildit's tools inside Codex, approval cards, question cards, plan mode, and files. Its options and behaviour may change in any release.
 
-`buildit-mcp codex` connects a folder's buildIt.Social session to [Codex](https://github.com/openai/codex) instead of Claude Code. It starts `codex app-server` (Codex's JSON-RPC server, over stdio) as its only client, and runs in a terminal until you stop it:
+`buildit-mcp codex` connects a folder's buildIt.Social session to Codex instead of Claude Code. It starts `codex app-server` (Codex's JSON-RPC server, over stdio) as its only client, and runs in a terminal until you stop it:
 
 ```sh
 npm install -g @openai/codex       # then sign in once: codex login
@@ -558,8 +602,33 @@ cd <your folder>
 npx -y @kammcs/buildit-mcp@latest codex --project DEMO
 ```
 
+- **Connect:** the first run in a folder connects it, with a code to approve in buildIt.Social, as Codex ("Codex on <computer>"); later runs need no `--project`. buildIt.Social's agent API 1.26.0 or later knows Codex as a client and offers a Codex session requests; an older server still connects it, and treats it as a Claude Code session.
+- **What it does:** your direct message is one Codex conversation; each work item gets its own Codex thread in its own git worktree, and each request a read-only thread of its own; answers, files, questions and approvals go back to buildIt.Social. The details are [below](#how-the-bridge-works).
+- **The settings Codex needs:** Codex's own configuration decides the model, the sandbox and the approval policy. For approval cards, Codex must ask its client: `approval_policy = "on-request"` with `approvals_reviewer = "user"` (pass them with `-c` if your config says otherwise). Codex 0.166 refuses to start with `approval_policy = "untrusted"`: use `on-request`. With `never`, or the `auto_review` reviewer, no card shows, and `buildit-mcp status` says so.
+- **Options:**
+
+  | Flag                   | Variable                     | Default | What it does                                                                                                                                                                                  |
+  | ---------------------- | ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `--keep-codex-plugins` | `BUILDIT_CODEX_KEEP_PLUGINS` | off     | Keeps your own Codex plugins and apps in the bridge's threads (otherwise they are off there). The buildit plugin, if you have it installed, is then there too, beside the bridge's own tools. |
+  | `--plan-items`         | `BUILDIT_CODEX_PLAN_ITEMS`   | off     | Work items plan first, in Codex's plan mode (experimental): the plan comes as an Approve/Deny card, and Approve carries it out.                                                               |
+  | `--post-plan-updates`  | `BUILDIT_CODEX_PLAN_UPDATES` | off     | Posts Codex's plan updates in the item's thread.                                                                                                                                              |
+  |                        | `BUILDIT_MAX_PARALLEL_ITEMS` | 3       | How many work items (and requests) run at once, 1 to 10; the others wait, with a line in their thread.                                                                                        |
+  | `-c key=value`         |                              |         | A Codex config override for the app-server, as `codex -c` takes it (repeatable).                                                                                                              |
+  | `--codex-path <path>`  | `BUILDIT_CODEX_PATH`         | `PATH`  | The codex program to start.                                                                                                                                                                   |
+
+  `BUILDIT_APPROVALS_IN_APP`, `BUILDIT_APPROVAL_TIMEOUT_MINUTES` and `BUILDIT_ASK_TIMEOUT_MINUTES` work as they do for the Claude Code plugin.
+
+- **Tested Codex:** 0.166 ([Tested Codex versions](#tested-codex-versions)). An older Codex is refused; a newer one starts, with a warning.
+- **Known limits:**
+  - **No terminal on the same session yet:** the bridge's Codex runs headless, and you can't open its threads in Codex's own terminal while the bridge drives them.
+  - **No Stop button** in buildIt.Social: unassigning an item interrupts its turn, and Ctrl+C stops the bridge.
+  - **Plan mode is experimental** (Codex marks it so), and how well a model keeps to it varies.
+  - Approval cards have Approve and Deny only, never "Allow for this session".
+
+#### How the bridge works
+
 - **Connecting:** with `--project`, a folder that has no session yet is connected first, as `connect` does (a code to approve in the app), but **as Codex**: the app shows "Codex on <computer>", and offers the session the requests a Codex session takes (agent API 1.26.0). buildIt.Social can't be asked its version before you connect, so an older server gets the same request and shows the session's client as the text `codex`, treating it as Claude Code's; the bridge says so once connected. A folder connected with `buildit-mcp connect` stays a Claude Code session (the bridge logs it; disconnect and connect again with `buildit-mcp codex --project <KEY>` to show it as Codex). A connected folder needs no `--project`.
-- **Requests need a release:** buildIt.Social sends a Codex session requests (catch-ups, briefs, thread to items, triage, the item helper, meeting notes) only from a buildit-mcp release that takes them (the release that ships this, and later), never from a prerelease; the bridge warns when it isn't one.
+- **Requests need a release:** buildIt.Social sends a Codex session requests (catch-ups, briefs, thread to items, triage, the item helper, meeting notes) only from a buildit-mcp release that takes them (0.17.0 and later), never from a prerelease; the bridge warns when it isn't one.
 - **Messages:** what you send your agent in its direct message becomes a Codex turn in the folder, with your text. A message sent while Codex is still working joins the running turn (it is steered in) instead of waiting. The direct message is one Codex conversation, as it is for a Claude Code session.
 - **Answers:** the turn's final answer is posted in the thread of your latest message (split at 4,000 characters); Codex's progress notes are not. "Your agent is writing..." shows while the turn runs, and pauses while Codex waits on something. A turn that fails posts nothing (the bridge logs it).
 - **Work items:** each item you assign the agent (or mention it in) gets its own Codex conversation, as each gets its own worker in Claude Code: its own Codex thread, told the plugin's item worker instructions (one source for both, `src/agent-text.ts`), working in its own git worktree that the bridge makes in `.buildit/worktrees/` (a `.gitignore` of `*` keeps them out of the folder's status) on a branch named for the item (`demo-12-fix-login-redirect`: the key, then the title's letters and digits). Its first turn also gets the `buildit-work-updates` skill. A branch of that name checked out elsewhere gets a new name (`-2`); a free one is reused; nothing is ever removed. A folder that isn't a git repository with a commit has no worktrees: items then work in the folder itself (logged).
@@ -588,7 +657,7 @@ The app-server protocol is marked experimental by Codex and changes often, so th
 
 | buildit-mcp | Oldest Codex | Tested Codex lines |
 | ----------- | ------------ | ------------------ |
-| unreleased  | 0.166.0      | 0.166              |
+| 0.17.0      | 0.166.0      | 0.166              |
 
 `npm run codex:schema` (in a clone) regenerates the protocol's schema from your installed Codex (`codex app-server generate-json-schema`, which runs no model and needs no sign-in) and checks every method and field the bridge uses against it: it fails when one is gone, and lists the other changes.
 

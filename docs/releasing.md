@@ -4,7 +4,7 @@ A release ships the same version through four channels: npm, the container image
 
 ## Before
 
-1. Set the version in `package.json` (and `package-lock.json`, with `npm version <x.y.z> --no-git-tag-version`) and in `server.json` (its `version`, the npm package's `version` and the image tag), and in the Claude Code plugin (`plugin/.claude-plugin/plugin.json`: its `version` and the `@<x.y.z>` its server runs; `.claude-plugin/marketplace.json`: the plugin's `version`). `npm test` fails while they disagree; `claude plugin validate plugin` and `claude plugin validate .` must pass.
+1. Set the version in `package.json` (and `package-lock.json`, with `npm version <x.y.z> --no-git-tag-version`) and in `server.json` (its `version`, the npm package's `version` and the image tag), and in the Claude Code plugin (`plugin/.claude-plugin/plugin.json`: its `version` and the `@<x.y.z>` its server runs; `.claude-plugin/marketplace.json`: the plugin's `version`), and in the Codex plugin (`.codex-plugin/plugin.json`: its `version`; `.codex-plugin/mcp.json`: the `@<x.y.z>` its server runs; `.agents/plugins/marketplace.json`: the npm source's `version`). `npm test` fails while they disagree; `claude plugin validate plugin` and `claude plugin validate .` must pass.
 2. Move the changelog's "unreleased" section under the version and today's date.
 3. Run the checks: `npm ci`, `npm run check`, `npm run inspect:docker` and `npm run conformance`.
 4. Rerun the eval set ([evals/README.md](../evals/README.md)); a safety failure there blocks the release.
@@ -20,5 +20,5 @@ A release ships the same version through four channels: npm, the container image
 
 ## After
 
-- Install from each channel once: `npx`, `docker run`, the bundle in Claude Desktop. Call `whoami` against a test org.
+- Install from each channel once: `npx`, `docker run`, the bundle in Claude Desktop, and the Codex plugin (`codex plugin marketplace add kammcs/buildit-mcp`, then `codex plugin add buildit@buildit-mcp`; it installs the release from npm). Call `whoami` against a test org.
 - Start a new "unreleased" section in the changelog.

@@ -125,7 +125,7 @@ export const RULES: Rule[] = [
     // The company is the author in the package's and the plugin's manifests.
     allow: [
       {
-        path: /^(LICENSE|package\.json|plugin(-local)?\/\.claude-plugin\/plugin\.json|\.claude-plugin\/marketplace\.json)$/,
+        path: /^(LICENSE|package\.json|plugin(-local)?\/\.claude-plugin\/plugin\.json|\.claude-plugin\/marketplace\.json|\.codex-plugin\/plugin\.json)$/,
         text: /K[a]mm Creative Solutions/,
       },
     ],
@@ -294,6 +294,8 @@ export const PACKED_ALLOWED: RegExp[] = [
   /^dist\/[\w./-]+\.js$/,
   // The plugin's skills, which the Codex bridge gives its threads (src/codex/skills.ts): SKILL.md only.
   /^plugin\/skills\/buildit-[a-z-]+\/SKILL\.md$/,
+  // The Codex plugin: the package itself is the plugin (its manifest and MCP config; no hooks).
+  /^\.codex-plugin\/(plugin|mcp)\.json$/,
   /^(README|CHANGELOG|SECURITY)\.md$/,
   /^LICENSE$/,
   /^package\.json$/,
@@ -307,6 +309,8 @@ export const PACKED_REQUIRED: string[] = [
   'SECURITY.md',
   'CHANGELOG.md',
   'package.json',
+  '.codex-plugin/plugin.json',
+  '.codex-plugin/mcp.json',
 ];
 
 const PACK_RULE = { id: 'pack-contents', why: 'only the built server and its documents ship' };

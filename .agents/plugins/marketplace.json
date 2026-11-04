@@ -1,0 +1,21 @@
+{
+  "name": "buildit-mcp",
+  "interface": {
+    "displayName": "buildit-mcp"
+  },
+  "plugins": [
+    {
+      "name": "buildit",
+      "source": {
+        "source": "npm",
+        "package": "@kammcs/buildit-mcp",
+        "version": "0.17.0"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
