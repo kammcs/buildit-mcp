@@ -296,6 +296,7 @@ export class CodexBridge {
             state: options.state,
             logger: options.logger.child({ component: 'codex_approvals' }),
             fallback: declines,
+            folder: options.folder,
             threadFor: (codexThread) => this.cardThread(codexThread),
             ...options.approvals,
           }));

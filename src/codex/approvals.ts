@@ -35,6 +35,7 @@
  * which declines it safely.
  */
 import { randomUUID } from 'node:crypto';
+import { isAbsolute, relative } from 'node:path';
 
 import { ApiError, type ApiClient } from '../api/client.js';
 import { closeSessionApproval, getSessionApproval, postSessionApproval } from '../channel/api.js';
@@ -179,10 +180,29 @@ export function changesOf(item: unknown): Change[] | undefined {
   return out;
 }
 
+/** A field's key is at most this long (the API's 100, the marker included). */
+const KEY_MAX = 100;
+
+/**
+ * A file's name as a field's key: relative to the folder when inside it,
+ * and, when still too long, its end (the file's own name) after "…". The
+ * value starts with the whole path, so nothing is hidden by the cut.
+ */
+export function fileKey(path: string, folder: string | undefined): string {
+  let shown = path;
+  if (folder !== undefined && isAbsolute(path)) {
+    const rel = relative(folder, path);
+    if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) shown = rel;
+  }
+  const chars = Array.from(shown);
+  return chars.length <= KEY_MAX ? shown : '…' + chars.slice(chars.length - (KEY_MAX - 1)).join('');
+}
+
 /** item/fileChange/requestApproval, with the changes of its item (undefined: not seen). */
 export function fileChangeCard(
   p: Record<string, unknown>,
   changes: Change[] | undefined,
+  folder?: string,
 ): CardSpec {
   const input: Record<string, unknown> = {};
   const root = str(p.grantRoot);
@@ -196,9 +216,10 @@ export function fileChangeCard(
           : c.movePath !== undefined
             ? `update, moved to ${c.movePath}`
             : 'update';
-    let key = c.path;
-    for (let n = 2; key in input; n++) key = `${c.path} (${n})`;
-    input[key] = `(${head})\n${c.diff}`;
+    const base = fileKey(c.path, folder);
+    let key = base;
+    for (let n = 2; key in input; n++) key = `${base} (${n})`;
+    input[key] = `${head}: ${c.path}\n${c.diff}`;
   }
   const unseen = changes === undefined || changes.length === 0;
   if (unseen) input.changes = "(Codex didn't show the changes)";
@@ -289,6 +310,8 @@ export interface CodexApprovalsOptions {
   inApp?: boolean;
   /** How long a card waits for the owner, in seconds (60 to 3,540). */
   waitS: number;
+  /** The folder Codex works in (file changes' names are shown relative to it). */
+  folder?: string;
   /** The buildIt.Social thread a Codex thread's cards go in (undefined: the direct message, new). */
   threadFor: (codexThreadId: string | undefined) => string | undefined;
   /** Milliseconds per second of waiting (tests). */
@@ -380,7 +403,11 @@ export class CodexApprovals implements ServerRequestRouter {
         break;
       case 'item/fileChange/requestApproval': {
         const item = str(p.itemId);
-        spec = fileChangeCard(p, item === undefined ? undefined : this.changes.get(item));
+        spec = fileChangeCard(
+          p,
+          item === undefined ? undefined : this.changes.get(item),
+          this.options.folder,
+        );
         break;
       }
       case 'item/permissions/requestApproval':

@@ -8,6 +8,7 @@
  * when Codex's config sends approvals elsewhere.
  */
 import { existsSync } from 'node:fs';
+import { join, sep } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -15,6 +16,7 @@ import { runStatus } from '../src/cli/commands.js';
 import {
   commandCard,
   fileChangeCard,
+  fileKey,
   mcpToolCard,
   permissionsCard,
   toolNameOf,
@@ -210,8 +212,8 @@ describe('codex approvals: file changes, permissions and MCP tools', () => {
     );
     await waitFor(() => cards().length === 1);
     expect(cards()[0]!.toolName).toBe('file_change');
-    expect(field('src/hello.ts')).toBe(`(update)\n${diff}`);
-    expect(field('src/new.ts')).toBe('(add)\n+export {};\n');
+    expect(field('src/hello.ts')).toBe(`update: src/hello.ts\n${diff}`);
+    expect(field('src/new.ts')).toBe('add: src/new.ts\n+export {};\n');
     tap('approve');
     await waitFor(() => answer() !== undefined);
     expect(answer()!.result).toEqual({ decision: 'accept' });
@@ -477,6 +479,21 @@ describe('codex approvals: the cards, built', () => {
     }
     // A command whose decisions leave out accept can't be approved.
     expect(specs[0]!.unchecked).toBe('not_offered');
+  });
+
+  it("names a file relative to the folder, keeps a long name's end, and shows the whole path", () => {
+    const folder = join(sep, 'work', 'repo');
+    expect(fileKey(join(folder, 'src', 'a.ts'), folder)).toBe(join('src', 'a.ts'));
+    expect(fileKey(join(sep, 'elsewhere', 'b.ts'), folder)).toBe(join(sep, 'elsewhere', 'b.ts'));
+    const deep = join(folder, ...Array.from({ length: 30 }, () => 'nested'), 'hello.txt');
+    const key = fileKey(deep, undefined);
+    expect(Array.from(key)).toHaveLength(100);
+    expect(key.startsWith('…')).toBe(true);
+    expect(key.endsWith('hello.txt')).toBe(true);
+    const spec = fileChangeCard({}, [
+      { path: deep, kind: 'add', movePath: undefined, diff: '+hi' },
+    ]);
+    expect(Object.values(spec.input)[0]).toBe(`add: ${deep}` + String.fromCharCode(10) + '+hi');
   });
 
   it('keeps tool names to the API pattern', () => {
