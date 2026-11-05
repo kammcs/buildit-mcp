@@ -28,10 +28,13 @@
  * `item_assigned` with `assignment_request` (`assigned_from` when another of
  * the person's sessions asked for it); an item the card sent to another
  * session reports back as `work_item.assigned_item_done`, which becomes
- * `assigned_item_done` in the card's thread. When the session starts, it
- * suggests its capability tags (PUT /v1/session/capabilities, beside the
- * first polls, which don't wait for detection; an older server's 404 is
- * skipped). A tool approval card's verdict is its `card.closed` (`data.approval`),
+ * `assigned_item_done` in the card's thread; the session doing such an
+ * item (or a subtask this session handed on) reports it ready, blocked or
+ * done as `work_item.assigned_item_report`, which becomes
+ * `assigned_item_report` in the card's (or the parent's) thread. When the
+ * session starts, it suggests its capability tags (PUT
+ * /v1/session/capabilities, beside the first polls, which don't wait for
+ * detection; an older server's 404 is skipped). A tool approval card's verdict is its `card.closed` (`data.approval`),
  * handed to the `approve` call that waits for it; an answer to such a card
  * (`card.response`) is never a verdict, and is dropped.
  * Everything else is acknowledged and dropped: events from anyone but the
@@ -63,7 +66,12 @@ import { sanitizeLabel, withBlockId, wrapUntrusted } from '../untrusted.js';
 import { planResolvedContent } from '../tools/plans.js';
 import { statusName } from '../tools/threads.js';
 import { childDoneContent, handoffResolvedContent, Handoffs, targetName } from './handoffs.js';
-import { assignedItemDoneContent, assignmentResolvedContent, Assignments } from './assignments.js';
+import {
+  assignedItemDoneContent,
+  assignedItemReportContent,
+  assignmentResolvedContent,
+  Assignments,
+} from './assignments.js';
 import {
   assignedContent,
   handedContent,
@@ -851,6 +859,10 @@ export class ChannelLoop {
       await this.deliverAssignedItemDone(event, info);
       return;
     }
+    if (event.type === 'work_item.assigned_item_report') {
+      await this.deliverAssignedItemReport(event, info);
+      return;
+    }
     if (
       event.type === 'work_item.assigned' ||
       event.type === 'work_item.unassigned' ||
@@ -1395,6 +1407,107 @@ export class ChannelLoop {
     });
     if (threadId !== undefined) state.typing?.start(threadId);
     logger.info('assigned item report delivered', { event_id: event.id, outcome });
+  }
+
+  /**
+   * work_item.assigned_item_report (API 1.28.0): the session doing an item
+   * this session sent it reports it ready, blocked or done. It goes where
+   * this session asked from (event=assigned_item_report): the Assign card's
+   * thread (via assignment, found as for assigned_item_done), or the parent
+   * item's thread (via handoff, as child_done), with the report inside a
+   * block.
+   */
+  private async deliverAssignedItemReport(
+    event: Extract<SessionEvent, { type: 'work_item.assigned_item_report' }>,
+    info: SessionInfo,
+  ): Promise<void> {
+    const { logger, state } = this.options;
+    if (event.session.id !== info.session.id) {
+      logger.warn('channel event dropped', { event_id: event.id, reason: 'other_session' });
+      return;
+    }
+    const d = event.data;
+    const owner = sanitizeLabel(info.owner.name, 64);
+    const key = sanitizeLabel(d.item.key, 40);
+    const reportState = sanitizeLabel(d.report.state, 20);
+    const blockedOn = d.report.blocked_on === null ? null : sanitizeLabel(d.report.blocked_on, 20);
+    const via = sanitizeLabel(d.via, 20);
+    const agent = sanitizeLabel(d.from.agent.name, 64);
+    const from =
+      d.from.session === null ? agent : `${agent} · ${sanitizeLabel(d.from.session.label, 40)}`;
+    const request = d.assignment_request;
+    const handoff = d.handoff;
+    const parent = handoff === null ? undefined : sanitizeLabel(handoff.parent.key, 40);
+    const message = d.result?.message;
+    const content = assignedItemReportContent(owner, {
+      item: key,
+      state: reportState,
+      blockedOn,
+      via: request === null && handoff !== null ? 'handoff' : via,
+      parent,
+      from,
+      result:
+        message === undefined
+          ? null
+          : {
+              author: { kind: message.author.kind, name: message.author.name },
+              from_owner: message.from_owner,
+              via_agent: message.via_agent,
+              text: message.text,
+              message_id: message.id,
+              files: message.files,
+            },
+    });
+    state.rememberItem(d.item.key, d.item.id);
+    // Where this session asked from: the card's thread (as assigned_item_done finds it), else
+    // the parent item's thread of a handed subtask.
+    const threadId =
+      request !== null
+        ? (request.thread_id ??
+          request.card_message_id ??
+          (await this.assignmentThread(request.id)))
+        : handoff?.parent.id;
+    if (handoff !== null) {
+      state.handoffs.remember({
+        id: handoff.id,
+        item: { id: d.item.id, key: d.item.key },
+        parent: { id: handoff.parent.id, key: handoff.parent.key },
+        role: 'asked',
+      });
+    }
+    await this.send({
+      content,
+      meta: {
+        event: 'assigned_item_report',
+        ...(threadId === undefined ? {} : { thread_id: threadId }),
+        item: key,
+        state: reportState,
+        ...(blockedOn === null ? {} : { blocked_on: blockedOn }),
+        via,
+        ...(request === null ? {} : { request_id: request.id }),
+        ...(handoff === null ? {} : { handoff_id: handoff.id }),
+        ...(parent === undefined ? {} : { parent }),
+        from,
+        report_id: d.report.id,
+        project: sanitizeLabel(d.project.key, 20),
+        session: sanitizeLabel(event.session.label, 40),
+      },
+    });
+    if (request === null && handoff !== null) {
+      // A handed subtask's report is about the parent this session works on, as child_done.
+      state.activateItem(handoff.parent.key, handoff.parent.id);
+      state.last = {
+        conversation_id: d.channel.id,
+        thread_id: handoff.parent.id,
+        item: { key: handoff.parent.key, id: handoff.parent.id },
+      };
+    }
+    if (threadId !== undefined) state.typing?.start(threadId);
+    logger.info('assigned item report delivered', {
+      event_id: event.id,
+      state: reportState,
+      via,
+    });
   }
 
   /**

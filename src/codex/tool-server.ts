@@ -4,10 +4,10 @@
  *
  * Codex loads MCP servers itself, so the bridge serves buildit's tools
  * (the catalog, and the channel tools: reply, ask, get_attachment,
- * list_threads, the handoff and assignment tools, ask_reporter) from this
- * process, on 127.0.0.1 and a random port. They share the bridge's
- * ChannelState, so there is no second buildit process and no fight over
- * the folder's channel lock. The plugin's hook tools (approve, tool_seen,
+ * list_threads, the handoff and assignment tools, report_to_assigner,
+ * ask_reporter) from this process, on 127.0.0.1 and a random port. They
+ * share the bridge's ChannelState, so there is no second buildit process
+ * and no fight over the folder's channel lock. The plugin's hook tools (approve, tool_seen,
  * turn_ended...) aren't served: Codex's approvals come to the bridge as
  * its own requests.
  *
@@ -53,6 +53,7 @@ import type { Logger } from '../log.js';
 import { createMcpServer, identityFromApi, resolveListedTools } from '../server.js';
 import { createAskTool, type AskOptions } from '../tools/ask.js';
 import { createAssignmentTools } from '../tools/assignment.js';
+import { createReportTool } from '../tools/report.js';
 import { createGetAttachmentTool } from '../tools/attachment.js';
 import { createHandoffTools } from '../tools/handoff.js';
 import { createReplyTool } from '../tools/reply.js';
@@ -144,6 +145,7 @@ export function bridgeChannelTools(state: ChannelState, ask: AskOptions): ToolDe
     createListThreadsTool(state),
     ...createHandoffTools(state),
     ...createAssignmentTools(state),
+    createReportTool(state),
     createAskReporterTool(state),
   ];
 }

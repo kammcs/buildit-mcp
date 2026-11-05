@@ -23,6 +23,8 @@
  *   conversation of the item whose thread the card is in, else the direct
  *   message's (a plan card a request posted outside an item's thread: only
  *   when the plan failed or went stale, so the owner hears of it);
+ *   `assigned_item_report` as `assigned_item_done`, or as `child_done` for
+ *   a handed subtask's (`via="handoff"`: its parent's conversation);
  * - **a request** (`request:<id>`): its own conversation, which ends with
  *   its turn;
  * - **stop:** `item_unassigned` stops the item's own conversation (or, for
@@ -145,6 +147,19 @@ export class SessionRouter implements CodexRouter {
           { key: parent ?? '', id: threadId },
           parent !== undefined,
         );
+        return place === undefined ? toDm(undefined) : { ...place, threadId, messageId, event };
+      }
+      case 'assigned_item_report': {
+        // A handed subtask's report goes to its parent's conversation (as child_done); an Assign
+        // card line's goes where the card is (as assigned_item_done).
+        const parent = nonEmpty(m.parent);
+        if (m.via === 'handoff' && parent !== undefined && threadId !== undefined) {
+          const place = await this.itemConversation({ key: parent, id: threadId }, true);
+          if (place === undefined) return { dropped: 'item_shape' };
+          return { ...place, threadId, messageId, event };
+        }
+        if (threadId === undefined || !this.host.isItemThread(threadId)) return toDm(threadId);
+        const place = await this.itemConversation({ key: '', id: threadId }, false);
         return place === undefined ? toDm(undefined) : { ...place, threadId, messageId, event };
       }
       case 'assignment_resolved':
