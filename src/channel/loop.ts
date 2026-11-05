@@ -29,8 +29,9 @@
  * the person's sessions asked for it); an item the card sent to another
  * session reports back as `work_item.assigned_item_done`, which becomes
  * `assigned_item_done` in the card's thread. When the session starts, it
- * suggests its capability tags (PUT /v1/session/capabilities; an older
- * server's 404 is skipped). A tool approval card's verdict is its `card.closed` (`data.approval`),
+ * suggests its capability tags (PUT /v1/session/capabilities, beside the
+ * first polls, which don't wait for detection; an older server's 404 is
+ * skipped). A tool approval card's verdict is its `card.closed` (`data.approval`),
  * handed to the `approve` call that waits for it; an answer to such a card
  * (`card.response`) is never a verdict, and is dropped.
  * Everything else is acknowledged and dropped: events from anyone but the
@@ -580,6 +581,8 @@ export class ChannelLoop {
   private readonly shown = new ShownMessages();
   private running: Promise<void> | undefined;
   private stopping: Promise<void> | undefined;
+  /** The capability suggestion, sent beside the polls (never rejects). */
+  private suggesting: Promise<void> | undefined;
   private ended = false;
   /** Another server became the folder's channel: this one stopped for good. */
   private yielded = false;
@@ -591,9 +594,12 @@ export class ChannelLoop {
 
   /** Starts the loop (once); the promise settles when it stops. */
   start(): Promise<void> {
-    this.running ??= this.run().catch((err: unknown) => {
-      this.options.logger.error('channel loop failed', { error: err });
-    });
+    this.running ??= this.run()
+      .catch((err: unknown) => {
+        this.options.logger.error('channel loop failed', { error: err });
+      })
+      // The loop settles once the capability suggestion has too.
+      .finally(() => this.suggesting);
     return this.running;
   }
 
@@ -675,7 +681,10 @@ export class ChannelLoop {
         }
       },
     );
-    await this.suggestCapabilities();
+    // Detection looks through the PATH's folders, which can take a while on a
+    // computer with many of them: the polls don't wait for it. The tags reach
+    // the session's state whenever the server answers.
+    this.suggesting = this.suggestCapabilities();
     // Tool approval cards an earlier server left open are closed, so nobody answers them for nothing.
     await this.options.state.approvals
       ?.recover(apiApprovalCloser(this.options.api, this.options.logger))
@@ -778,7 +787,8 @@ export class ChannelLoop {
    * Suggests the session's capability tags (what this computer detects now)
    * with PUT /v1/session/capabilities, and keeps both sets the answer gives.
    * Best effort: a server older than 1.9.0 (404, or not serving it), a
-   * refusal or a failed detection only logs a line.
+   * refusal or a failed detection only logs a line. It runs beside the
+   * polls, and a stop doesn't wait for detection to finish.
    */
   private async suggestCapabilities(): Promise<void> {
     const { api, logger, state } = this.options;
@@ -786,7 +796,21 @@ export class ChannelLoop {
     const served = api.served?.operations;
     if (served !== undefined && !served.has('set_session_capabilities')) return;
     try {
-      const detected = await this.options.capabilities();
+      // A stop doesn't wait for detection.
+      const detected = await Promise.race([
+        this.options.capabilities(),
+        new Promise<never>((_, reject) => {
+          if (this.signal.aborted) reject(new Error('stopped'));
+          this.signal.addEventListener(
+            'abort',
+            () => {
+              reject(new Error('stopped'));
+            },
+            { once: true },
+          );
+        }),
+      ]);
+      if (this.isStopped()) return;
       const r = await setSessionCapabilities(api, detected, {
         signal: AbortSignal.any([this.signal, AbortSignal.timeout(5_000)]),
       });
