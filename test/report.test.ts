@@ -242,6 +242,17 @@ describe('report_to_assigner', () => {
     expect(posts()[1]!.body).not.toHaveProperty('blocked_on');
     expect(reported(plain).report.blocked_on).toBe('assigner');
     expect(textOf(plain)).toContain('as blocked on whoever assigned it');
+    // The same text blocked on someone else is another report: blocked_on is in the id.
+    const other = await call(c, 'report_to_assigner', {
+      item: 'DEMO-42',
+      state: 'blocked',
+      summary: 'Waiting on your merge of the base branch.',
+      blocked_on: 'other',
+    });
+    expect(reported(other).created).toBe(true);
+    expect((posts()[2]!.body as { id: string }).id).not.toBe(
+      (posts()[1]!.body as { id: string }).id,
+    );
 
     const wrong = await call(c, 'report_to_assigner', {
       item: 'DEMO-42',
@@ -258,7 +269,7 @@ describe('report_to_assigner', () => {
     });
     expect(blank.isError).toBe(true);
     expect(textOf(blank)).toContain('The summary is empty');
-    expect(posts()).toHaveLength(2);
+    expect(posts()).toHaveLength(3);
   });
 
   it('says who heard it: the session that sent the item, one waiting for a session, or a handoff', async () => {

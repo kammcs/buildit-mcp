@@ -266,7 +266,9 @@ Returns the report: who heard it (via, to) and whether the person was told (owne
         const id =
           args.idempotency_key ??
           uuidV5(
-            `${await sessionId(state, ctx)}\n${ref}\n${args.state}\n${summary}`,
+            // blocked_on too: the server replays only the same report, and
+            // answers the same id with another blocked_on as a conflict.
+            `${await sessionId(state, ctx)}\n${ref}\n${args.state}\n${args.blocked_on ?? ''}\n${summary}`,
             REPORT_NAMESPACE,
           );
         r = await postSessionReport(
