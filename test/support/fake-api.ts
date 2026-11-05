@@ -863,6 +863,9 @@ export const V119_OPS = new Set<OperationId>([
   'close_session_assignment',
 ]);
 
+/** The operations API 1.28.0 added (compat.v128 false leaves them out). */
+export const V128_OPS = new Set<OperationId>(['post_session_report']);
+
 /** What an API older than 1.15.0 doesn't serve (compat.v115 false). */
 const V115_OPS = new Set<OperationId>(['ask_session_reporter']);
 
@@ -1023,7 +1026,7 @@ export class FakeApi {
    * ask_session_reporter (v115 false: 1.14.0); without reading by a
    * meeting's notes request, which get_thread and the attachment link then
    * ignore (v118 false: 1.15.0); without assignment requests (v119 false:
-   * 1.18.0). With sessionCardRead (a server that has
+   * 1.18.0); without session reports (v128 false: 1.27.0). With sessionCardRead (a server that has
    * it, proposed in 0.14.1): get_session_card, listed in /v1/meta.
    */
   compat = {
@@ -1041,6 +1044,7 @@ export class FakeApi {
     v115: true,
     v118: true,
     v119: true,
+    v128: true,
     sessionCardRead: false,
   };
 
@@ -1079,6 +1083,7 @@ export class FakeApi {
       v115: true,
       v118: true,
       v119: true,
+      v128: true,
       sessionCardRead: false,
     };
     this.requests.length = 0;
@@ -1309,7 +1314,8 @@ export class FakeApi {
         (V19_OPS.has(route.id) && !this.compat.v19) ||
         (V111_OPS.has(route.id) && !this.compat.v111) ||
         (V115_OPS.has(route.id) && !this.compat.v115) ||
-        (V119_OPS.has(route.id) && !this.compat.v119);
+        (V119_OPS.has(route.id) && !this.compat.v119) ||
+        (V128_OPS.has(route.id) && !this.compat.v128);
       if (olderRoute) {
         this.send(res, {
           status: 404,
@@ -1727,6 +1733,7 @@ export class FakeApi {
       .filter((id) => this.compat.v111 || !V111_OPS.has(id))
       .filter((id) => this.compat.v115 || !V115_OPS.has(id))
       .filter((id) => this.compat.v119 || !V119_OPS.has(id))
+      .filter((id) => this.compat.v128 || !V128_OPS.has(id))
       .sort();
   }
 
@@ -1948,6 +1955,8 @@ export class FakeApi {
         return this.sessionCheck(() =>
           this.sessions.getAssignment(call.token, call.params.id ?? ''),
         );
+      case 'post_session_report':
+        return this.sessionCheck(() => this.sessions.postReport(call.token, call.body));
       case 'close_session_assignment':
         return this.sessionCheck(() =>
           this.sessions.closeAssignment(call.token, call.params.id ?? ''),

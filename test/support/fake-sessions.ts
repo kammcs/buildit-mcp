@@ -398,7 +398,9 @@ export class SessionRefusal extends Error {
       | 'assignment_not_allowed'
       | 'assignment_outside_thread'
       | 'assignment_closed'
-      | 'assignment_target_invalid',
+      | 'assignment_target_invalid'
+      | 'not_assignee'
+      | 'report_limit',
     readonly details: Record<string, unknown> = {},
   ) {
     super(code);
@@ -1823,6 +1825,156 @@ export class FakeSessions {
               message: {
                 id: randomUUID(),
                 author: r.author ?? { kind: 'user', id: s.ownerId, name: s.ownerName },
+                from_owner: r.fromOwner ?? false,
+                via_agent: r.viaAgent === undefined ? 'Claude' : r.viaAgent,
+                text: r.text,
+                created_at: this.host.now(),
+              },
+            },
+    });
+  }
+
+  // -- reports to whoever assigned the work (API 1.28.0) ----------------------
+
+  /** Who hears the next reports (as the server decides it): the owner unless a test says. */
+  reportRoute: {
+    via: 'assignment' | 'handoff' | 'owner';
+    to: {
+      agent: { id: string; name: string } | null;
+      session: { id: string; label: string } | null;
+    };
+    ownerNotified: boolean;
+  } = { via: 'owner', to: { agent: null, session: null }, ownerNotified: true };
+
+  /** The reports made, by id (with what makes a replay the same). */
+  readonly reports = new Map<
+    string,
+    { item: string; state: string; summary: string; json: Record<string, unknown> }
+  >();
+
+  /** The most reports one item takes in 24 hours (the server's 20). */
+  reportLimit = 20;
+
+  /** POST /v1/session/reports: posted in the item's thread, and passed to whoever assigned it. */
+  postReport(token: string, body: Record<string, unknown>): { status: number; body: unknown } {
+    const s = this.live(token);
+    const id = String(body.id);
+    const ref = String(body.item);
+    const state = String(body.state);
+    const summary = String(body.summary).trim();
+    const blockedOn = typeof body.blocked_on === 'string' ? body.blocked_on : undefined;
+    if (summary === '' || summary.length > 2000) {
+      throw new SessionRefusal('validation', {
+        fields: [{ path: 'summary', message: '1 to 2000 characters once trimmed.' }],
+      });
+    }
+    if (blockedOn !== undefined && state !== 'blocked') {
+      throw new SessionRefusal('validation', {
+        fields: [{ path: 'blocked_on', message: 'Only with blocked.' }],
+      });
+    }
+    const known =
+      this.host.findItem?.(ref) ??
+      [...this.itemsById.values()].find(
+        (i) => i.id === ref.toLowerCase() || i.key.toUpperCase() === ref.toUpperCase(),
+      );
+    if (known === undefined) throw new SessionRefusal('not_found', { kind: 'item', ref });
+    const item = { id: known.id, key: known.key };
+    const replay = this.reports.get(id);
+    if (replay !== undefined) {
+      if (replay.item !== item.id || replay.state !== state || replay.summary !== summary) {
+        throw new SessionRefusal('idempotency_conflict', { idempotency_key: id });
+      }
+      return { status: 200, body: { report: replay.json, created: false } };
+    }
+    if (this.otherSessionThreads.has(item.id)) {
+      throw new SessionRefusal('thread_other_session', { thread_id: item.id });
+    }
+    if (!s.items.has(item.id)) throw new SessionRefusal('not_assignee', { item_id: item.id });
+    const made = [...this.reports.values()].filter((r) => r.item === item.id).length;
+    if (made >= this.reportLimit) {
+      throw new SessionRefusal('report_limit', { item_id: item.id, limit: this.reportLimit });
+    }
+    const messageId = randomUUID();
+    const lead = state === 'ready' ? '**Ready**' : state === 'blocked' ? '**Blocked**' : '**Done**';
+    s.messages.push({
+      id: messageId,
+      conversation_id: SESSION_IDS.demoChannel,
+      text: `${lead}\n\n${summary}`,
+      thread_id: item.id,
+      reply_to_id: null,
+      created_at: this.host.now(),
+      card: null,
+    });
+    const route = this.reportRoute;
+    const json = {
+      id,
+      item,
+      state,
+      blocked_on: state === 'blocked' ? (blockedOn ?? 'assigner') : null,
+      message_id: messageId,
+      via: route.via,
+      to: route.to,
+      owner_notified: route.ownerNotified || (state === 'blocked' && blockedOn === 'owner'),
+      created_at: this.host.now(),
+    };
+    this.reports.set(id, { item: item.id, state, summary, json });
+    return { status: 201, body: { report: json, created: true } };
+  }
+
+  /**
+   * The session doing an item this session sent it (an Assign card line, or
+   * a handed subtask) reports: work_item.assigned_item_report, to this session.
+   */
+  assignedItemReport(
+    token: string,
+    item: FakeEventItem,
+    state: 'ready' | 'blocked' | 'done',
+    options: {
+      blockedOn?: 'assigner' | 'owner' | 'other';
+      /** Via an Assign card's request (its id and place), or a handoff (its id and parent). */
+      request?: { id: string; thread_id: string | null; card_message_id: string | null };
+      handoff?: { id: string; parent: { id: string; key: string } };
+      from?: {
+        agent: { id: string; name: string };
+        session: { id: string; label: string } | null;
+      };
+      result?: {
+        text: string;
+        author?: { kind: 'user' | 'app' | 'agent'; id: string | null; name: string };
+        viaAgent?: string | null;
+        fromOwner?: boolean;
+      } | null;
+    } = {},
+  ): void {
+    const s = this.session(token);
+    const data = this.itemData(item, false);
+    const r = options.result;
+    const handoff = options.handoff ?? null;
+    this.event(s, 'work_item.assigned_item_report', {
+      channel: data.channel,
+      project: data.project,
+      item: data.item,
+      report: {
+        id: randomUUID(),
+        state,
+        blocked_on: state === 'blocked' ? (options.blockedOn ?? 'assigner') : null,
+      },
+      from: options.from ?? {
+        agent: FakeSessions.TARGET.agent,
+        session: FakeSessions.TARGET.session,
+      },
+      via: handoff === null ? 'assignment' : 'handoff',
+      assignment_request: handoff === null ? (options.request ?? null) : null,
+      handoff,
+      result:
+        r === undefined || r === null
+          ? null
+          : {
+              untrusted: true,
+              message: {
+                id: randomUUID(),
+                author: r.author ?? { kind: 'agent', id: null, name: 'Claude' },
                 from_owner: r.fromOwner ?? false,
                 via_agent: r.viaAgent === undefined ? 'Claude' : r.viaAgent,
                 text: r.text,

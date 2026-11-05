@@ -363,6 +363,36 @@ describe('codex items: routing in code', () => {
       key: 'dm',
       threadId: 'D',
     });
+    // A report: an Assign card line's as assigned_item_done, a handed subtask's to its parent.
+    expect(
+      await route({ event: 'assigned_item_report', via: 'assignment', thread_id: 'S' }),
+    ).toMatchObject({ key: itemPlace('E'), threadId: 'S' });
+    expect(
+      await route({ event: 'assigned_item_report', via: 'assignment', thread_id: 'D' }),
+    ).toMatchObject({ key: 'dm', threadId: 'D' });
+    expect(await route({ event: 'assigned_item_report', via: 'assignment' })).toMatchObject({
+      key: 'dm',
+      threadId: undefined,
+    });
+    expect(
+      await route({
+        event: 'assigned_item_report',
+        via: 'handoff',
+        thread_id: 'E',
+        parent: 'DEMO-1',
+        item: 'DEMO-9',
+      }),
+    ).toMatchObject({ key: itemPlace('E'), threadId: 'E' });
+    // The parent without a conversation: its own, as for child_done.
+    expect(
+      await route({
+        event: 'assigned_item_report',
+        via: 'handoff',
+        thread_id: 'P',
+        parent: 'DEMO-7',
+        item: 'DEMO-9',
+      }),
+    ).toMatchObject({ key: itemPlace('P'), place: { kind: 'item', item: { key: 'DEMO-7' } } });
     expect(
       await route({ event: 'plan_resolved', thread_id: 'E', outcome: 'applied' }),
     ).toMatchObject({ key: itemPlace('E') });

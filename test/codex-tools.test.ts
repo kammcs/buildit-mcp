@@ -279,6 +279,10 @@ describe('codex bridge: the endpoint', () => {
     expect(names).not.toContain('approve');
     expect(names).not.toContain('turn_ended');
     expect(names).toContain('reply');
+    // The channel tools a session's work needs, as in channel mode.
+    for (const name of ['propose_assignment', 'propose_handoff', 'report_to_assigner']) {
+      expect(names).toContain(name);
+    }
   });
 });
 

@@ -335,6 +335,20 @@ export function proposeSessionAssignment(
   return callOperation(api, 'propose_session_assignment', { body }, options);
 }
 
+/**
+ * POST /v1/session/reports (agent API 1.28.0): the session reports ready,
+ * blocked or done on an item assigned to its agent, to whoever assigned it
+ * (the server decides). Idempotent by the caller's id (the same id again
+ * answers the first report, created false).
+ */
+export function postSessionReport(
+  api: ApiClient,
+  body: OperationIO['post_session_report']['body'],
+  options: Options = {},
+) {
+  return callOperation(api, 'post_session_report', { body }, options);
+}
+
 /** POST /v1/session/assignment-requests/{id}/close: withdraws the session's own request while its card is open. */
 export function closeSessionAssignment(api: ApiClient, id: string, options: Options = {}) {
   return callOperation(api, 'close_session_assignment', { path: { id }, body: {} }, options);

@@ -73,6 +73,7 @@ import { createGetAttachmentTool } from '../tools/attachment.js';
 import { createListThreadsTool } from '../tools/threads.js';
 import { createHandoffTools } from '../tools/handoff.js';
 import { createAssignmentTools } from '../tools/assignment.js';
+import { createReportTool } from '../tools/report.js';
 import { createAskReporterTool } from '../tools/reporter.js';
 import { suggestedCapabilities } from '../capabilities.js';
 import { CATALOG } from '../toolsets/catalog.js';
@@ -399,6 +400,7 @@ function channelTools(
     ...createApprovalHookTools(state),
     ...createHandoffTools(state),
     ...createAssignmentTools(state),
+    createReportTool(state),
     createAskReporterTool(state),
   ].filter(
     (tool) =>
