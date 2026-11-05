@@ -2,7 +2,7 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
-## Unreleased
+## [0.18.0] - 2026-11-05
 
 **Reports to whoever assigned the work.** A session tells whoever assigned it an item that the work is ready, blocked or done, and the session that sent the work hears it.
 
@@ -11,6 +11,8 @@ Built on version 1.28.0 of the agent API's contract (`openapi.json` copied from 
 - **`report_to_assigner`** (new, channel mode only): `item`, `state` (`ready`: done on this side and waiting on the assigner, with the branch, its head and what to merge, build or release; `blocked`, with `blocked_on`: `assigner`, the default, `owner` or `other`; `done`), a Markdown `summary` (1 to 2,000 characters, sent trimmed) and an optional `idempotency_key`. The id is a UUIDv5 of the session, the item, the state and the summary, so a retry returns the first report (`created: false`). buildIt.Social decides who hears it (the session whose Assign card line sent the item, the session that handed the subtask over, or the person, with an inbox entry and a push) and posts the report in the item's thread itself, under its own lead line; the result says who heard it (`via`, `to`, `owner_notified`) in buildit-mcp's own words. `blocked_on` with another state, and a blank summary, are refused before any call; `not_assignee`, `report_limit` (20 per item in 24 hours), `idempotency_conflict`, `thread_not_bound`, `thread_other_session`, `outside_reach`, `archived` and a read-only org get notes in plain words. It never moves the item. The Codex bridge serves it to its threads too, and a report counts as the turn's post in that thread.
 - **`event=assigned_item_report`** (new): `work_item.assigned_item_report` reaches the session that sent the work, in the thread it asked from (the Assign card's thread, found as for `assigned_item_done`, or the parent item's for a handed subtask), with `item`, `state`, `blocked_on`, `via`, `request_id` or `handoff_id` and `parent`, `from`, `report_id` and `project`. Its text is buildit-mcp's own wording from those fields, with the report inside an `untrusted_content` block (`source="item report"`) and its files listed: the item stays the other session's work, what the report names is checked before relying on it, and a merge or a release still needs the person's yes. The Codex bridge routes it as `assigned_item_done`, or to the parent's conversation for a handed subtask. `assigned_item_done` is unchanged.
 - **Instructions:** the channel instructions (with the tool listed), the lead's routing, the item worker ("Reporting back", for both Claude Code and Codex threads) and the buildit-work-updates skill say when to report, that the server posts it, and how to take a report.
+
+- **The channel starts polling at once:** capability detection now runs alongside the first polls instead of before them, so messages no longer wait for it (up to 5 s on a machine with a long `PATH`). What is reported is unchanged; the tags reach the session when the server answers. Stopping the channel no longer waits for detection. The Codex bridge uses the same loop and gets the same change.
 
 ## [0.17.0] - 2026-11-04
 

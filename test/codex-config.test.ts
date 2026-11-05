@@ -75,7 +75,7 @@ describe("Codex's config, scanned", () => {
       '',
       '[mcp_servers."team buildit"]',
       'command = "cmd"',
-      'args = ["/c", "npx", "-y", "@kammcs/buildit-mcp@0.17.0"]',
+      'args = ["/c", "npx", "-y", "@kammcs/buildit-mcp@0.18.0"]',
       '',
       '[mcp_servers.off]',
       'command = "npx"',

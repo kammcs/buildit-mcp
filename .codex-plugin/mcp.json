@@ -2,7 +2,7 @@
   "mcpServers": {
     "buildit": {
       "command": "npx",
-      "args": ["-y", "@kammcs/buildit-mcp@0.17.0"],
+      "args": ["-y", "@kammcs/buildit-mcp@0.18.0"],
       "env_vars": [
         "BUILDIT_TOKEN",
         "BUILDIT_API_URL",

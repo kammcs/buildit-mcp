@@ -9,7 +9,7 @@
       "source": {
         "source": "npm",
         "package": "@kammcs/buildit-mcp",
-        "version": "0.17.0"
+        "version": "0.18.0"
       },
       "policy": {
         "installation": "AVAILABLE",
