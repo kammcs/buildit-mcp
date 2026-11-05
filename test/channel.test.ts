@@ -87,10 +87,12 @@ async function waitFor(check: () => boolean, ms = 3000): Promise<void> {
   }
 }
 
+/** BUILDIT_CAPABILITIES "none": no real detection, so the PATH doesn't change the timing. */
 function channelConfig(env: Record<string, string> = {}): Config {
   const action = parseCli(['--channel'], {
     BUILDIT_TOKEN: SESSION_TOKENS.first,
     BUILDIT_API_URL: api.url,
+    BUILDIT_CAPABILITIES: 'none',
     ...env,
   });
   if (action.kind !== 'run') throw new Error('expected a run action');

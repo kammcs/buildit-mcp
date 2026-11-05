@@ -66,10 +66,16 @@ export async function waitFor(check: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
+/**
+ * A channel config against the fake. BUILDIT_CAPABILITIES is "none" unless
+ * `env` sets it, so no test runs real detection (which looks through this
+ * computer's PATH and would make the tests' timing depend on it).
+ */
 export function channelConfig(api: FakeApi, env: Record<string, string> = {}): Config {
   const action = parseCli(['--channel'], {
     BUILDIT_TOKEN: SESSION_TOKENS.first,
     BUILDIT_API_URL: api.url,
+    BUILDIT_CAPABILITIES: 'none',
     ...env,
   });
   if (action.kind !== 'run') throw new Error('expected a run action');

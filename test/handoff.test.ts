@@ -53,7 +53,13 @@ const textOf = (r: CallToolResult): string =>
 
 /** A channel server on the session (opened first unless `reopen` is false: a restart). */
 async function start(
-  options: { env?: Record<string, string>; reopen?: boolean; detected?: string[] } = {},
+  options: {
+    env?: Record<string, string>;
+    reopen?: boolean;
+    detected?: string[];
+    /** Detection itself, for a test that controls when it finishes. */
+    detect?: () => Promise<readonly string[]>;
+  } = {},
 ): Promise<ChannelClient> {
   if (options.reopen !== false) api.sessions.open(TOKEN);
   const c = await startChannel(api, stops, {
@@ -66,6 +72,7 @@ async function start(
         ...(options.detected === undefined
           ? {}
           : { capabilities: () => Promise.resolve(options.detected ?? []) }),
+        ...(options.detect === undefined ? {} : { capabilities: options.detect }),
       },
     },
   });
@@ -105,6 +112,34 @@ describe('capabilities when the session starts', () => {
     await start({ env: { BUILDIT_CAPABILITIES: 'none' } });
     await waitFor(() => session().suggestions.length === 1);
     expect(session().suggestions[0]).toEqual([]);
+  });
+
+  it('hands messages on before a slow detection finishes, then suggests what it found', async () => {
+    let finish: (tags: string[]) => void = () => undefined;
+    const detection = new Promise<string[]>((resolve) => {
+      finish = resolve;
+    });
+    const c = await start({ detect: () => detection });
+    api.sessions.postFrom(TOKEN, 'Hello');
+    // The message arrives while detection is still running.
+    await notes(c, 1);
+    expect(session().suggestions).toEqual([]);
+    finish(['linux', 'docker']);
+    await waitFor(() => session().suggestions.length === 1);
+    expect(session().suggestions[0]).toEqual(['linux', 'docker']);
+    await waitFor(() => c.logs.some((l) => l.includes('channel capabilities suggested')));
+    const r = await call(c, 'whoami', {});
+    expect(r.structuredContent).toMatchObject({
+      capabilities: { confirmed: [], suggested: ['docker', 'linux'] },
+    });
+  });
+
+  it("stops without waiting for a detection that doesn't finish", async () => {
+    const c = await start({ detect: () => new Promise<string[]>(() => undefined) });
+    const started = Date.now();
+    await c.close();
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(session().suggestions).toEqual([]);
   });
 
   it('skips the suggestion on an older server, and the session runs on', async () => {
