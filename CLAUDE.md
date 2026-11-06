@@ -134,6 +134,9 @@ src/
   channel/lock.ts       one channel server per folder, the plugin's first (lock files next to
                         the token file)
   channel/typing.ts     "<agent> is writing..." while Claude works on a message
+  channel/hook-bridge.ts  the plugin's hooks over a local endpoint (a pipe or a Unix socket with a
+                        random name, in a rendezvous file next to the token file): only the
+                        Claude Code that started the server, only the shapes expected
   cli/commands.ts       connect (device flow), disconnect, status
   cli/codex.ts          buildit-mcp codex (preview): the folder's session, the channel lock and loop,
                         and a codex app-server child driven by the bridge
@@ -209,7 +212,9 @@ Dockerfile              the container image (HTTP mode, non-root, no token); .do
 deploy/                 team self-hosting: Compose with Caddy, and a guide
 bundle/manifest.json    the Claude Desktop bundle's manifest (its version comes from package.json)
 plugin/                 the Claude Code plugin (channel server; AskUserQuestion, Stop and the
-                        tool approval hooks;
+                        tool approval hooks, command hooks running hooks/forward.mjs, which
+                        hands each to the server over the hooks bridge and exits silently
+                        when none listens; no dependencies, no output on stderr;
                         the item and request worker subagents in agents/; the request skills
                         and buildit-work-updates in skills/);
                         .claude-plugin/marketplace.json lists it (versions match package.json)

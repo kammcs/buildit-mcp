@@ -2,6 +2,15 @@
 
 All notable changes to buildit-mcp are listed here. The project follows [semantic versioning](https://semver.org); see [Versions](README.md#versions) for what that means for tools.
 
+## Unreleased
+
+**No hook errors when the buildit server is off.** The plugin's hooks were `mcp_tool` hooks, which Claude Code runs even when their server is off for the project (`/mcp`) or not connected: every tool call then showed `PreToolUse:… hook error` and `MCP server 'plugin:buildit:buildit' not connected`, and so did the turn's end. They are now `command` hooks that run a small script in the plugin, `hooks/forward.mjs` (no dependencies; it needs `node` on the `PATH`, as `npx` does), which hands the hook's input to the folder's buildit server over a local endpoint and exits at once, silently, when no server listens. With the server on, every hook works as before: the tool approvals and question cards, "is writing", and approvals closed when a call ran, a subagent stopped, a prompt was typed or the turn ended.
+
+- **The hooks bridge** (`src/channel/hook-bridge.ts`): the folder's channel server opens a named pipe (Windows) or a Unix socket (0600 in a 0700 folder) with a random name, and writes the name to a file only you can read and write, next to the session file (`hooks/<folder key>.json`, removed when the server closes or exits). It takes only one small JSON line of the shapes it expects (at most 8 MiB, with a strict schema, and each hook tool's own input schema), and only from the Claude Code that started it: another Claude Code window in the same folder isn't its own. The hooks run the same tools in the same way as their MCP calls did; those tools stay, for an older plugin.
+- `tool_done` (`PostToolUse`, `PostToolUseFailure`) and `agent_done` (`SubagentStop`) now run in the background, so they no longer hold up the next step.
+- **Turning it off for a project:** the README says how to turn the plugin off for one project (`"enabledPlugins": { "buildit@buildit-mcp": false }` in its `.claude/settings.json`), rather than only its server.
+- `npm run dev-marketplace` copies the hook script into its plugin.
+
 ## [0.18.0] - 2026-11-05
 
 **Reports to whoever assigned the work.** A session tells whoever assigned it an item that the work is ready, blocked or done, and the session that sent the work hears it.
