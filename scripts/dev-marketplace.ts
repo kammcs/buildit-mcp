@@ -73,7 +73,8 @@ export function writeDevMarketplace(checkout: string, out: string): { version: s
     join(pluginDir, 'hooks', 'hooks.json'),
     readJson(join(checkout, 'plugin', 'hooks', 'hooks.json')),
   );
-  // The subagents (the item and request workers) and the skills, as they are.
+  // The hooks' forwarder, the subagents (the item and request workers) and the skills, as they are.
+  cpSync(join(checkout, 'plugin', 'hooks', 'forward.mjs'), join(pluginDir, 'hooks', 'forward.mjs'));
   cpSync(join(checkout, 'plugin', 'agents'), join(pluginDir, 'agents'), { recursive: true });
   cpSync(join(checkout, 'plugin', 'skills'), join(pluginDir, 'skills'), { recursive: true });
   const marketplace = readJson(join(checkout, '.claude-plugin', 'marketplace.json'));

@@ -5,20 +5,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:buildit:buildit",
-            "tool": "approve",
-            "input": {
-              "tool_name": "${tool_name}",
-              "tool_input": "${tool_input}",
-              "tool_use_id": "${tool_use_id}",
-              "agent_id": "${agent_id}",
-              "agent_type": "${agent_type}",
-              "session_id": "${session_id}",
-              "prompt_id": "${prompt_id}",
-              "suggestions": "${permission_suggestions}",
-              "mode": "${permission_mode}"
-            },
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/forward.mjs", "approve"],
             "timeout": 3600
           }
         ]
@@ -29,17 +18,9 @@
         "matcher": "AskUserQuestion",
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:buildit:buildit",
-            "tool": "ask",
-            "input": {
-              "questions": "${tool_input.questions}",
-              "tool_use_id": "${tool_use_id}",
-              "session_id": "${session_id}",
-              "format": "hook",
-              "agent_id": "${agent_id}",
-              "agent_type": "${agent_type}"
-            },
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/forward.mjs", "ask"],
             "timeout": 3600
           }
         ]
@@ -48,15 +29,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:buildit:buildit",
-            "tool": "tool_seen",
-            "input": {
-              "tool_name": "${tool_name}",
-              "tool_input": "${tool_input}",
-              "tool_use_id": "${tool_use_id}",
-              "agent_id": "${agent_id}"
-            },
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/forward.mjs", "tool_seen"],
             "timeout": 10
           }
         ]
@@ -67,14 +42,11 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:buildit:buildit",
-            "tool": "tool_done",
-            "input": {
-              "tool_use_id": "${tool_use_id}",
-              "agent_id": "${agent_id}"
-            },
-            "timeout": 10
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/forward.mjs", "tool_done"],
+            "timeout": 10,
+            "async": true
           }
         ]
       }
@@ -84,14 +56,11 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:buildit:buildit",
-            "tool": "tool_done",
-            "input": {
-              "tool_use_id": "${tool_use_id}",
-              "agent_id": "${agent_id}"
-            },
-            "timeout": 10
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/forward.mjs", "tool_done"],
+            "timeout": 10,
+            "async": true
           }
         ]
       }
@@ -100,14 +69,11 @@
       {
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:buildit:buildit",
-            "tool": "agent_done",
-            "input": {
-              "agent_id": "${agent_id}",
-              "agent_type": "${agent_type}"
-            },
-            "timeout": 30
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/forward.mjs", "agent_done"],
+            "timeout": 30,
+            "async": true
           }
         ]
       }
@@ -116,12 +82,9 @@
       {
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:buildit:buildit",
-            "tool": "prompt_typed",
-            "input": {
-              "prompt": "${prompt}"
-            },
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/forward.mjs", "prompt_typed"],
             "timeout": 30
           }
         ]
@@ -131,9 +94,9 @@
       {
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:buildit:buildit",
-            "tool": "turn_ended",
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/forward.mjs", "turn_ended"],
             "timeout": 30
           }
         ]

@@ -341,7 +341,7 @@ const CLIENT_INFO_KEY = 'io.modelcontextprotocol/clientInfo';
  * The MCP client's name and version: from the request's envelope (protocol
  * 2026-07-28), else from the initialize handshake (2025-11-25).
  */
-function clientInfo(server: McpServer, envelope: unknown): ClientInfo | undefined {
+export function clientInfo(server: McpServer, envelope: unknown): ClientInfo | undefined {
   const fromEnvelope =
     envelope !== null && typeof envelope === 'object'
       ? (envelope as Record<string, unknown>)[CLIENT_INFO_KEY]
@@ -370,24 +370,11 @@ function registerTool(
       annotations: tool.annotations,
     },
     async (args: unknown, ctx): Promise<CallToolResult> => {
-      const started = Date.now();
-      const logger = options.logger.child({ tool: tool.name });
-      options.onToolCall?.(tool.name, args);
-      const ended = tool.runsAfterSessionEnd === true ? undefined : options.sessionEnded?.();
-      if (ended !== undefined) {
-        logger.info('tool call', { status: 'error', code: 'session_ended', duration_ms: 0 });
-        return sessionEndedResult(ended);
-      }
       const progressToken = ctx.mcpReq._meta?.progressToken;
       let beat = 0;
-      const context = createToolContext({
-        api: options.api,
-        logger,
-        tool: tool.name,
+      return runToolCall(tool, args, options, {
         signal: ctx.mcpReq.signal,
         client: clientInfo(server, ctx.mcpReq.envelope),
-        channel: options.channelState,
-        caller: options.caller,
         progress:
           progressToken === undefined
             ? undefined
@@ -397,36 +384,73 @@ function registerTool(
                   params: { progressToken, progress: ++beat, message },
                 }),
       });
-      try {
-        // One block id for the whole result: its text and its structured content.
-        const output = await withBlockId(() => tool.run(args as never, context));
-        logger.info('tool call', { status: 'ok', duration_ms: Date.now() - started });
-        return {
-          content: [{ type: 'text', text: output.text }],
-          structuredContent: output.structured,
-        };
-      } catch (err) {
-        const code =
-          err !== null && typeof err === 'object' && 'code' in err ? String(err.code) : 'internal';
-        logger[code === 'internal' ? 'error' : 'info']('tool call', {
-          status: 'error',
-          code,
-          duration_ms: Date.now() - started,
-          ...(code === 'internal' ? { error: err } : {}),
-        });
-        if (
-          err instanceof ApiError &&
-          options.api.sessionToken &&
-          SESSION_OVER_CODES.has(err.code)
-        ) {
-          // A session is reconnected with connect, not with a new personal access token.
-          options.onSessionOver?.(err.code);
-          return sessionEndedResult(err.code);
-        }
-        return toolErrorResult(err);
-      }
     },
   );
+}
+
+/** What a tool call needs from the server's options. */
+export type ToolCallOptions = Pick<
+  CreateServerOptions,
+  'api' | 'logger' | 'channelState' | 'caller' | 'onToolCall' | 'sessionEnded' | 'onSessionOver'
+>;
+
+/**
+ * One call of a tool, with its logging and error mapping: the MCP handler's,
+ * and the plugin's hooks' over the hooks bridge (src/channel/hook-bridge.ts).
+ * `args` are the tool's arguments, already checked against its input schema.
+ */
+export async function runToolCall(
+  tool: ToolDefinition,
+  args: unknown,
+  options: ToolCallOptions,
+  init: {
+    signal?: AbortSignal | undefined;
+    client?: ClientInfo | undefined;
+    progress?: ((message: string) => Promise<void>) | undefined;
+  },
+): Promise<CallToolResult> {
+  const started = Date.now();
+  const logger = options.logger.child({ tool: tool.name });
+  options.onToolCall?.(tool.name, args);
+  const ended = tool.runsAfterSessionEnd === true ? undefined : options.sessionEnded?.();
+  if (ended !== undefined) {
+    logger.info('tool call', { status: 'error', code: 'session_ended', duration_ms: 0 });
+    return sessionEndedResult(ended);
+  }
+  const context = createToolContext({
+    api: options.api,
+    logger,
+    tool: tool.name,
+    signal: init.signal,
+    client: init.client,
+    channel: options.channelState,
+    caller: options.caller,
+    progress: init.progress,
+  });
+  try {
+    // One block id for the whole result: its text and its structured content.
+    const output = await withBlockId(() => tool.run(args as never, context));
+    logger.info('tool call', { status: 'ok', duration_ms: Date.now() - started });
+    return {
+      content: [{ type: 'text', text: output.text }],
+      structuredContent: output.structured,
+    };
+  } catch (err) {
+    const code =
+      err !== null && typeof err === 'object' && 'code' in err ? String(err.code) : 'internal';
+    logger[code === 'internal' ? 'error' : 'info']('tool call', {
+      status: 'error',
+      code,
+      duration_ms: Date.now() - started,
+      ...(code === 'internal' ? { error: err } : {}),
+    });
+    if (err instanceof ApiError && options.api.sessionToken && SESSION_OVER_CODES.has(err.code)) {
+      // A session is reconnected with connect, not with a new personal access token.
+      options.onSessionOver?.(err.code);
+      return sessionEndedResult(err.code);
+    }
+    return toolErrorResult(err);
+  }
 }
 
 /**

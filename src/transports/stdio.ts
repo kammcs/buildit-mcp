@@ -46,14 +46,18 @@ import {
   type EndReason,
 } from '../channel/loop.js';
 import type { Config } from '../config.js';
+import { HookBridge, HOOK_NAMES, type HookBridgeOptions } from '../channel/hook-bridge.js';
 import { invalidatesIdentity } from '../identity.js';
 import type { Logger } from '../log.js';
 import {
+  clientInfo,
   createSwitchableMcpServer,
   DEGRADED_LIST_TTL_MS,
   listedByPolicy,
   resolveListedTools,
   identityFromApi,
+  runToolCall,
+  type ToolCallOptions,
   type ListedTools,
   type SwitchableServer,
 } from '../server.js';
@@ -123,6 +127,16 @@ export interface StdioOptions {
   requestJournal?: string;
   /** For tests: the typing indicator's timing. */
   typing?: { everyMs?: number; idleMs?: number };
+  /**
+   * Channel mode: the plugin's hooks over a local endpoint (the hooks
+   * bridge, src/channel/hook-bridge.ts), opened while this server is the
+   * folder's channel; index.ts passes Claude Code's project folder. None:
+   * no bridge (the hooks reach this server only as MCP tool calls).
+   */
+  hooks?: Pick<
+    HookBridgeOptions,
+    'folder' | 'dir' | 'socketDir' | 'ancestors' | 'own' | 'checkEveryMs'
+  >;
 }
 
 /**
@@ -483,6 +497,51 @@ export function startStdio(
         },
       )
     : [];
+  // The plugin's hooks over the hooks bridge: the same tools, called the same way as over MCP.
+  let mcpServer: SwitchableServer['server'] | undefined;
+  let loopRef: { end(code: EndReason): Promise<void> } | undefined;
+  const hookCalls: ToolCallOptions = {
+    api,
+    logger,
+    channelState: state,
+    onToolCall: (tool, args) => {
+      noteActivity(state, tool, args);
+    },
+    sessionEnded: () => state.ended,
+    onSessionOver: (code) => {
+      void loopRef?.end(code as EndReason);
+    },
+  };
+  const hookTools = new Map(
+    extraTools
+      .filter((t) => (HOOK_NAMES as readonly string[]).includes(t.name))
+      .map((t) => [t.name, t]),
+  );
+  const bridge =
+    channel && state.isChannel && options.hooks !== undefined
+      ? new HookBridge({
+          ...options.hooks,
+          logger: logger.child({ component: 'hooks' }),
+          ...(options.channelLock === undefined
+            ? {}
+            : { owns: () => options.channelLock?.owns() ?? true }),
+          dispatch: async (hook, args, signal) => {
+            const tool = hookTools.get(hook);
+            // A tool this API doesn't serve isn't listed over MCP either.
+            if (tool === undefined || servedTools(api, [tool]).length === 0) return undefined;
+            const parsed = tool.inputSchema.safeParse(args);
+            if (!parsed.success) return undefined;
+            const result = await runToolCall(tool, parsed.data, hookCalls, {
+              signal,
+              client: mcpServer === undefined ? undefined : clientInfo(mcpServer, undefined),
+            });
+            if (result.isError === true) return undefined;
+            const first = result.content[0];
+            return first?.type === 'text' ? first.text : undefined;
+          },
+        })
+      : undefined;
+  void bridge?.start();
   // Once a channel's session has ended, the listing stays as it last was
   // (without reply), so Claude keeps its tools, which then say why.
   let lastKnown: ListedTools | undefined;
@@ -568,6 +627,7 @@ export function startStdio(
         ...(listed.identity === 'known' ? {} : { toolsListTtlMs: DEGRADED_LIST_TTL_MS }),
       });
       identity.attach(switchable);
+      mcpServer = switchable.server;
       if (channel) {
         const mcp = switchable.server.server;
         // Notifications sent before the client has initialized would be lost.
@@ -609,6 +669,7 @@ export function startStdio(
             },
             ...options.channelLoop,
           });
+          loopRef = loop;
           void loop.start();
         };
       }
@@ -629,6 +690,7 @@ export function startStdio(
   );
   return {
     async close() {
+      await bridge?.close();
       await stopLoop();
       await handle.close();
     },

@@ -8,6 +8,7 @@
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
+import { hookFolder } from './channel/hook-bridge.js';
 import { acquireChannelLock, defaultLockDir, type ChannelLock } from './channel/lock.js';
 import { runCodex } from './cli/codex.js';
 import { runConnect, runDisconnect, runStatus, type CommandIO } from './cli/commands.js';
@@ -196,6 +197,8 @@ async function main(): Promise<void> {
               defaultLockDir(),
               `${sessionKey(config.channel.folder, config.apiUrl)}.requests.json`,
             ),
+            // The plugin's hooks reach the folder's channel over a local endpoint.
+            hooks: { folder: hookFolder(config.channel.folder) },
           }
         : {}),
       onSessionEnded: async (reason) => {

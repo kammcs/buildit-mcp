@@ -3,7 +3,7 @@
  * package.json: the MCP Registry's server.json and the Claude Desktop
  * bundle's manifest.
  */
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -93,10 +93,10 @@ describe('the Claude Code plugin', () => {
         matcher?: string;
         hooks: {
           type: string;
-          server: string;
-          tool: string;
+          command: string;
+          args: string[];
           timeout: number;
-          input?: Record<string, unknown>;
+          async?: boolean;
         }[];
       }[]
     >;
@@ -260,6 +260,7 @@ describe('the Claude Code plugin', () => {
       });
       expect(readJsonAt(join(out, 'buildit', 'hooks', 'hooks.json'))).toEqual(hooks);
       for (const file of [
+        'hooks/forward.mjs',
         'agents/buildit-item-worker.md',
         'agents/buildit-request-worker.md',
         'skills/buildit-requests/SKILL.md',
@@ -284,34 +285,25 @@ describe('the Claude Code plugin', () => {
     }
   });
 
+  /** A hook that hands its input to the server's hook tool (plugin/hooks/forward.mjs). */
+  const forward = (tool: string, timeout: number, extra: { async?: boolean } = {}) => ({
+    type: 'command',
+    command: 'node',
+    args: ['${CLAUDE_PLUGIN_ROOT}/hooks/forward.mjs', tool],
+    timeout,
+    ...extra,
+  });
+
   it("calls ask from AskUserQuestion's hook with the server's timeout, and turn_ended on Stop", async () => {
     const { HOOK_TIMEOUT_S } = await import('../src/transports/stdio.js');
-    const ask = hooks.hooks.PreToolUse?.find((h) => h.matcher === 'AskUserQuestion')?.hooks[0];
-    expect(ask).toMatchObject({
-      type: 'mcp_tool',
-      server: 'plugin:buildit:buildit',
-      tool: 'ask',
-      timeout: HOOK_TIMEOUT_S,
-      input: {
-        questions: '${tool_input.questions}',
-        tool_use_id: '${tool_use_id}',
-        session_id: '${session_id}',
-        format: 'hook',
-        // Who asks (empty for the main agent): an item worker's question goes to its item.
-        agent_id: '${agent_id}',
-        agent_type: '${agent_type}',
-      },
-    });
-    expect(hooks.hooks.Stop?.[0]?.hooks[0]).toMatchObject({
-      type: 'mcp_tool',
-      server: 'plugin:buildit:buildit',
-      tool: 'turn_ended',
-    });
+    const ask = hooks.hooks.PreToolUse?.find((h) => h.matcher === 'AskUserQuestion')?.hooks;
+    expect(ask).toEqual([forward('ask', HOOK_TIMEOUT_S)]);
+    // Stop closes the main agent's approvals: it runs before the next turn can start.
+    expect(hooks.hooks.Stop?.[0]?.hooks).toEqual([forward('turn_ended', 30)]);
   });
 
   it('asks tool approvals from PermissionRequest, and ends them from the other hooks', async () => {
     const { HOOK_TIMEOUT_S } = await import('../src/transports/stdio.js');
-    const server = 'plugin:buildit:buildit';
     const only = (event: string) => {
       const entries = hooks.hooks[event] ?? [];
       expect(entries, event).toHaveLength(1);
@@ -320,81 +312,40 @@ describe('the Claude Code plugin', () => {
     };
     const approve = only('PermissionRequest');
     expect(approve?.matcher).toBe('*');
-    expect(approve?.hooks[0]).toEqual({
-      type: 'mcp_tool',
-      server,
-      tool: 'approve',
-      input: {
-        tool_name: '${tool_name}',
-        tool_input: '${tool_input}',
-        tool_use_id: '${tool_use_id}',
-        agent_id: '${agent_id}',
-        agent_type: '${agent_type}',
-        session_id: '${session_id}',
-        prompt_id: '${prompt_id}',
-        suggestions: '${permission_suggestions}',
-        mode: '${permission_mode}',
-      },
-      timeout: HOOK_TIMEOUT_S,
-    });
+    expect(approve?.hooks[0]).toEqual(forward('approve', HOOK_TIMEOUT_S));
+    // Before the call's PermissionRequest (it names the call), so it doesn't run in the background.
     const seen = hooks.hooks.PreToolUse?.find((h) => h.matcher === '*');
-    expect(seen?.hooks).toEqual([
-      {
-        type: 'mcp_tool',
-        server,
-        tool: 'tool_seen',
-        input: {
-          tool_name: '${tool_name}',
-          tool_input: '${tool_input}',
-          tool_use_id: '${tool_use_id}',
-          agent_id: '${agent_id}',
-        },
-        timeout: 10,
-      },
-    ]);
+    expect(seen?.hooks).toEqual([forward('tool_seen', 10)]);
+    // A tool call's and a subagent's ids are their own: these may run in the background.
     for (const event of ['PostToolUse', 'PostToolUseFailure']) {
       const entry = only(event);
       expect(entry?.matcher, event).toBe('*');
-      expect(entry?.hooks[0], event).toEqual({
-        type: 'mcp_tool',
-        server,
-        tool: 'tool_done',
-        input: { tool_use_id: '${tool_use_id}', agent_id: '${agent_id}' },
-        timeout: 10,
-      });
+      expect(entry?.hooks[0], event).toEqual(forward('tool_done', 10, { async: true }));
     }
-    expect(only('SubagentStop')?.hooks[0]).toEqual({
-      type: 'mcp_tool',
-      server,
-      tool: 'agent_done',
-      input: { agent_id: '${agent_id}', agent_type: '${agent_type}' },
-      timeout: 30,
-    });
-    // A channel message and a background task's report arrive as prompts too: the tool ignores them.
-    expect(only('UserPromptSubmit')?.hooks[0]).toEqual({
-      type: 'mcp_tool',
-      server,
-      tool: 'prompt_typed',
-      input: { prompt: '${prompt}' },
-      timeout: 30,
-    });
-    // Every hook calls a tool the server has.
+    expect(only('SubagentStop')?.hooks[0]).toEqual(forward('agent_done', 30, { async: true }));
+    // A typed prompt closes the main agent's approvals before the turn starts: not in the background.
+    expect(only('UserPromptSubmit')?.hooks[0]).toEqual(forward('prompt_typed', 30));
+    // Every hook calls a tool the server has, through the bridge.
     const { createApprovalHookTools } = await import('../src/tools/approve.js');
     const { ChannelState } = await import('../src/channel/loop.js');
+    const { HOOK_NAMES } = await import('../src/channel/hook-bridge.js');
     const names = new Set([
       'ask',
       'approve',
       'turn_ended',
       ...createApprovalHookTools(new ChannelState()).map((t) => t.name),
     ]);
+    expect(new Set(HOOK_NAMES)).toEqual(names);
     for (const entries of Object.values(hooks.hooks)) {
       for (const entry of entries) {
         for (const hook of entry.hooks) {
-          expect(hook.server).toBe(server);
-          expect(names).toContain(hook.tool);
+          // No mcp_tool hooks: those show an error on every call while the server is off.
+          expect(hook.type).toBe('command');
+          expect(names).toContain(hook.args[1]);
         }
       }
     }
+    expect(existsSync(new URL('../plugin/hooks/forward.mjs', import.meta.url))).toBe(true);
   });
 });
 
